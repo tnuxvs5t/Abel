@@ -46,8 +46,14 @@ private:
         const ConstructorDeclNode* constructor = nullptr;
     };
 
+    struct BackendInfo {
+        const BackendBlockNode* decl = nullptr;
+        QHash<QString, const FunctionDeclNode*> functions;
+    };
+
     QHash<QString, const FunctionDeclNode*> m_functions;
     QHash<QString, StructInfo> m_structs;
+    QHash<QString, BackendInfo> m_backends;
     QList<QHash<QString, VariableInfo>> m_scopes;
     QList<Diagnostic> m_diagnostics;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
@@ -57,8 +63,10 @@ private:
 
     void collectStructs(const ProgramNode& program);
     void collectFunctions(const ProgramNode& program);
+    void collectBackends(const ProgramNode& program);
     void checkFunction(const FunctionDeclNode& fn);
     void checkStruct(const StructDeclNode& decl);
+    void checkBackend(const BackendBlockNode& backend);
     void checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor);
     void checkMethod(const StructDeclNode& owner, const FunctionDeclNode& method);
     void checkBlock(const BlockStmtNode& block, bool pushScope);
@@ -73,6 +81,7 @@ private:
     ExprType checkBinary(const BinaryExprNode& expr);
     ExprType checkAssignment(const AssignExprNode& expr);
     ExprType checkCall(const CallExprNode& expr);
+    ExprType checkBackendCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExprType checkFunctionValueCall(const AbelType& functionType, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExprType checkLambda(const LambdaExprNode& expr);
     ExprType checkFieldAccess(const FieldAccessExprNode& expr);

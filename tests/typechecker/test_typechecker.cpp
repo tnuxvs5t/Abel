@@ -267,6 +267,53 @@ private slots:
         auto result = checkSource(src);
         QVERIFY(!result.diagnostics.isEmpty());
     }
+
+    void acceptsBackendStaticCallSignature()
+    {
+        const QString src = QStringLiteral(R"(
+            backend MathSystem {
+                fn int fast_add(int a, int b);
+            }
+
+            fn int main() {
+                return MathSystem::fast_add(1, 2);
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsBadBackendStaticCallArgument()
+    {
+        const QString src = QStringLiteral(R"(
+            backend MathSystem {
+                fn int fast_add(int a, int b);
+            }
+
+            fn int main() {
+                return MathSystem::fast_add(1, "bad");
+            }
+        )");
+        auto result = checkSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
+
+    void rejectsUnknownBackendFunction()
+    {
+        const QString src = QStringLiteral(R"(
+            backend MathSystem {
+                fn int fast_add(int a, int b);
+            }
+
+            fn int main() {
+                return MathSystem::missing(1, 2);
+            }
+        )");
+        auto result = checkSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
 };
 
 QTEST_MAIN(AbelTypeCheckerTests)

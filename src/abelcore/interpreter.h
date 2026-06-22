@@ -25,13 +25,20 @@ private:
         QHash<QString, const FunctionDeclNode*> methods;
     };
 
+    struct BackendRuntimeInfo {
+        const BackendBlockNode* decl = nullptr;
+        QHash<QString, const FunctionDeclNode*> functions;
+    };
+
     QHash<QString, const FunctionDeclNode*> m_functions;
     QHash<QString, StructRuntimeInfo> m_structs;
+    QHash<QString, BackendRuntimeInfo> m_backends;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
     AbelRuntimeContext* m_ctx = nullptr;
 
     bool collectFunctions(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectStructs(const ProgramNode& program, AbelRuntimeContext& ctx);
+    bool collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx);
     ExecResult callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args);
     ExecResult callFunctionExpr(const FunctionDeclNode& fn, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue callFunctionValue(const AbelValue& fnValue, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
@@ -46,6 +53,7 @@ private:
     AbelValue evalBinary(const BinaryExprNode& expr);
     AbelValue evalUnary(const UnaryExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);
+    AbelValue evalBackendCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue evalLambda(const LambdaExprNode& expr);
     AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     AbelValue evalStructConstructor(const QString& name, const StructRuntimeInfo& info, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);

@@ -12,6 +12,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program)
     m_ctx = &ctx;
     m_functions.clear();
     m_structs.clear();
+    m_backends.clear();
 
     InterpreterResult result;
     if (!collectStructs(program, ctx)) {
@@ -21,6 +22,12 @@ InterpreterResult Interpreter::run(const ProgramNode& program)
         return result;
     }
     if (!collectFunctions(program, ctx)) {
+        result.exitCode = 1;
+        result.diagnostics = ctx.takeDiagnostics();
+        m_ctx = nullptr;
+        return result;
+    }
+    if (!collectBackends(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
         m_ctx = nullptr;
@@ -94,6 +101,33 @@ bool Interpreter::collectFunctions(const ProgramNode& program, AbelRuntimeContex
             }
             m_functions.insert(fn->name, fn);
         }
+    }
+    return ok;
+}
+
+bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx)
+{
+    bool ok = true;
+    for (const auto& decl : program.declarations) {
+        auto* backend = dynamic_cast<BackendBlockNode*>(decl.get());
+        if (!backend)
+            continue;
+        if (m_backends.contains(backend->name)) {
+            ctx.error(QStringLiteral("E0601"), QStringLiteral("duplicate backend '%1'").arg(backend->name), backend->span);
+            ok = false;
+            continue;
+        }
+        BackendRuntimeInfo info;
+        info.decl = backend;
+        for (const auto& fn : backend->functions) {
+            if (info.functions.contains(fn->name)) {
+                ctx.error(QStringLiteral("E0602"), QStringLiteral("duplicate backend function '%1::%2'").arg(backend->name, fn->name), fn->span);
+                ok = false;
+                continue;
+            }
+            info.functions.insert(fn->name, fn.get());
+        }
+        m_backends.insert(backend->name, info);
     }
     return ok;
 }
@@ -944,6 +978,9 @@ AbelValue Interpreter::evalUnary(const UnaryExprNode& expr)
 
 AbelValue Interpreter::evalCall(const CallExprNode& expr)
 {
+    if (auto* access = dynamic_cast<StaticAccessExprNode*>(expr.callee.get()))
+        return evalBackendCall(*access, expr.args, expr.span);
+
     if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get())) {
         AbelValue receiver = evalExpr(*field->base);
         if (receiver.type().kind == TypeKind::Struct)
@@ -984,6 +1021,38 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         return AbelValue::makeUnknown();
     }
     return callFunctionExpr(*fn, expr.args, expr.span).value;
+}
+
+AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
+                                       const std::vector<std::unique_ptr<ExprNode>>& args,
+                                       const SourceSpan& span)
+{
+    auto* backendName = dynamic_cast<NameExprNode*>(callee.base.get());
+    if (!backendName) {
+        error(QStringLiteral("E0603"), QStringLiteral("backend call receiver must be a backend name"), callee.span);
+        return AbelValue::makeUnknown();
+    }
+    const BackendRuntimeInfo backend = m_backends.value(backendName->name);
+    if (!backend.decl) {
+        error(QStringLiteral("E0604"), QStringLiteral("unknown backend '%1'").arg(backendName->name), callee.span);
+        return AbelValue::makeUnknown();
+    }
+    const FunctionDeclNode* fn = backend.functions.value(callee.member, nullptr);
+    if (!fn) {
+        error(QStringLiteral("E0605"), QStringLiteral("unknown backend function '%1::%2'").arg(backendName->name, callee.member), callee.span);
+        return AbelValue::makeUnknown();
+    }
+    const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
+    const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
+    if ((!variadic && args.size() != fn->params.size()) || (variadic && args.size() < fixedCount)) {
+        error(QStringLiteral("E0606"), QStringLiteral("backend function '%1::%2' called with wrong argument count").arg(backendName->name, callee.member), span);
+        return AbelValue::makeUnknown();
+    }
+
+    error(QStringLiteral("E0607"),
+          QStringLiteral("backend '%1' is not bound; cannot call '%1::%2'").arg(backendName->name, callee.member),
+          span);
+    return AbelValue::makeUnknown();
 }
 
 AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)

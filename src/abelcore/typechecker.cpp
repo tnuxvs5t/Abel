@@ -9,6 +9,7 @@ namespace abel {
 TypeCheckResult TypeChecker::check(const ProgramNode& program)
 {
     m_functions.clear();
+    m_backends.clear();
     m_scopes.clear();
     m_diagnostics.clear();
     m_currentReturnType = makeType(TypeKind::Void);
@@ -17,6 +18,7 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
 
     collectStructs(program);
     collectFunctions(program);
+    collectBackends(program);
 
     const FunctionDeclNode* main = m_functions.value(QStringLiteral("main"), nullptr);
     if (!main) {
@@ -33,6 +35,8 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
         checkFunction(*fn);
     for (const auto& info : m_structs)
         checkStruct(*info.decl);
+    for (const auto& info : m_backends)
+        checkBackend(*info.decl);
 
     return {m_diagnostics};
 }
@@ -88,6 +92,29 @@ void TypeChecker::collectFunctions(const ProgramNode& program)
     }
 }
 
+void TypeChecker::collectBackends(const ProgramNode& program)
+{
+    for (const auto& decl : program.declarations) {
+        auto* backend = dynamic_cast<BackendBlockNode*>(decl.get());
+        if (!backend)
+            continue;
+        if (m_backends.contains(backend->name)) {
+            error(backend->span, QStringLiteral("duplicate backend '%1'").arg(backend->name));
+            continue;
+        }
+        BackendInfo info;
+        info.decl = backend;
+        for (const auto& fn : backend->functions) {
+            if (info.functions.contains(fn->name)) {
+                error(fn->span, QStringLiteral("duplicate backend function '%1::%2'").arg(backend->name, fn->name));
+                continue;
+            }
+            info.functions.insert(fn->name, fn.get());
+        }
+        m_backends.insert(backend->name, info);
+    }
+}
+
 void TypeChecker::checkStruct(const StructDeclNode& decl)
 {
     for (const auto& field : decl.fields) {
@@ -101,6 +128,31 @@ void TypeChecker::checkStruct(const StructDeclNode& decl)
         checkConstructor(decl, *ctor);
     for (const auto& method : decl.methods)
         checkMethod(decl, *method);
+}
+
+void TypeChecker::checkBackend(const BackendBlockNode& backend)
+{
+    for (const auto& fn : backend.functions) {
+        const AbelType returnType = typeFromAst(*fn->returnType);
+        if (!isSupportedType(returnType))
+            error(fn->returnType->span, QStringLiteral("unsupported backend return type '%1'").arg(fn->returnType->displayName()));
+        bool seenVariadic = false;
+        for (size_t i = 0; i < fn->params.size(); ++i) {
+            const ParameterNode& param = *fn->params[i];
+            const AbelType paramType = typeFromAst(*param.type);
+            if (!isSupportedType(paramType))
+                error(param.span, QStringLiteral("unsupported backend parameter type '%1'").arg(param.type->displayName()));
+            if (!param.variadic)
+                continue;
+            if (seenVariadic)
+                error(param.span, QStringLiteral("only one variadic parameter is allowed"));
+            seenVariadic = true;
+            if (i + 1 != fn->params.size())
+                error(param.span, QStringLiteral("variadic parameter must be last"));
+            if (paramType.kind != TypeKind::Any)
+                error(param.span, QStringLiteral("only any... variadic parameters are supported"));
+        }
+    }
 }
 
 void TypeChecker::checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor)
@@ -457,6 +509,9 @@ ExprType TypeChecker::checkAssignment(const AssignExprNode& expr)
 
 ExprType TypeChecker::checkCall(const CallExprNode& expr)
 {
+    if (auto* access = dynamic_cast<StaticAccessExprNode*>(expr.callee.get()))
+        return checkBackendCall(*access, expr.args, expr.span);
+
     if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get())) {
         ExprType receiver = checkExpr(*field->base);
         if (receiver.type.kind == TypeKind::Struct) {
@@ -550,6 +605,47 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     return errorExpr(expr.span, QStringLiteral("unknown function '%1'").arg(name->name));
+}
+
+ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
+                                       const std::vector<std::unique_ptr<ExprNode>>& args,
+                                       const SourceSpan& span)
+{
+    auto* backendName = dynamic_cast<NameExprNode*>(callee.base.get());
+    if (!backendName)
+        return errorExpr(callee.span, QStringLiteral("backend call receiver must be a backend name"));
+    const BackendInfo* backend = m_backends.contains(backendName->name) ? &m_backends[backendName->name] : nullptr;
+    if (!backend)
+        return errorExpr(callee.span, QStringLiteral("unknown backend '%1'").arg(backendName->name));
+    const FunctionDeclNode* fn = backend->functions.value(callee.member, nullptr);
+    if (!fn)
+        return errorExpr(callee.span, QStringLiteral("unknown backend function '%1::%2'").arg(backendName->name, callee.member));
+
+    const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
+    const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
+    if ((!variadic && args.size() != fn->params.size()) || (variadic && args.size() < fixedCount))
+        return errorExpr(span, QStringLiteral("backend function '%1::%2' called with wrong argument count").arg(backendName->name, callee.member));
+
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& param = *fn->params[i];
+        const AbelType paramType = typeFromAst(*param.type);
+        ExprType arg = checkExpr(*args[i]);
+        if (paramType.isReference()) {
+            if (arg.category != ValueCategory::LValue)
+                error(args[i]->span, QStringLiteral("backend reference parameter '%1' requires lvalue").arg(param.name));
+            else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
+                error(args[i]->span, QStringLiteral("cannot bind backend reference parameter '%1'").arg(param.name));
+        } else if (!isAssignable(paramType, arg.type)) {
+            error(args[i]->span,
+                  QStringLiteral("cannot pass %1 to backend parameter '%2' of type %3")
+                      .arg(arg.type.displayName(), param.name, paramType.displayName()));
+        }
+    }
+    for (size_t i = fixedCount; i < args.size(); ++i)
+        checkExpr(*args[i]);
+
+    const AbelType returnType = typeFromAst(*fn->returnType);
+    return {returnType, returnType.isReference() ? ValueCategory::LValue : ValueCategory::PRValue, false};
 }
 
 ExprType TypeChecker::checkFunctionValueCall(const AbelType& functionType,

@@ -495,6 +495,23 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 4);
     }
+
+    void backendCallReportsUnboundBackend()
+    {
+        const QString src = QStringLiteral(R"(
+            backend MathSystem {
+                fn int fast_add(int a, int b);
+            }
+
+            fn int main() {
+                return MathSystem::fast_add(1, 2);
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.diagnostics.front().code, QStringLiteral("E0607"));
+        QCOMPARE(result.exitCode, 1);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)
