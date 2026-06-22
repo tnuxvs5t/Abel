@@ -1,0 +1,64 @@
+cmake_minimum_required(VERSION 3.30)
+
+project(Abel
+    VERSION 0.0.1
+    DESCRIPTION "Abel v0 language core and Qt backend runtime"
+    LANGUAGES C CXX
+)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core Test)
+
+add_library(abelcore SHARED
+    src/abelcore/source_span.h
+    src/abelcore/diagnostic.h
+    src/abelcore/abel_version.h
+    src/abelcore/abel_version.cpp
+)
+
+target_include_directories(abelcore
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(abelcore
+    PUBLIC
+        Qt6::Core
+)
+
+target_compile_definitions(abelcore
+    PRIVATE
+        ABELCORE_LIBRARY
+)
+
+add_executable(abel
+    src/abelcli/main.cpp
+)
+
+target_link_libraries(abel
+    PRIVATE
+        abelcore
+        Qt6::Core
+)
+
+enable_testing()
+
+add_executable(abel_smoke_tests
+    tests/smoke/test_smoke.cpp
+)
+
+target_link_libraries(abel_smoke_tests
+    PRIVATE
+        abelcore
+        Qt6::Core
+        Qt6::Test
+)
+
+add_test(NAME abel_smoke_tests COMMAND abel_smoke_tests)

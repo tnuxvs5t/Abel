@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 0：设计收敛与文档重写。
+Stage 1：工程骨架已建立，进入 lexer/parser/AST 最小闭环。
 ```
 
 ### 已完成
@@ -1956,6 +1956,11 @@ Stage 0：设计收敛与文档重写。
 8. 锁定 vector<T>、QChar/QString、lambda、any、variadic、backend block。
 9. 删除旧三份 md。
 10. 创建本 AGENTS.md 作为唯一工作规格。
+11. 创建 Qt/C++23 CMake 工程骨架。
+12. 创建 libabelcore.so 最小共享库。
+13. 创建 abel CLI shell。
+14. 创建 QTest smoke 测试。
+15. 创建 examples/smoke/hello.abel。
 ```
 
 ### 最近验证
@@ -1967,30 +1972,38 @@ Stage 0：设计收敛与文档重写。
 - 确认 /home/tnuzy/Qt/Tools/Ninja/ninja version 1.12.1。
 - 确认 /usr/bin/g++ version 14.2.0。
 - 确认仓库已 git init。
+- 配置命令通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake -S . -B build -G Ninja
+  -DCMAKE_PREFIX_PATH=/home/tnuzy/Qt/6.11.1/gcc_64
+  -DCMAKE_C_COMPILER=/usr/bin/gcc
+  -DCMAKE_CXX_COMPILER=/usr/bin/g++
+  -DCMAKE_CXX_STANDARD=23
+- 构建命令通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
+- CLI smoke 通过：
+  build/abel version
+- 测试通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure
 ```
 
 ### 未完成
 
 ```text
-1. 尚无 CMakeLists.txt。
-2. 尚无 src/abelcore。
-3. 尚无 src/abelcli。
-4. 尚无 lexer/parser/typechecker/interpreter。
-5. 尚无 backend plugin 示例。
-6. 尚无测试。
+1. 尚无 lexer/parser/typechecker/interpreter。
+2. 尚无 backend plugin 示例。
+3. smoke 测试只有工程级最小测试，尚无语言测试。
 ```
 
 ### 下一步
 
 ```text
-Stage 1：
-1. 创建 .gitignore。
-2. 创建 CMakeLists.txt。
-3. 创建 src/abelcore 最小共享库。
-4. 创建 src/abelcli 最小 CLI。
-5. 使用 Qt 6.11.1 kit 配置构建。
-6. 跑一次 build。
-7. commit。
+Stage 2：
+1. 实现 token / lexer。
+2. 实现 AST 基础节点。
+3. 实现 parser 最小闭环：fn、block、var decl、return、literal、binary expr。
+4. 接入 abel check 的 parse 流程。
+5. 增加 lexer/parser 测试。
+6. build + ctest + commit。
 ```
 
 ### 风险与未决
@@ -2007,6 +2020,8 @@ Stage 1：
 
 ```text
 ca49a01 docs: replace Abel design with agent manual
+4ff4184 docs: record manual replacement progress
+待本次 Stage 1 工程骨架提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。

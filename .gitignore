@@ -1,0 +1,17 @@
+build/
+.cache/
+.qt/
+*.user
+*.autosave
+*.swp
+*.swo
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.log
+core
+core.*
+
