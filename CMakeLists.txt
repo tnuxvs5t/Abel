@@ -21,6 +21,13 @@ add_library(abelcore SHARED
     src/abelcore/diagnostic.h
     src/abelcore/abel_version.h
     src/abelcore/abel_version.cpp
+    src/abelcore/token.h
+    src/abelcore/lexer.h
+    src/abelcore/lexer.cpp
+    src/abelcore/ast.h
+    src/abelcore/ast.cpp
+    src/abelcore/parser.h
+    src/abelcore/parser.cpp
 )
 
 target_include_directories(abelcore
@@ -62,3 +69,16 @@ target_link_libraries(abel_smoke_tests
 )
 
 add_test(NAME abel_smoke_tests COMMAND abel_smoke_tests)
+
+add_executable(abel_parser_tests
+    tests/parser/test_parser.cpp
+)
+
+target_link_libraries(abel_parser_tests
+    PRIVATE
+        abelcore
+        Qt6::Core
+        Qt6::Test
+)
+
+add_test(NAME abel_parser_tests COMMAND abel_parser_tests)

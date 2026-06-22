@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 1：工程骨架已建立，进入 lexer/parser/AST 最小闭环。
+Stage 2：lexer/parser/AST 最小闭环已建立，进入 type/runtime/interpreter 最小闭环。
 ```
 
 ### 已完成
@@ -1961,6 +1961,11 @@ Stage 1：工程骨架已建立，进入 lexer/parser/AST 最小闭环。
 13. 创建 abel CLI shell。
 14. 创建 QTest smoke 测试。
 15. 创建 examples/smoke/hello.abel。
+16. 实现 token / lexer。
+17. 实现 AST 基础节点。
+18. 实现 parser 最小闭环：fn、backend、block、var decl、return、if/elseif/else、while、repeat、表达式、vector<T>、index。
+19. 接入 `abel check <file>` 的 lex/parse 流程。
+20. 增加 parser QTest。
 ```
 
 ### 最近验证
@@ -1984,25 +1989,29 @@ Stage 1：工程骨架已建立，进入 lexer/parser/AST 最小闭环。
   build/abel version
 - 测试通过：
   /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure
+- `build/abel check examples/smoke/hello.abel` 输出 ok。
+- 在 4GB 虚拟内存上限下测试通过：
+  /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+- 修复 parser 在错误恢复不前进、且 `::` 未消费时可能无限分配并 bad_alloc 的问题；新增 `StaticAccessExprNode` 支持 `MathSystem::fast_add` 这类静态/backend 调用语法。
 ```
 
 ### 未完成
 
 ```text
-1. 尚无 lexer/parser/typechecker/interpreter。
+1. 尚无 typechecker/interpreter。
 2. 尚无 backend plugin 示例。
-3. smoke 测试只有工程级最小测试，尚无语言测试。
+3. parser 仍是最小闭环，尚未覆盖 struct/lambda/for/range-for。
 ```
 
 ### 下一步
 
 ```text
-Stage 2：
-1. 实现 token / lexer。
-2. 实现 AST 基础节点。
-3. 实现 parser 最小闭环：fn、block、var decl、return、literal、binary expr。
-4. 接入 abel check 的 parse 流程。
-5. 增加 lexer/parser 测试。
+Stage 3：
+1. 实现 Type/Value/Runtime 基础。
+2. 实现函数表与 `fn int main()` 查找。
+3. 实现 int/bool/str 基础值、局部变量、赋值、return、算术/比较。
+4. 接入 `abel run <file>`。
+5. 增加 interpreter tests。
 6. build + ctest + commit。
 ```
 
@@ -2021,7 +2030,8 @@ Stage 2：
 ```text
 ca49a01 docs: replace Abel design with agent manual
 4ff4184 docs: record manual replacement progress
-待本次 Stage 1 工程骨架提交后追加 commit hash。
+18d97c6 build: add Qt C++23 project skeleton
+待本次 Stage 2 lexer/parser 提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。
