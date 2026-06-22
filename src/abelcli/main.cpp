@@ -46,6 +46,16 @@ struct CliInput {
     bool isPackage = false;
 };
 
+static abel::Diagnostic makeCliDiagnostic(const QString& code, const QString& message, const QString& file = {})
+{
+    abel::Diagnostic d;
+    d.severity = abel::Severity::Error;
+    d.code = code;
+    d.message = message;
+    d.primary.file = file;
+    return d;
+}
+
 static CliInput readCliInput(const QString& path)
 {
     CliInput input;
@@ -80,6 +90,44 @@ static CliInput readCliInput(const QString& path)
     return input;
 }
 
+static QList<abel::Diagnostic> checkSourceText(const QString& sourceFile, const QString& sourceText)
+{
+    QList<abel::Diagnostic> diagnostics;
+    abel::Lexer lexer;
+    auto lexed = lexer.lex(sourceFile, sourceText);
+    diagnostics.append(lexed.diagnostics);
+    if (!diagnostics.isEmpty())
+        return diagnostics;
+
+    abel::Parser parser;
+    auto parsed = parser.parse(lexed.tokens);
+    diagnostics.append(parsed.diagnostics);
+    if (!diagnostics.isEmpty())
+        return diagnostics;
+
+    abel::TypeChecker typechecker;
+    auto checked = typechecker.check(*parsed.program);
+    diagnostics.append(checked.diagnostics);
+    return diagnostics;
+}
+
+static QList<abel::Diagnostic> checkPackageBackendArtifacts(const abel::PackageManifest& package)
+{
+    QList<abel::Diagnostic> diagnostics;
+    for (const abel::ResourceNode& resource : package.backendArtifacts) {
+        QFileInfo info(resource.path);
+        if (info.isRelative())
+            info = QFileInfo(QDir(package.rootDir).absoluteFilePath(resource.path));
+        if (!info.isFile()) {
+            diagnostics.push_back(makeCliDiagnostic(QStringLiteral("E0013"),
+                                                    QStringLiteral("backend artifact '%1' does not exist")
+                                                        .arg(resource.path),
+                                                    package.filePath));
+        }
+    }
+    return diagnostics;
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -99,7 +147,7 @@ int main(int argc, char** argv)
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
     parser.addPositionalArgument(QStringLiteral("command"),
-                                 QStringLiteral("Command: init | add | remove | update | check | run | package | resources | version"));
+                                 QStringLiteral("Command: init | add | remove | update | build | check | run | package | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
                                  QStringLiteral("Input file, resource subcommand, or entry."),
                                  QStringLiteral("[input]"));
@@ -122,6 +170,52 @@ int main(int argc, char** argv)
     }
 
     const QString command = args[0];
+    if (command == QStringLiteral("build")) {
+        if (args.size() > 2) {
+            err << "E0012: build expects: abel build [project-dir]" << Qt::endl;
+            return 2;
+        }
+        const QString projectDir = args.size() == 2 ? args[1] : QStringLiteral(".");
+        auto package = abel::packageManifestFromDirectory(projectDir);
+        for (const auto& d : package.diagnostics)
+            printDiagnostic(d);
+        if (!package.ok())
+            return 1;
+
+        auto lock = abel::updatePackageLock(package.package.rootDir);
+        for (const auto& d : lock.diagnostics)
+            printDiagnostic(d);
+        if (!lock.ok())
+            return 1;
+
+        const QList<abel::Diagnostic> resourceDiagnostics = checkPackageBackendArtifacts(package.package);
+        for (const auto& d : resourceDiagnostics)
+            printDiagnostic(d);
+        if (!resourceDiagnostics.isEmpty())
+            return 1;
+
+        QFile file(package.package.entryFilePath());
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            printDiagnostic(makeCliDiagnostic(QStringLiteral("E0004"),
+                                              QStringLiteral("cannot open '%1'").arg(package.package.entryFilePath()),
+                                              package.package.entryFilePath()));
+            return 1;
+        }
+        const QList<abel::Diagnostic> diagnostics = checkSourceText(package.package.entryFilePath(),
+                                                                    QString::fromUtf8(file.readAll()));
+        for (const auto& d : diagnostics)
+            printDiagnostic(d);
+        if (!diagnostics.isEmpty())
+            return 1;
+
+        out << "built " << package.package.name << Qt::endl;
+        out << "entry " << package.package.entryFilePath() << Qt::endl;
+        out << "wrote " << lock.lockFile << Qt::endl;
+        out << "locked " << lock.entries.size() << " package(s)" << Qt::endl;
+        out << "checked " << package.package.backendArtifacts.size() << " backend artifact(s)" << Qt::endl;
+        return 0;
+    }
+
     if (command == QStringLiteral("add")) {
         if (args.size() < 3 || args.size() > 4 || args[1] != QStringLiteral("path")) {
             err << "E0010: add expects: abel add path <dependency-dir> [project-dir]" << Qt::endl;
@@ -242,25 +336,16 @@ int main(int argc, char** argv)
             printDiagnostic(d);
         if (!input.diagnostics.isEmpty())
             return 1;
-        abel::Lexer lexer;
-        auto lexed = lexer.lex(input.sourceFile, input.sourceText);
-        for (const auto& d : lexed.diagnostics)
+        const QList<abel::Diagnostic> checkDiagnostics = checkSourceText(input.sourceFile, input.sourceText);
+        for (const auto& d : checkDiagnostics)
             printDiagnostic(d);
-        if (!lexed.diagnostics.isEmpty())
-            return 1;
-        abel::Parser p;
-        auto parsed = p.parse(lexed.tokens);
-        for (const auto& d : parsed.diagnostics)
-            printDiagnostic(d);
-        if (!parsed.diagnostics.isEmpty())
-            return 1;
-        abel::TypeChecker typechecker;
-        auto checked = typechecker.check(*parsed.program);
-        for (const auto& d : checked.diagnostics)
-            printDiagnostic(d);
-        if (!checked.diagnostics.isEmpty())
+        if (!checkDiagnostics.isEmpty())
             return 1;
         if (command == QStringLiteral("run")) {
+            abel::Lexer lexer;
+            auto lexed = lexer.lex(input.sourceFile, input.sourceText);
+            abel::Parser p;
+            auto parsed = p.parse(lexed.tokens);
             abel::BackendRegistry backendRegistry;
             std::vector<abel::ResourceNodeLoadResult> loadedResources;
             const QStringList resourceFiles = parser.values(resourceOption);

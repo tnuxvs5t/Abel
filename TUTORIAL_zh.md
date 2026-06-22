@@ -1149,7 +1149,7 @@ my_abel_project/
     main.abel
 ```
 
-当前 v1 包管理已经支持项目级入口与本地 path 依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作本地依赖并生成 `abel.lock.json`，`abel check/run <project-dir>` 会自动读取入口。
+当前 v1 包管理已经支持项目级入口与本地 path 依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作本地依赖并生成 `abel.lock.json`，`abel build` 会执行项目级预构建检查，`abel check/run <project-dir>` 会自动读取入口。
 
 从空目录创建：
 
@@ -1173,6 +1173,8 @@ cd my_abel_project
 
 ```bash
 $ABEL package check .
+$ABEL update .
+$ABEL build .
 $ABEL check .
 $ABEL run .
 ```
@@ -1187,7 +1189,9 @@ $ABEL remove some_dep .
 
 `abel add path` 会读取依赖项目的 `abel.package.json`，自动推断依赖名，把依赖写入当前项目 manifest，并刷新 `abel.lock.json`。`abel remove` 按依赖名删除 manifest 中的依赖，并刷新 lockfile。这样普通用户不需要手动编辑 dependencies JSON。
 
-注意：这仍只是 v1 包管理引擎的早期闭环。registry、semver solver、download/cache、`abel build`、backend artifact 自动构建/缓存仍是后续 v1 工作。
+`abel build` 当前是项目级构建门面：刷新/校验 lockfile，检查入口 Abel 源码，并检查 package 声明的 backend artifact 文件是否存在。它还不是完整 native/backend artifact 构建系统。
+
+注意：这仍只是 v1 包管理引擎的早期闭环。registry、semver solver、download/cache、backend artifact 自动构建/缓存仍是后续 v1 工作。
 
 若项目需要 C++ backend，当前可以在包描述里写 `backendArtifacts`，让 `abel run <project-dir>` 自动加载 plugin，而不用在普通运行命令里手动传 `--resource`：
 

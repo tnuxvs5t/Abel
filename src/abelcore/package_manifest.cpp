@@ -421,6 +421,8 @@ PackageInitResult initPackageProject(const PackageInitOptions& options)
         "## Run\n\n"
         "```bash\n"
         "abel package check .\n"
+        "abel update .\n"
+        "abel build .\n"
         "abel check .\n"
         "abel run .\n"
         "```\n").arg(packageName);
