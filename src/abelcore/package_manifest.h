@@ -27,9 +27,24 @@ struct PackageManifestParseResult {
     bool ok() const { return diagnostics.isEmpty(); }
 };
 
+struct PackageInitOptions {
+    QString rootDir;
+    QString name;
+    QString version = QStringLiteral("0.1.0");
+};
+
+struct PackageInitResult {
+    QString rootDir;
+    QList<QString> createdFiles;
+    QList<Diagnostic> diagnostics;
+
+    bool ok() const { return diagnostics.isEmpty(); }
+};
+
 QString packageManifestFileName();
 bool isPackageDirectory(const QString& path);
 
+PackageInitResult initPackageProject(const PackageInitOptions& options);
 PackageManifestParseResult packageManifestFromJson(const QJsonObject& object,
                                                    const QString& rootDir = {},
                                                    const SourceSpan& span = {});

@@ -99,7 +99,7 @@ int main(int argc, char** argv)
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
     parser.addPositionalArgument(QStringLiteral("command"),
-                                 QStringLiteral("Command: check | run | package | resources | version"));
+                                 QStringLiteral("Command: init | check | run | package | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
                                  QStringLiteral("Input file, resource subcommand, or entry."),
                                  QStringLiteral("[input]"));
@@ -122,6 +122,24 @@ int main(int argc, char** argv)
     }
 
     const QString command = args[0];
+    if (command == QStringLiteral("init")) {
+        if (args.size() > 2) {
+            err << "E0008: init expects: abel init [project-dir]" << Qt::endl;
+            return 2;
+        }
+        abel::PackageInitOptions options;
+        options.rootDir = args.size() == 2 ? args[1] : QStringLiteral(".");
+        auto initialized = abel::initPackageProject(options);
+        for (const auto& d : initialized.diagnostics)
+            printDiagnostic(d);
+        if (!initialized.ok())
+            return 1;
+        out << "created " << initialized.rootDir << Qt::endl;
+        for (const QString& file : initialized.createdFiles)
+            out << "  " << file << Qt::endl;
+        return 0;
+    }
+
     if (command == QStringLiteral("package")) {
         if (args.size() != 3 || args[1] != QStringLiteral("check")) {
             err << "E0007: package expects: abel package check <project-dir>" << Qt::endl;

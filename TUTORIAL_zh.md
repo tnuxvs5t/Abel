@@ -1149,7 +1149,15 @@ my_abel_project/
     main.abel
 ```
 
-当前 v1 第一片已经支持项目级入口：`abel.package.json` 描述包名、版本、入口文件，`abel check/run <project-dir>` 会自动读取入口。
+当前 v1 包管理第一片已经支持项目级入口：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel check/run <project-dir>` 会自动读取入口。
+
+从空目录创建：
+
+```bash
+ABEL=/path/to/Abel/build/abel
+$ABEL init my_abel_project
+cd my_abel_project
+```
 
 最小 `abel.package.json`：
 
@@ -1164,13 +1172,12 @@ my_abel_project/
 检查和运行：
 
 ```bash
-ABEL=/path/to/Abel/build/abel
 $ABEL package check .
 $ABEL check .
 $ABEL run .
 ```
 
-注意：这只是 v1 包管理引擎的第一片。完整 `abel init/add/remove/update/build`、依赖解析、lockfile、registry、backend artifact 自动构建仍是后续 v1 工作。
+注意：这只是 v1 包管理引擎的第一片。完整 `abel add/remove/update/build`、依赖解析、lockfile、registry、backend artifact 自动构建仍是后续 v1 工作。
 
 若项目需要 C++ backend，当前可以在包描述里写 `backendArtifacts`，让 `abel run <project-dir>` 自动加载 plugin，而不用在普通运行命令里手动传 `--resource`：
 

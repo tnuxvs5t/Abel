@@ -81,6 +81,46 @@ private slots:
                   })"));
         QVERIFY(abel::isPackageDirectory(dir.path()));
     }
+
+    void initializesMinimalProject()
+    {
+        QTemporaryDir parent;
+        QVERIFY(parent.isValid());
+        const QString root = QDir(parent.path()).absoluteFilePath(QStringLiteral("hello_abel"));
+
+        abel::PackageInitOptions options;
+        options.rootDir = root;
+        options.name = QStringLiteral("hello-abel");
+        auto initialized = abel::initPackageProject(options);
+        for (const auto& d : initialized.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(initialized.diagnostics.isEmpty());
+        QCOMPARE(initialized.createdFiles.size(), 4);
+        QVERIFY(QFileInfo(QDir(root).absoluteFilePath(abel::packageManifestFileName())).isFile());
+        QVERIFY(QFileInfo(QDir(root).absoluteFilePath(QStringLiteral("src/main.abel"))).isFile());
+        QVERIFY(QFileInfo(QDir(root).absoluteFilePath(QStringLiteral("README.md"))).isFile());
+        QVERIFY(QFileInfo(QDir(root).absoluteFilePath(QStringLiteral(".gitignore"))).isFile());
+
+        auto parsed = abel::packageManifestFromDirectory(root);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.package.name, QStringLiteral("hello-abel"));
+        QCOMPARE(parsed.package.entry, QStringLiteral("src/main.abel"));
+    }
+
+    void initRefusesToOverwriteExistingFiles()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        writeText(QDir(dir.path()).absoluteFilePath(abel::packageManifestFileName()),
+                  QStringLiteral("{}"));
+
+        abel::PackageInitOptions options;
+        options.rootDir = dir.path();
+        auto initialized = abel::initPackageProject(options);
+        QVERIFY(!initialized.diagnostics.isEmpty());
+    }
 };
 
 QTEST_MAIN(AbelPackageManifestTests)

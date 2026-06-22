@@ -142,6 +142,12 @@ backend/
 }
 ```
 
+如果 Abel CLI 支持 `init`，优先让 CLI 生成骨架：
+
+```bash
+$ABEL_BIN init .
+```
+
 验证：
 
 ```bash
@@ -538,16 +544,13 @@ fn int main() {
 ```text
 1. 检查当前目录和 Git 状态。
 2. 找到 Abel CLI。
-3. 创建最小目录：src/ examples/。
-4. 创建 src/main.abel。
-5. 创建 abel.package.json，写 name/version/entry。
-6. 创建 README.md，记录 package check / check / run 命令。
-7. 创建 .gitignore。
-8. 运行 abel package check .。
-9. 运行 abel check .。
-10. 运行 abel run .。
-11. 如果成功，提交或建议提交。
-12. 告诉用户下一步可扩展方向。
+3. 优先运行 abel init . 生成最小骨架。
+4. 若当前 CLI 没有 init，再手动创建 src/、examples/、src/main.abel、abel.package.json、README.md、.gitignore。
+5. 运行 abel package check .。
+6. 运行 abel check .。
+7. 运行 abel run .。
+8. 如果成功，提交或建议提交。
+9. 告诉用户下一步可扩展方向。
 ```
 
 默认 `.gitignore`：
