@@ -2,6 +2,7 @@
 #include "abelcore/interpreter.h"
 #include "abelcore/lexer.h"
 #include "abelcore/parser.h"
+#include "abelcore/typechecker.h"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
@@ -78,6 +79,12 @@ int main(int argc, char** argv)
         for (const auto& d : parsed.diagnostics)
             printDiagnostic(d);
         if (!parsed.diagnostics.isEmpty())
+            return 1;
+        abel::TypeChecker typechecker;
+        auto checked = typechecker.check(*parsed.program);
+        for (const auto& d : checked.diagnostics)
+            printDiagnostic(d);
+        if (!checked.diagnostics.isEmpty())
             return 1;
         if (command == QStringLiteral("run")) {
             abel::Interpreter interpreter;
