@@ -1,4 +1,5 @@
 #include "abelcore/abel_version.h"
+#include "abelcore/interpreter.h"
 #include "abelcore/lexer.h"
 #include "abelcore/parser.h"
 
@@ -55,9 +56,9 @@ int main(int argc, char** argv)
     }
 
     const QString command = args[0];
-    if (command == QStringLiteral("check")) {
+    if (command == QStringLiteral("check") || command == QStringLiteral("run")) {
         if (args.size() < 2) {
-            err << "E0003: check expects an input file" << Qt::endl;
+            err << "E0003: " << command << " expects an input file" << Qt::endl;
             return 2;
         }
         QFile file(args[1]);
@@ -78,13 +79,15 @@ int main(int argc, char** argv)
             printDiagnostic(d);
         if (!parsed.diagnostics.isEmpty())
             return 1;
+        if (command == QStringLiteral("run")) {
+            abel::Interpreter interpreter;
+            auto result = interpreter.run(*parsed.program);
+            for (const auto& d : result.diagnostics)
+                printDiagnostic(d);
+            return result.exitCode;
+        }
         out << "ok" << Qt::endl;
         return 0;
-    }
-
-    if (command == QStringLiteral("run")) {
-        err << "E0001: 'run' is not implemented yet; parser/check is available." << Qt::endl;
-        return 2;
     }
 
     err << "E0002: unknown command '" << command << "'" << Qt::endl;

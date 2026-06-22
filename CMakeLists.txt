@@ -28,6 +28,14 @@ add_library(abelcore SHARED
     src/abelcore/ast.cpp
     src/abelcore/parser.h
     src/abelcore/parser.cpp
+    src/abelcore/type.h
+    src/abelcore/type.cpp
+    src/abelcore/value.h
+    src/abelcore/value.cpp
+    src/abelcore/runtime.h
+    src/abelcore/runtime.cpp
+    src/abelcore/interpreter.h
+    src/abelcore/interpreter.cpp
 )
 
 target_include_directories(abelcore
@@ -82,3 +90,16 @@ target_link_libraries(abel_parser_tests
 )
 
 add_test(NAME abel_parser_tests COMMAND abel_parser_tests)
+
+add_executable(abel_interpreter_tests
+    tests/interpreter/test_interpreter.cpp
+)
+
+target_link_libraries(abel_interpreter_tests
+    PRIVATE
+        abelcore
+        Qt6::Core
+        Qt6::Test
+)
+
+add_test(NAME abel_interpreter_tests COMMAND abel_interpreter_tests)

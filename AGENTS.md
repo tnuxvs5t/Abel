@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 2：lexer/parser/AST 最小闭环已建立，进入 type/runtime/interpreter 最小闭环。
+Stage 3：type/value/runtime/interpreter 最小闭环已建立，进入 C/C++ 值模型最小闭环。
 ```
 
 ### 已完成
@@ -1966,6 +1966,12 @@ Stage 2：lexer/parser/AST 最小闭环已建立，进入 type/runtime/interpret
 18. 实现 parser 最小闭环：fn、backend、block、var decl、return、if/elseif/else、while、repeat、表达式、vector<T>、index。
 19. 接入 `abel check <file>` 的 lex/parse 流程。
 20. 增加 parser QTest。
+21. 实现 Type/Value/Runtime 基础。
+22. 实现 tree-run Interpreter 最小闭环：函数表、`fn int main()` / `fn void main()`、局部变量、赋值、return、if/while/repeat、break/continue、用户函数调用。
+23. 支持 Stage 3 基础值：int/i32、long/ll/i64、double/f64、bool、str、char、void。
+24. 支持 Stage 3 基础表达式：算术、比较、相等、逻辑短路、字符串拼接、`**`、`%%`、`<?`、`>?` 的基础解释执行。
+25. 接入 `abel run <file>`。
+26. 增加 interpreter QTest。
 ```
 
 ### 最近验证
@@ -1993,25 +1999,33 @@ Stage 2：lexer/parser/AST 最小闭环已建立，进入 type/runtime/interpret
 - 在 4GB 虚拟内存上限下测试通过：
   /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
 - 修复 parser 在错误恢复不前进、且 `::` 未消费时可能无限分配并 bad_alloc 的问题；新增 `StaticAccessExprNode` 支持 `MathSystem::fast_add` 这类静态/backend 调用语法。
+- Stage 3 构建通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
+- Stage 3 在 4GB 虚拟内存上限下测试通过：
+  /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+- CLI run smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
+  输出 exit=0。
 ```
 
 ### 未完成
 
 ```text
-1. 尚无 typechecker/interpreter。
+1. 尚无独立 typechecker；Stage 3 仅在解释器内做最小运行时类型检查。
 2. 尚无 backend plugin 示例。
 3. parser 仍是最小闭环，尚未覆盖 struct/lambda/for/range-for。
+4. interpreter 尚未实现 pointer/reference/vector/struct/lambda/backend/any/BuiltinRegistry。
 ```
 
 ### 下一步
 
 ```text
-Stage 3：
-1. 实现 Type/Value/Runtime 基础。
-2. 实现函数表与 `fn int main()` 查找。
-3. 实现 int/bool/str 基础值、局部变量、赋值、return、算术/比较。
-4. 接入 `abel run <file>`。
-5. 增加 interpreter tests。
+Stage 4：
+1. 设计并实现最小 AbelLocation / lvalue / prvalue 表达。
+2. 实现 T& 引用变量初始化与赋值写回。
+3. 实现 T*、&x、*p、nullptr、指针相等比较。
+4. 增加 pointer/reference smoke examples 与 interpreter tests。
+5. 开始拆出独立 typechecker，至少覆盖 Stage 3/4 已支持语义。
 6. build + ctest + commit。
 ```
 
@@ -2031,7 +2045,8 @@ Stage 3：
 ca49a01 docs: replace Abel design with agent manual
 4ff4184 docs: record manual replacement progress
 18d97c6 build: add Qt C++23 project skeleton
-待本次 Stage 2 lexer/parser 提交后追加 commit hash。
+1073d7d parser: add Abel lexer and parser baseline
+待本次 Stage 3 interpreter 提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。
