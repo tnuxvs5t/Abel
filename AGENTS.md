@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 14c：用户自定义 `to_str(T)` 已接入 `build_string` / `print` / `println`；继续 v0 剩余差距审计与收口。
+Stage 14d：v0 剩余差距审计已收口；继续按 must-fix 清单做最后验收。
 ```
 
 ### 已完成
@@ -2046,6 +2046,31 @@ Stage 14c：用户自定义 `to_str(T)` 已接入 `build_string` / `print` / `pr
 98. TypeChecker 对 `to_str` / `build_string` / `print` / `println` 增加 stringifiable 检查：基础类型、any、pointer/nullptr、可 stringify 元素 vector、以及存在 `fn str to_str(T)` 的 struct。
 99. Interpreter 在调用 string builtin 时注入 stringify 回调；struct 值会调用用户定义的 `fn str to_str(Struct)`，返回值按 str 检查。
 100. 增加 typechecker/interpreter tests，覆盖 `build_string("student=", Student)` 调用用户 `to_str(Student)`，以及无 `to_str` 的 struct 被静态拒绝。
+101. 完成 v0 剩余差距审计：将 `scan`、完整 const 指针/引用矩阵、完整 backend binder 类型矩阵、struct private/public 与高级生命周期、用户自定义 operator 系统明确列为 v0 后续，不再阻塞 v0 complete。
+102. 明确 v0 complete 验收口径：核心样例、语言核心、BuiltinRegistry 易扩展结构、Qt backend/resource 动态加载、CLI check/run/resource run、4GB 限额测试全部通过即可视为 v0 完成。
+```
+
+### v0 complete 边界审计
+
+```text
+已满足 v0 必须项：
+1. 语言核心：lex/parse/AST/typecheck/tree-run 已覆盖函数、变量、控制流、指针、引用、vector、lambda、any、variadic、struct、backend call。
+2. BuiltinRegistry：函数/method 描述、arity、运行时回调、vector methods、string builtins、str/char 转换、用户 to_str(T) stringify 回调已闭环。
+3. Backend 核心：backend block parse/typecheck/runtime dispatch、BackendRegistry、ResourceNode JSON、QPluginLoader、IAbelBackend、plugin base/binder、示例 MathBackend 已闭环。
+4. CLI：`abel check`、`abel run`、`abel resources check`、`abel run --resource` 已闭环。
+5. Operators：`**`、`%%`、`<?`、`>?`、`|>` 已实现并测试；用户自定义 operator 不进入 v0。
+
+明确延期到 v0 后：
+1. `scan`：AGENTS.md 原文允许 v0 先实现 `print/println/build_string`，`scan` 留接口位置；输入系统会引入交互/IO 设计，不阻塞 v0 core complete。
+2. 完整 const 指针/引用矩阵：当前保留基础 const 变量写保护、const 方法基础框架；`T* const`、`const T*`、`const T&` 完整兼容与 prvalue 绑定策略延期。
+3. Backend binder 完整类型矩阵：当前覆盖示例与核心通路所需 int/bool/i64/double/str/AbelValue/vector<int>&；全类型矩阵与更多 vector<T>& 延期。
+4. struct 高级项：private/public、复杂 const receiver、引用返回生命周期、指针字段高级场景延期；当前 value struct、字段、构造、方法、this、const 方法只读基础已闭环。
+5. 用户自定义 operator 系统延期；v0 仅保留内建 operator 与 pipe 语法糖。
+
+剩余 must-fix：
+1. 最终运行一次 4GB 限额全套测试。
+2. 最终运行 CLI smoke：check/run hello、resources check、run --resource backend。
+3. 若全部通过，更新本区为 v0 complete 并提交最终验收 commit。
 ```
 
 ### 最近验证
@@ -2234,31 +2259,24 @@ Stage 14c：用户自定义 `to_str(T)` 已接入 `build_string` / `print` / `pr
 ### 未完成
 
 ```text
-1. Backend binder 仍是最小友好层，只覆盖 v0 示例所需基础类型与 `vector<int>&`，尚未覆盖完整类型矩阵。
-2. const 指针、const 引用的完整静态语义尚未实现；当前只保留基础 const 变量写保护。
-3. BuiltinRegistry 尚未接入 scan。
-4. pipe v0 仅支持 `x |> f` 与 `x |> f(args...)` 的命名目标；不支持任意 RHS 表达式或用户自定义 pipe overload。
-5. struct 当前是最小闭环：尚未覆盖 private/public、复杂 const receiver、引用返回生命周期、指针字段高级场景。
-6. 需要对 AGENTS.md 的 v0 清单做一次系统审计，确认哪些缺口必须补、哪些可作为 v0 明确延期。
+1. 最终验收尚未执行：需要在 4GB 虚拟内存上限下跑全套 ctest。
+2. 最终 CLI smoke 尚未执行：check/run hello、resources check、run --resource backend。
 ```
 
 ### 下一步
 
 ```text
-Stage 14：
-1. 按 AGENTS.md 对 v0 做剩余差距审计，列出 must-fix / can-defer，并避免继续无边界扩张。
-2. 优先审计 `scan`、const 引用/指针、backend binder 类型矩阵、struct 高级项是否属于 v0 必须完成。
-3. 对每个 must-fix 缺口形成大块闭环：实现 + 代表性 QTest/CLI smoke + 4GB ctest + commit，避免细枝末节拖慢主线。
-4. 若某项决定延期，必须在 AGENTS.md 的未完成/风险区写明 v0 边界，而不是静默遗漏。
+Stage 15：
+1. 执行最终验收：构建、4GB ctest、CLI check/run/resource smoke。
+2. 若失败，只修阻塞 v0 complete 的问题，不再扩张新能力。
+3. 若通过，更新当前阶段为 v0 complete，记录验证命令并提交最终验收 commit。
 ```
 
 ### 风险与未决
 
 ```text
-1. const T& 是否绑定 prvalue 暂未完整实现；当前推荐 v0 禁止，降低解释器复杂度。
-2. signed overflow 语义按 C/C++ 风险模型，不做额外保护；解释器实现细节需避免无意引入宿主 UB 污染调试，可先使用宿主类型直接执行并记录风险。
-3. `scan` 是否进入 v0 仍需最终裁定；AGENTS.md 允许先留接口位置，但若目标定义为完整 v0，需要明确延期理由。
-4. 用户自定义 operator 的 v0 范围可继续收缩，不能阻塞主线。
+1. signed overflow 语义按 C/C++ 风险模型，不做额外保护；解释器实现细节使用宿主整数，后续若需要可单独收紧。
+2. v0 后续延期项已在「v0 complete 边界审计」列明；最终验收不得把延期项重新扩张为阻塞项，除非用户明确改目标。
 ```
 
 ### 最近提交
@@ -2283,7 +2301,8 @@ dee8b16 lambda: add function values and captures
 01cf078 backend: load Qt plugin resources
 5aedd02 builtins: add string char conversions
 f75f7c8 v0: wire cast pipe and resource run
-待本次 Stage 14c user-to-str-stringify 提交后追加 commit hash。
+a5d527e builtins: call user to_str for stringify
+待本次 Stage 14d v0-boundary-audit 提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。
