@@ -45,7 +45,15 @@ private:
     bool collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx);
     ExecResult callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args);
     ExecResult callFunctionExpr(const FunctionDeclNode& fn, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    ExecResult callFunctionPipeExpr(const FunctionDeclNode& fn,
+                                    const ExprNode& firstArg,
+                                    const std::vector<std::unique_ptr<ExprNode>>& restArgs,
+                                    const SourceSpan& span);
     AbelValue callFunctionValue(const AbelValue& fnValue, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    AbelValue callFunctionValuePipe(const AbelValue& fnValue,
+                                    const ExprNode& firstArg,
+                                    const std::vector<std::unique_ptr<ExprNode>>& restArgs,
+                                    const SourceSpan& span);
     ExecResult callStructFunction(const FunctionDeclNode& fn, AbelLocation* self, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExecResult execBlock(const BlockStmtNode& block);
     ExecResult execStmt(const StmtNode& stmt);
@@ -56,6 +64,8 @@ private:
     AbelLocation* evalLocation(const ExprNode& expr);
     AbelValue evalBinary(const BinaryExprNode& expr);
     AbelValue evalUnary(const UnaryExprNode& expr);
+    AbelValue evalCast(const CastExprNode& expr);
+    AbelValue evalPipe(const BinaryExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);
     AbelValue evalBackendCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue evalLambda(const LambdaExprNode& expr);

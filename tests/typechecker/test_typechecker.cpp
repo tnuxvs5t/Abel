@@ -84,6 +84,35 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsCastPipeAndExtendedOperators()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int first(any... args) {
+                return cast<int>(args[0]);
+            }
+
+            fn int main() {
+                func int(int, int) add = lambda [] int(int a, int b) {
+                    return a + b;
+                };
+                int piped = 4 |> add(5);
+                str roundtrip = "az" |> str_to_chars |> chars_to_str;
+                int x = first(7);
+                return (2 ** 3) + (-5 %% 3) + (x <? 10) + (piped >? 4);
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsCastFromNonAny()
+    {
+        auto result = checkSource(QStringLiteral("fn int main() { int x = cast<int>(1); return x; }"));
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
+
     void rejectsCharsToStrWithNonCharVector()
     {
         const QString src = QStringLiteral(R"(

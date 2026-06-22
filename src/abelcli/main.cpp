@@ -10,6 +10,8 @@
 #include <QFile>
 #include <QTextStream>
 
+#include <vector>
+
 static void printDiagnostic(const abel::Diagnostic& d)
 {
     QTextStream err(stderr);
@@ -33,7 +35,11 @@ int main(int argc, char** argv)
 
     QCommandLineOption toolchainOption(QStringLiteral("toolchain"),
                                        QStringLiteral("Print the locked Qt/C++ toolchain summary."));
+    QCommandLineOption resourceOption({QStringLiteral("resource"), QStringLiteral("r")},
+                                      QStringLiteral("Load a backend ResourceNode JSON before `abel run`."),
+                                      QStringLiteral("resource.json"));
     parser.addOption(toolchainOption);
+    parser.addOption(resourceOption);
     parser.addPositionalArgument(QStringLiteral("command"),
                                  QStringLiteral("Command: check | run | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
@@ -108,8 +114,34 @@ int main(int argc, char** argv)
         if (!checked.diagnostics.isEmpty())
             return 1;
         if (command == QStringLiteral("run")) {
+            abel::BackendRegistry backendRegistry;
+            std::vector<abel::ResourceNodeLoadResult> loadedResources;
+            const QStringList resourceFiles = parser.values(resourceOption);
+            loadedResources.reserve(static_cast<size_t>(resourceFiles.size()));
+            for (const QString& resourceFile : resourceFiles) {
+                QFile rf(resourceFile);
+                if (!rf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    err << "E0006: cannot open resource '" << resourceFile << "'" << Qt::endl;
+                    return 2;
+                }
+                auto resource = abel::resourceNodeFromJsonText(QString::fromUtf8(rf.readAll()), resourceFile);
+                for (const auto& d : resource.diagnostics)
+                    printDiagnostic(d);
+                if (!resource.diagnostics.isEmpty())
+                    return 1;
+                auto loaded = abel::loadBackendResourceNode(resource.node,
+                                                            backendRegistry,
+                                                            QCoreApplication::applicationDirPath());
+                for (const auto& d : loaded.diagnostics)
+                    printDiagnostic(d);
+                if (!loaded.ok())
+                    return 1;
+                loadedResources.push_back(std::move(loaded));
+            }
             abel::Interpreter interpreter;
-            auto result = interpreter.run(*parsed.program);
+            auto result = resourceFiles.isEmpty()
+                ? interpreter.run(*parsed.program)
+                : interpreter.run(*parsed.program, &backendRegistry);
             for (const auto& d : result.diagnostics)
                 printDiagnostic(d);
             return result.exitCode;

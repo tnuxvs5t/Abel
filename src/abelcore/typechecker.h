@@ -79,6 +79,22 @@ private:
     ExprType checkName(const NameExprNode& expr);
     ExprType checkUnary(const UnaryExprNode& expr);
     ExprType checkBinary(const BinaryExprNode& expr);
+    ExprType checkCast(const CastExprNode& expr);
+    ExprType checkPipe(const BinaryExprNode& expr);
+    ExprType checkPipeTarget(const QString& name,
+                             const SourceSpan& nameSpan,
+                             const ExprType& lhs,
+                             const std::vector<std::unique_ptr<ExprNode>>& args,
+                             const SourceSpan& span);
+    ExprType checkFunctionCallShape(const QString& name,
+                                    const FunctionDeclNode& fn,
+                                    const ExprType& firstArg,
+                                    const std::vector<std::unique_ptr<ExprNode>>& restArgs,
+                                    const SourceSpan& span);
+    ExprType checkFunctionValueCallShape(const AbelType& functionType,
+                                         const ExprType& firstArg,
+                                         const std::vector<std::unique_ptr<ExprNode>>& restArgs,
+                                         const SourceSpan& span);
     ExprType checkAssignment(const AssignExprNode& expr);
     ExprType checkCall(const CallExprNode& expr);
     ExprType checkBackendCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);

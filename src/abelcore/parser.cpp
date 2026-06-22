@@ -434,6 +434,16 @@ std::unique_ptr<ExprNode> Parser::parseBinary(int minPrec)
 
 std::unique_ptr<ExprNode> Parser::parseUnary()
 {
+    if (match(TokenKind::KwCast)) {
+        auto node = std::make_unique<CastExprNode>();
+        consume(TokenKind::Less, QStringLiteral("expected '<' after cast"));
+        node->targetType = parseType();
+        consume(TokenKind::Greater, QStringLiteral("expected '>' after cast target type"));
+        consume(TokenKind::LParen, QStringLiteral("expected '(' after cast target type"));
+        node->expr = parseExpression();
+        consume(TokenKind::RParen, QStringLiteral("expected ')' after cast argument"));
+        return node;
+    }
     if (match(TokenKind::Bang) || match(TokenKind::Minus) || match(TokenKind::Plus)
         || match(TokenKind::Amp) || match(TokenKind::Star)) {
         auto node = std::make_unique<UnaryExprNode>();

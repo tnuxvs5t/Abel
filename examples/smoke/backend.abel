@@ -1,0 +1,10 @@
+backend MathSystem {
+    fn int fast_add(int a, int b);
+    fn void sort(vector<int>& xs);
+}
+
+fn int main() {
+    vector<int> xs = {3, 1, 2};
+    MathSystem::sort(xs);
+    return MathSystem::fast_add(xs[0], xs[2]);
+}

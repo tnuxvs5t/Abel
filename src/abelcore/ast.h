@@ -56,6 +56,11 @@ struct AssignExprNode final : ExprNode {
     std::unique_ptr<ExprNode> rhs;
 };
 
+struct CastExprNode final : ExprNode {
+    std::unique_ptr<TypeNode> targetType;
+    std::unique_ptr<ExprNode> expr;
+};
+
 struct CallExprNode final : ExprNode {
     std::unique_ptr<ExprNode> callee;
     std::vector<std::unique_ptr<ExprNode>> args;

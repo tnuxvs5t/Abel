@@ -399,6 +399,7 @@ ExprType TypeChecker::checkExpr(const ExprNode& expr)
     if (auto* e = dynamic_cast<const NameExprNode*>(&expr)) return checkName(*e);
     if (auto* e = dynamic_cast<const UnaryExprNode*>(&expr)) return checkUnary(*e);
     if (auto* e = dynamic_cast<const BinaryExprNode*>(&expr)) return checkBinary(*e);
+    if (auto* e = dynamic_cast<const CastExprNode*>(&expr)) return checkCast(*e);
     if (auto* e = dynamic_cast<const AssignExprNode*>(&expr)) return checkAssignment(*e);
     if (auto* e = dynamic_cast<const CallExprNode*>(&expr)) return checkCall(*e);
     if (auto* e = dynamic_cast<const LambdaExprNode*>(&expr)) return checkLambda(*e);
@@ -455,6 +456,9 @@ ExprType TypeChecker::checkUnary(const UnaryExprNode& expr)
 
 ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
 {
+    if (expr.op == QStringLiteral("|>"))
+        return checkPipe(expr);
+
     ExprType lhs = checkExpr(*expr.lhs);
     ExprType rhs = checkExpr(*expr.rhs);
     const QString& op = expr.op;
@@ -492,6 +496,159 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
     }
 
     return errorExpr(expr.span, QStringLiteral("unknown binary operator '%1'").arg(op));
+}
+
+ExprType TypeChecker::checkCast(const CastExprNode& expr)
+{
+    const AbelType target = typeFromAst(*expr.targetType);
+    if (!isSupportedType(target))
+        return errorExpr(expr.targetType->span, QStringLiteral("unsupported cast target type '%1'").arg(expr.targetType->displayName()));
+    if (target.kind == TypeKind::Void || target.isReference())
+        return errorExpr(expr.targetType->span, QStringLiteral("cast target must be a value type"));
+
+    ExprType source = checkExpr(*expr.expr);
+    if (source.type.kind != TypeKind::Any)
+        return errorExpr(expr.expr->span, QStringLiteral("cast<T>() expects any source, got %1").arg(source.type.displayName()));
+    return {target, ValueCategory::PRValue, false};
+}
+
+ExprType TypeChecker::checkPipe(const BinaryExprNode& expr)
+{
+    ExprType lhs = checkExpr(*expr.lhs);
+    if (auto* name = dynamic_cast<NameExprNode*>(expr.rhs.get()))
+        return checkPipeTarget(name->name, name->span, lhs, {}, expr.span);
+
+    if (auto* call = dynamic_cast<CallExprNode*>(expr.rhs.get())) {
+        if (auto* name = dynamic_cast<NameExprNode*>(call->callee.get()))
+            return checkPipeTarget(name->name, name->span, lhs, call->args, expr.span);
+        return errorExpr(call->callee->span, QStringLiteral("pipe target call must use a named function"));
+    }
+
+    return errorExpr(expr.rhs->span, QStringLiteral("pipe right side must be f or f(args...)"));
+}
+
+ExprType TypeChecker::checkPipeTarget(const QString& name,
+                                      const SourceSpan& nameSpan,
+                                      const ExprType& lhs,
+                                      const std::vector<std::unique_ptr<ExprNode>>& args,
+                                      const SourceSpan& span)
+{
+    if (const VariableInfo* variable = lookupVariable(name)) {
+        const AbelType calleeType = valueTypeOfVariable(variable->type);
+        if (calleeType.kind != TypeKind::Function)
+            return errorExpr(nameSpan, QStringLiteral("pipe target variable '%1' is not a function value").arg(name));
+        return checkFunctionValueCallShape(calleeType, lhs, args, span);
+    }
+
+    if (const FunctionDeclNode* fn = m_functions.value(name, nullptr))
+        return checkFunctionCallShape(name, *fn, lhs, args, span);
+
+    if (m_builtins.hasFunction(name)) {
+        const qsizetype argc = static_cast<qsizetype>(args.size()) + 1;
+        if (name == QStringLiteral("to_str")) {
+            if (argc != 1)
+                return errorExpr(span, QStringLiteral("to_str expects one argument"));
+            return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
+        }
+        if (name == QStringLiteral("str_to_chars")) {
+            if (argc != 1)
+                return errorExpr(span, QStringLiteral("str_to_chars expects one argument"));
+            if (lhs.type.kind != TypeKind::Str)
+                return errorExpr(span, QStringLiteral("str_to_chars expects str, got %1").arg(lhs.type.displayName()));
+            return {makeVectorType(makeType(TypeKind::Char)), ValueCategory::PRValue, false};
+        }
+        if (name == QStringLiteral("chars_to_str")) {
+            if (argc != 1)
+                return errorExpr(span, QStringLiteral("chars_to_str expects one argument"));
+            const AbelType charVector = makeVectorType(makeType(TypeKind::Char));
+            if (!isAssignable(charVector, lhs.type))
+                return errorExpr(span, QStringLiteral("chars_to_str expects vector<char>, got %1").arg(lhs.type.displayName()));
+            return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
+        }
+        for (const auto& arg : args)
+            checkExpr(*arg);
+        if (name == QStringLiteral("build_string"))
+            return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
+        if (name == QStringLiteral("print") || name == QStringLiteral("println"))
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+    }
+
+    return errorExpr(nameSpan, QStringLiteral("unknown pipe target '%1'").arg(name));
+}
+
+ExprType TypeChecker::checkFunctionCallShape(const QString& name,
+                                             const FunctionDeclNode& fn,
+                                             const ExprType& firstArg,
+                                             const std::vector<std::unique_ptr<ExprNode>>& restArgs,
+                                             const SourceSpan& span)
+{
+    const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
+    const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
+    const size_t argc = restArgs.size() + 1;
+    if ((!variadic && argc != fn.params.size()) || (variadic && argc < fixedCount))
+        return errorExpr(span, QStringLiteral("function '%1' called with wrong argument count").arg(name));
+
+    auto checkOne = [&](size_t i, const ExprType& arg, const SourceSpan& argSpan) {
+        const ParameterNode& param = *fn.params[i];
+        const AbelType paramType = typeFromAst(*param.type);
+        if (paramType.isReference()) {
+            if (arg.category != ValueCategory::LValue)
+                error(argSpan, QStringLiteral("reference parameter '%1' requires lvalue").arg(param.name));
+            else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
+                error(argSpan, QStringLiteral("cannot bind reference parameter '%1'").arg(param.name));
+        } else if (!isAssignable(paramType, arg.type)) {
+            error(argSpan,
+                  QStringLiteral("cannot pass %1 to parameter '%2' of type %3")
+                      .arg(arg.type.displayName(), param.name, paramType.displayName()));
+        }
+    };
+
+    for (size_t i = 0; i < fixedCount; ++i) {
+        if (i == 0) {
+            checkOne(i, firstArg, span);
+        } else {
+            ExprType arg = checkExpr(*restArgs[i - 1]);
+            checkOne(i, arg, restArgs[i - 1]->span);
+        }
+    }
+    for (size_t i = fixedCount; i < argc; ++i) {
+        if (i > 0)
+            checkExpr(*restArgs[i - 1]);
+    }
+    return {typeFromAst(*fn.returnType), ValueCategory::PRValue, false};
+}
+
+ExprType TypeChecker::checkFunctionValueCallShape(const AbelType& functionType,
+                                                  const ExprType& firstArg,
+                                                  const std::vector<std::unique_ptr<ExprNode>>& restArgs,
+                                                  const SourceSpan& span)
+{
+    if (functionType.kind != TypeKind::Function || !functionType.pointee)
+        return errorExpr(span, QStringLiteral("callee is not a function value"));
+    if (restArgs.size() + 1 != functionType.params.size())
+        return errorExpr(span, QStringLiteral("function value called with wrong argument count"));
+
+    auto checkOne = [&](size_t i, const ExprType& arg, const SourceSpan& argSpan) {
+        const AbelType& paramType = functionType.params[i];
+        if (paramType.isReference()) {
+            if (arg.category != ValueCategory::LValue)
+                error(argSpan, QStringLiteral("reference function parameter requires lvalue"));
+            else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
+                error(argSpan,
+                      QStringLiteral("cannot bind %1 to %2 lvalue").arg(paramType.displayName(), arg.type.displayName()));
+        } else if (!isAssignable(paramType, arg.type)) {
+            error(argSpan,
+                  QStringLiteral("cannot pass %1 to function parameter %2")
+                      .arg(arg.type.displayName(), paramType.displayName()));
+        }
+    };
+
+    checkOne(0, firstArg, span);
+    for (size_t i = 1; i < functionType.params.size(); ++i) {
+        ExprType arg = checkExpr(*restArgs[i - 1]);
+        checkOne(i, arg, restArgs[i - 1]->span);
+    }
+    return {*functionType.pointee, ValueCategory::PRValue, false};
 }
 
 ExprType TypeChecker::checkAssignment(const AssignExprNode& expr)

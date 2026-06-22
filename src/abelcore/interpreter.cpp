@@ -399,6 +399,108 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
     return ExecResult::returned(AbelValue::makeUnknown());
 }
 
+ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
+                                             const ExprNode& firstArg,
+                                             const std::vector<std::unique_ptr<ExprNode>>& restArgs,
+                                             const SourceSpan& span)
+{
+    if (fn.debt || !fn.body) {
+        error(QStringLiteral("E0539"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    const size_t argc = restArgs.size() + 1;
+    const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
+    const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
+    if ((!variadic && argc != fn.params.size()) || (variadic && argc < fixedCount)) {
+        error(QStringLiteral("E0540"),
+              QStringLiteral("function '%1' expects %2 argument(s), got %3")
+                  .arg(fn.name)
+                  .arg(variadic ? QStringLiteral("at least %1").arg(fixedCount) : QString::number(fn.params.size()))
+                  .arg(argc),
+              span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    auto argAt = [&](size_t index) -> const ExprNode& {
+        return index == 0 ? firstArg : *restArgs[index - 1];
+    };
+
+    struct PreparedArg {
+        AbelValue value;
+        AbelLocation* location = nullptr;
+        bool byReference = false;
+    };
+    std::vector<PreparedArg> prepared(fixedCount);
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& p = *fn.params[i];
+        const AbelType target = typeFromAst(*p.type);
+        const ExprNode& arg = argAt(i);
+        if (target.isReference()) {
+            AbelLocation* loc = evalLocation(arg);
+            if (!loc)
+                continue;
+            AbelValue current = loc->read();
+            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+                error(QStringLiteral("E0541"),
+                      QStringLiteral("cannot bind parameter '%1' of type %2 to %3 lvalue")
+                          .arg(p.name, target.displayName(), current.type().displayName()),
+                      p.span);
+                continue;
+            }
+            prepared[i].location = loc;
+            prepared[i].byReference = true;
+        } else {
+            prepared[i].value = convertOrError(evalExpr(arg), target, p.span);
+        }
+    }
+    std::vector<AbelValue> packed;
+    if (variadic) {
+        const ParameterNode& p = *fn.params.back();
+        if (typeFromAst(*p.type).kind != TypeKind::Any) {
+            error(QStringLiteral("E0560"), QStringLiteral("only any... variadic parameters are supported"), p.span);
+        } else {
+            packed.reserve(argc - fixedCount);
+            for (size_t i = fixedCount; i < argc; ++i)
+                packed.push_back(AbelValue::makeAny(evalExpr(argAt(i))));
+        }
+    }
+    if (m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
+
+    m_ctx->pushFrame(true);
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& p = *fn.params[i];
+        if (prepared[i].byReference)
+            m_ctx->defineVariable(p.name, prepared[i].location, false, true, p.span);
+        else
+            m_ctx->defineValueVariable(p.name, prepared[i].value, false, p.span);
+    }
+    if (variadic) {
+        const ParameterNode& p = *fn.params.back();
+        m_ctx->defineValueVariable(p.name, AbelValue::makeVector(makeType(TypeKind::Any), std::move(packed)), false, p.span);
+    }
+    if (m_ctx->hasError()) {
+        m_ctx->popFrame();
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    ExecResult flow = execBlock(*fn.body);
+    m_ctx->popFrame();
+
+    const AbelType returnType = typeFromAst(*fn.returnType);
+    if (flow.kind == FlowKind::Return)
+        return ExecResult::returned(convertOrError(flow.value, returnType, fn.span));
+    if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
+        error(QStringLiteral("E0542"), QStringLiteral("break/continue cannot leave function '%1'").arg(fn.name), fn.span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+    if (returnType.kind == TypeKind::Void)
+        return ExecResult::returned(AbelValue::makeVoid());
+    error(QStringLiteral("E0543"), QStringLiteral("function '%1' ended without return").arg(fn.name), fn.span);
+    return ExecResult::returned(AbelValue::makeUnknown());
+}
+
 AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
                                          const std::vector<std::unique_ptr<ExprNode>>& args,
                                          const SourceSpan& span)
@@ -450,6 +552,92 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
     for (auto it = function->refCaptures.constBegin(); it != function->refCaptures.constEnd(); ++it)
         m_ctx->defineVariable(it.key(), it.value(), function->refConstness.value(it.key(), false), true, lambda.span);
     for (size_t i = 0; i < args.size(); ++i) {
+        const QString& name = lambda.paramNames[static_cast<qsizetype>(i)];
+        if (byReference[i])
+            m_ctx->defineVariable(name, locations[i], false, true, lambda.span);
+        else
+            m_ctx->defineValueVariable(name, values[i], false, lambda.span);
+    }
+    if (m_ctx->hasError()) {
+        m_ctx->popFrame();
+        return AbelValue::makeUnknown();
+    }
+
+    ExecResult flow = execBlock(*lambda.ownedBody);
+    m_ctx->popFrame();
+
+    const AbelType& returnType = *fnValue.type().pointee;
+    if (flow.kind == FlowKind::Return)
+        return convertOrError(flow.value, returnType, lambda.span);
+    if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
+        error(QStringLiteral("E0584"), QStringLiteral("break/continue cannot leave lambda"), lambda.span);
+        return AbelValue::makeUnknown();
+    }
+    if (returnType.kind == TypeKind::Void)
+        return AbelValue::makeVoid();
+    error(QStringLiteral("E0585"), QStringLiteral("lambda ended without return"), lambda.span);
+    return AbelValue::makeUnknown();
+}
+
+AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
+                                             const ExprNode& firstArg,
+                                             const std::vector<std::unique_ptr<ExprNode>>& restArgs,
+                                             const SourceSpan& span)
+{
+    if (fnValue.type().kind != TypeKind::Function || !fnValue.type().pointee) {
+        error(QStringLiteral("E0580"), QStringLiteral("callee is not a function value"), span);
+        return AbelValue::makeUnknown();
+    }
+    auto function = fnValue.asFunction();
+    if (!function || !function->lambda || !function->lambda->ownedBody) {
+        error(QStringLiteral("E0581"), QStringLiteral("invalid function value"), span);
+        return AbelValue::makeUnknown();
+    }
+
+    const size_t argc = restArgs.size() + 1;
+    if (argc != fnValue.type().params.size()) {
+        error(QStringLiteral("E0582"), QStringLiteral("function value called with wrong argument count"), span);
+        return AbelValue::makeUnknown();
+    }
+
+    auto argAt = [&](size_t index) -> const ExprNode& {
+        return index == 0 ? firstArg : *restArgs[index - 1];
+    };
+
+    std::vector<AbelValue> values(argc);
+    std::vector<AbelLocation*> locations(argc, nullptr);
+    std::vector<bool> byReference(argc, false);
+    for (size_t i = 0; i < argc; ++i) {
+        const AbelType& target = fnValue.type().params[i];
+        const ExprNode& arg = argAt(i);
+        if (target.isReference()) {
+            byReference[i] = true;
+            AbelLocation* loc = evalLocation(arg);
+            if (!loc)
+                continue;
+            AbelValue current = loc->read();
+            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+                error(QStringLiteral("E0583"),
+                      QStringLiteral("cannot bind function parameter %1 to %2 lvalue")
+                          .arg(target.displayName(), current.type().displayName()),
+                      arg.span);
+                continue;
+            }
+            locations[i] = loc;
+        } else {
+            values[i] = convertOrError(evalExpr(arg), target, arg.span);
+        }
+    }
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
+
+    const LambdaExprNode& lambda = *function->lambda;
+    m_ctx->pushFrame(true);
+    for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
+        m_ctx->defineValueVariable(it.key(), it.value(), true, lambda.span);
+    for (auto it = function->refCaptures.constBegin(); it != function->refCaptures.constEnd(); ++it)
+        m_ctx->defineVariable(it.key(), it.value(), function->refConstness.value(it.key(), false), true, lambda.span);
+    for (size_t i = 0; i < argc; ++i) {
         const QString& name = lambda.paramNames[static_cast<qsizetype>(i)];
         if (byReference[i])
             m_ctx->defineVariable(name, locations[i], false, true, lambda.span);
@@ -721,6 +909,8 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
         return evalUnary(*e);
     if (auto* e = dynamic_cast<const BinaryExprNode*>(&expr))
         return evalBinary(*e);
+    if (auto* e = dynamic_cast<const CastExprNode*>(&expr))
+        return evalCast(*e);
     if (auto* e = dynamic_cast<const AssignExprNode*>(&expr))
         return evalAssignment(*e);
     if (auto* e = dynamic_cast<const CallExprNode*>(&expr))
@@ -849,6 +1039,9 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
 
 AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
 {
+    if (expr.op == QStringLiteral("|>"))
+        return evalPipe(expr);
+
     if (expr.op == QStringLiteral("&&") || expr.op == QStringLiteral("||")) {
         bool lhs = false;
         if (!requireBool(evalExpr(*expr.lhs), expr.lhs->span, lhs))
@@ -968,6 +1161,80 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
     }
 
     error(QStringLiteral("E0520"), QStringLiteral("operator '%1' is not implemented").arg(op), expr.span);
+    return AbelValue::makeUnknown();
+}
+
+AbelValue Interpreter::evalCast(const CastExprNode& expr)
+{
+    AbelValue source = evalExpr(*expr.expr);
+    if (source.type().kind != TypeKind::Any) {
+        error(QStringLiteral("E0590"),
+              QStringLiteral("cast<T>() expects any source, got %1").arg(source.type().displayName()),
+              expr.expr->span);
+        return AbelValue::makeUnknown();
+    }
+
+    const AbelType target = typeFromAst(*expr.targetType);
+    const AbelValue inner = source.asAny()->value;
+    if (inner.type() != target) {
+        error(QStringLiteral("E0591"),
+              QStringLiteral("cannot cast any containing %1 to %2").arg(inner.type().displayName(), target.displayName()),
+              expr.span);
+        return AbelValue::makeUnknown();
+    }
+    return convertValue(inner, target);
+}
+
+AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
+{
+    QString targetName;
+    const std::vector<std::unique_ptr<ExprNode>>* restArgs = nullptr;
+
+    if (auto* name = dynamic_cast<NameExprNode*>(expr.rhs.get())) {
+        targetName = name->name;
+    } else if (auto* call = dynamic_cast<CallExprNode*>(expr.rhs.get())) {
+        auto* name = dynamic_cast<NameExprNode*>(call->callee.get());
+        if (!name) {
+            error(QStringLiteral("E0592"), QStringLiteral("pipe target call must use a named function"), call->callee->span);
+            return AbelValue::makeUnknown();
+        }
+        targetName = name->name;
+        restArgs = &call->args;
+    } else {
+        error(QStringLiteral("E0593"), QStringLiteral("pipe right side must be f or f(args...)"), expr.rhs->span);
+        return AbelValue::makeUnknown();
+    }
+
+    static const std::vector<std::unique_ptr<ExprNode>> emptyArgs;
+    const auto& args = restArgs ? *restArgs : emptyArgs;
+
+    if (const VariableSlot* slot = m_ctx->lookupVariable(targetName)) {
+        AbelValue callee = slot->location ? slot->location->read() : AbelValue::makeUnknown();
+        if (callee.type().kind == TypeKind::Function)
+            return callFunctionValuePipe(callee, *expr.lhs, args, expr.span);
+        error(QStringLiteral("E0594"), QStringLiteral("pipe target variable '%1' is not a function value").arg(targetName), expr.rhs->span);
+        return AbelValue::makeUnknown();
+    }
+
+    if (const FunctionDeclNode* fn = m_functions.value(targetName, nullptr))
+        return callFunctionPipeExpr(*fn, *expr.lhs, args, expr.span).value;
+
+    if (m_builtins.hasFunction(targetName)) {
+        BuiltinFunctionCall call{*m_ctx, targetName, {}, {}, expr.span};
+        call.args.reserve(args.size() + 1);
+        call.argSpans.reserve(args.size() + 1);
+        call.args.push_back(evalExpr(*expr.lhs));
+        call.argSpans.push_back(expr.lhs->span);
+        for (const auto& arg : args) {
+            call.args.push_back(evalExpr(*arg));
+            call.argSpans.push_back(arg->span);
+        }
+        if (m_ctx->hasError())
+            return AbelValue::makeUnknown();
+        return m_builtins.callFunction(std::move(call));
+    }
+
+    error(QStringLiteral("E0595"), QStringLiteral("unknown pipe target '%1'").arg(targetName), expr.rhs->span);
     return AbelValue::makeUnknown();
 }
 

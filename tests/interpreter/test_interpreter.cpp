@@ -71,6 +71,24 @@ private slots:
         QCOMPARE(result.exitCode, 10);
     }
 
+    void negativeRepeatExecutesZeroTimes()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 7;
+                repeat(-3) {
+                    x = 99;
+                }
+                return x;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 7);
+    }
+
     void callsUserFunction()
     {
         const QString src = QStringLiteral(R"(
@@ -344,6 +362,46 @@ private slots:
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 22);
+    }
+
+    void castPipeAndExtendedOperatorsWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int first(any... args) {
+                return cast<int>(args[0]);
+            }
+
+            fn int main() {
+                func int(int, int) add = lambda [] int(int a, int b) {
+                    return a + b;
+                };
+                int piped = 4 |> add(5);
+                str roundtrip = "az" |> str_to_chars |> chars_to_str;
+                int x = first(7);
+                if (roundtrip == "az") {
+                    return (2 ** 3) + (-5 %% 3) + (x <? 10) + (piped >? 4);
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 25);
+    }
+
+    void badAnyCastReportsRuntimeError()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                any x = "bad";
+                return cast<int>(x);
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 1);
     }
 
     void anyVariadicUserFunctionPacksArgs()
