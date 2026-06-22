@@ -1,0 +1,58 @@
+Abel Proprietary License
+
+Copyright (c) 2026 tnuxvs5t.
+All Rights Reserved.
+
+1. Ownership
+
+Abel, including without limitation all source code, object code, build files,
+documentation, examples, tests, designs, names, interfaces, APIs, protocols,
+resource formats, and related materials in this repository, is proprietary
+material owned by the copyright holder.
+
+2. No license grant
+
+No license, permission, or right is granted to any person or entity to use,
+copy, reproduce, modify, merge, publish, distribute, sublicense, sell, lease,
+host, deploy, execute as a service, create derivative works from, or otherwise
+exploit Abel or any portion of this repository, except with prior express
+written permission from the copyright holder.
+
+3. Public visibility does not waive rights
+
+The public availability of this repository is for viewing only and does not
+make Abel open source, free software, public domain, or otherwise licensed for
+use. Downloading, forking, cloning, indexing, browsing, or otherwise accessing
+this repository does not grant any rights beyond those required to view the
+repository on GitHub under GitHub's applicable terms.
+
+4. Contributions
+
+No external contributions are accepted unless separately agreed in writing.
+Any unsolicited issue, pull request, patch, suggestion, idea, or other
+submission may be rejected, removed, or ignored. No contributor obtains any
+right, license, ownership interest, or expectation of compensation by making
+such a submission.
+
+5. Restrictions
+
+Without prior express written permission, you must not:
+
+- copy, redistribute, publish, or mirror this repository or any substantial
+  part of it;
+- use Abel in any commercial, research, educational, production, hosted,
+  internal, or public project;
+- train, fine-tune, evaluate, benchmark, or otherwise develop machine-learning
+  systems on this repository or derived materials;
+- remove or alter copyright, license, attribution, or proprietary notices;
+- claim ownership, authorship, endorsement, sponsorship, or affiliation.
+
+6. No warranty
+
+Abel is provided for viewing only, "AS IS", without warranty of any kind,
+express or implied, including but not limited to warranties of merchantability,
+fitness for a particular purpose, title, and non-infringement.
+
+7. Reservation of rights
+
+All rights not expressly granted in a separate written agreement are reserved.
