@@ -99,7 +99,7 @@ int main(int argc, char** argv)
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
     parser.addPositionalArgument(QStringLiteral("command"),
-                                 QStringLiteral("Command: init | check | run | package | resources | version"));
+                                 QStringLiteral("Command: init | update | check | run | package | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
                                  QStringLiteral("Input file, resource subcommand, or entry."),
                                  QStringLiteral("[input]"));
@@ -122,6 +122,22 @@ int main(int argc, char** argv)
     }
 
     const QString command = args[0];
+    if (command == QStringLiteral("update")) {
+        if (args.size() > 2) {
+            err << "E0009: update expects: abel update [project-dir]" << Qt::endl;
+            return 2;
+        }
+        const QString projectDir = args.size() == 2 ? args[1] : QStringLiteral(".");
+        auto lock = abel::updatePackageLock(projectDir);
+        for (const auto& d : lock.diagnostics)
+            printDiagnostic(d);
+        if (!lock.ok())
+            return 1;
+        out << "wrote " << lock.lockFile << Qt::endl;
+        out << "locked " << lock.entries.size() << " package(s)" << Qt::endl;
+        return 0;
+    }
+
     if (command == QStringLiteral("init")) {
         if (args.size() > 2) {
             err << "E0008: init expects: abel init [project-dir]" << Qt::endl;

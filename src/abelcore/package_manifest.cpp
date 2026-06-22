@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
+#include <QSet>
 #include <QTextStream>
 #include <QtGlobal>
 
@@ -16,6 +17,7 @@ namespace abel {
 namespace {
 
 constexpr auto kPackageManifestFileName = "abel.package.json";
+constexpr auto kPackageLockFileName = "abel.lock.json";
 
 void addPackageError(QList<Diagnostic>& diagnostics, const QString& message, const SourceSpan& span)
 {
@@ -81,6 +83,34 @@ QString optionalString(const QJsonObject& object, const QString& key, const QStr
     return fallback;
 }
 
+QString absolutePathFrom(const QString& rootDir, const QString& path)
+{
+    QFileInfo info(path);
+    if (info.isRelative())
+        info = QFileInfo(QDir(rootDir).absoluteFilePath(path));
+    const QString canonical = info.canonicalFilePath();
+    return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
+}
+
+PackageDependency parseDependency(const QJsonObject& object,
+                                  QList<Diagnostic>& diagnostics,
+                                  const SourceSpan& span)
+{
+    PackageDependency dependency;
+    dependency.name = requiredString(object, QStringLiteral("name"), diagnostics, span);
+    dependency.kind = requiredString(object, QStringLiteral("kind"), diagnostics, span);
+    dependency.version = optionalString(object, QStringLiteral("version"), QString());
+    if (dependency.kind != QStringLiteral("path")) {
+        addPackageError(diagnostics,
+                        QStringLiteral("dependency '%1' kind '%2' is not supported yet; only 'path' is supported")
+                            .arg(dependency.name, dependency.kind),
+                        span);
+        return dependency;
+    }
+    dependency.path = requiredString(object, QStringLiteral("path"), diagnostics, span);
+    return dependency;
+}
+
 QStringList parseSymbols(const QJsonObject& object,
                          const QString& backendId,
                          QList<Diagnostic>& diagnostics,
@@ -140,6 +170,99 @@ ResourceNode parseBackendArtifact(const QJsonObject& object,
     return node;
 }
 
+void resolvePackageDependencies(const PackageManifest& package,
+                                PackageLockResult& result,
+                                QSet<QString>& seen,
+                                QSet<QString>& resolving)
+{
+    for (const PackageDependency& dependency : package.dependencies) {
+        SourceSpan span;
+        span.file = package.filePath;
+        if (dependency.kind != QStringLiteral("path")) {
+            addPackageError(result.diagnostics,
+                            QStringLiteral("dependency '%1' kind '%2' is not supported yet")
+                                .arg(dependency.name, dependency.kind),
+                            span);
+            continue;
+        }
+
+        const QString resolvedPath = absolutePathFrom(package.rootDir, dependency.path);
+        const QFileInfo depInfo(resolvedPath);
+        if (!depInfo.isDir() || !isPackageDirectory(resolvedPath)) {
+            addPackageError(result.diagnostics,
+                            QStringLiteral("path dependency '%1' does not point to an Abel package: %2")
+                                .arg(dependency.name, dependency.path),
+                            span);
+            continue;
+        }
+
+        const QString key = absolutePathFrom(QString(), resolvedPath);
+        if (resolving.contains(key)) {
+            addPackageError(result.diagnostics,
+                            QStringLiteral("circular path dependency involving '%1' at %2")
+                                .arg(dependency.name, resolvedPath),
+                            span);
+            continue;
+        }
+        if (seen.contains(key))
+            continue;
+
+        auto parsed = packageManifestFromDirectory(resolvedPath);
+        result.diagnostics.append(parsed.diagnostics);
+        if (!parsed.ok())
+            continue;
+        if (!dependency.name.isEmpty() && parsed.package.name != dependency.name) {
+            addPackageError(result.diagnostics,
+                            QStringLiteral("path dependency name mismatch: manifest asks for '%1' but package is '%2'")
+                                .arg(dependency.name, parsed.package.name),
+                            span);
+            continue;
+        }
+
+        PackageLockEntry entry;
+        entry.name = parsed.package.name;
+        entry.version = parsed.package.version;
+        entry.kind = dependency.kind;
+        entry.source = dependency.path;
+        entry.resolvedPath = key;
+        result.entries.push_back(entry);
+
+        seen.insert(key);
+        resolving.insert(key);
+        resolvePackageDependencies(parsed.package, result, seen, resolving);
+        resolving.remove(key);
+    }
+}
+
+QJsonObject lockEntryToJson(const PackageLockEntry& entry)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("name"), entry.name);
+    object.insert(QStringLiteral("version"), entry.version);
+    object.insert(QStringLiteral("kind"), entry.kind);
+    object.insert(QStringLiteral("source"), entry.source);
+    object.insert(QStringLiteral("resolvedPath"), entry.resolvedPath);
+    return object;
+}
+
+QJsonDocument packageLockToJson(const PackageLockResult& lock)
+{
+    QJsonObject root;
+    root.insert(QStringLiteral("formatVersion"), 1);
+
+    QJsonObject rootPackage;
+    rootPackage.insert(QStringLiteral("name"), lock.rootName);
+    rootPackage.insert(QStringLiteral("version"), lock.rootVersion);
+    rootPackage.insert(QStringLiteral("path"), lock.rootDir);
+    root.insert(QStringLiteral("root"), rootPackage);
+
+    QJsonArray packages;
+    for (const PackageLockEntry& entry : lock.entries)
+        packages.push_back(lockEntryToJson(entry));
+    root.insert(QStringLiteral("packages"), packages);
+    return QJsonDocument(root);
+}
+
 } // namespace
 
 QString PackageManifest::entryFilePath() const
@@ -153,6 +276,11 @@ QString PackageManifest::entryFilePath() const
 QString packageManifestFileName()
 {
     return QString::fromLatin1(kPackageManifestFileName);
+}
+
+QString packageLockFileName()
+{
+    return QString::fromLatin1(kPackageLockFileName);
 }
 
 bool isPackageDirectory(const QString& path)
@@ -229,6 +357,48 @@ PackageInitResult initPackageProject(const PackageInitOptions& options)
     return result;
 }
 
+PackageLockResult resolvePackageLock(const QString& dir)
+{
+    PackageLockResult result;
+    auto parsed = packageManifestFromDirectory(dir);
+    result.diagnostics.append(parsed.diagnostics);
+    if (!parsed.ok())
+        return result;
+
+    result.rootDir = parsed.package.rootDir;
+    result.rootName = parsed.package.name;
+    result.rootVersion = parsed.package.version;
+    result.lockFile = QDir(result.rootDir).absoluteFilePath(packageLockFileName());
+
+    QSet<QString> seen;
+    QSet<QString> resolving;
+    resolving.insert(absolutePathFrom(QString(), result.rootDir));
+    resolvePackageDependencies(parsed.package, result, seen, resolving);
+    return result;
+}
+
+PackageLockResult updatePackageLock(const QString& dir)
+{
+    PackageLockResult result = resolvePackageLock(dir);
+    if (!result.ok())
+        return result;
+
+    QFile file(result.lockFile);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        SourceSpan span;
+        span.file = result.lockFile;
+        addPackageError(result.diagnostics, QStringLiteral("cannot write lockfile '%1'").arg(result.lockFile), span);
+        return result;
+    }
+    const QByteArray bytes = packageLockToJson(result).toJson(QJsonDocument::Indented);
+    if (file.write(bytes) != bytes.size()) {
+        SourceSpan span;
+        span.file = result.lockFile;
+        addPackageError(result.diagnostics, QStringLiteral("failed to write lockfile '%1'").arg(result.lockFile), span);
+    }
+    return result;
+}
+
 PackageManifestParseResult packageManifestFromJson(const QJsonObject& object,
                                                    const QString& rootDir,
                                                    const SourceSpan& span)
@@ -260,6 +430,21 @@ PackageManifestParseResult packageManifestFromJson(const QJsonObject& object,
             addPackageError(result.diagnostics,
                             QStringLiteral("package entry '%1' does not exist").arg(result.package.entry),
                             span);
+    }
+
+    const QJsonValue dependencies = object.value(QStringLiteral("dependencies"));
+    if (!dependencies.isUndefined()) {
+        if (!dependencies.isArray()) {
+            addPackageError(result.diagnostics, QStringLiteral("package manifest field 'dependencies' must be an array"), span);
+        } else {
+            for (const QJsonValue& dependency : dependencies.toArray()) {
+                if (!dependency.isObject()) {
+                    addPackageError(result.diagnostics, QStringLiteral("dependency must be an object"), span);
+                    continue;
+                }
+                result.package.dependencies.push_back(parseDependency(dependency.toObject(), result.diagnostics, span));
+            }
+        }
     }
 
     return result;

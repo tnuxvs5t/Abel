@@ -9,6 +9,13 @@
 
 namespace abel {
 
+struct PackageDependency {
+    QString name;
+    QString kind;
+    QString path;
+    QString version;
+};
+
 struct PackageManifest {
     QString name;
     QString version;
@@ -16,6 +23,7 @@ struct PackageManifest {
     QString rootDir;
     QString filePath;
     QList<ResourceNode> backendArtifacts;
+    QList<PackageDependency> dependencies;
 
     QString entryFilePath() const;
 };
@@ -41,10 +49,32 @@ struct PackageInitResult {
     bool ok() const { return diagnostics.isEmpty(); }
 };
 
+struct PackageLockEntry {
+    QString name;
+    QString version;
+    QString kind;
+    QString source;
+    QString resolvedPath;
+};
+
+struct PackageLockResult {
+    QString rootDir;
+    QString rootName;
+    QString rootVersion;
+    QString lockFile;
+    QList<PackageLockEntry> entries;
+    QList<Diagnostic> diagnostics;
+
+    bool ok() const { return diagnostics.isEmpty(); }
+};
+
 QString packageManifestFileName();
+QString packageLockFileName();
 bool isPackageDirectory(const QString& path);
 
 PackageInitResult initPackageProject(const PackageInitOptions& options);
+PackageLockResult resolvePackageLock(const QString& dir);
+PackageLockResult updatePackageLock(const QString& dir);
 PackageManifestParseResult packageManifestFromJson(const QJsonObject& object,
                                                    const QString& rootDir = {},
                                                    const SourceSpan& span = {});
