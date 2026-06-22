@@ -2,9 +2,9 @@
 
 #include "abelcore/backend_interface.h"
 
+#include <QChar>
 #include <QList>
 
-#include <algorithm>
 #include <functional>
 #include <tuple>
 #include <type_traits>
@@ -24,7 +24,7 @@ public:
         AbelBackendFunction out;
         out.symbol = symbol;
         out.returnType = nativeType<typename Traits::Return>();
-        describeParams<typename Traits::ArgTuple>(out.params);
+        describeParams<typename Traits::AbelArgTuple>(out.params);
         return out;
     }
 
@@ -33,19 +33,72 @@ public:
     {
         using Traits = FunctionTraits<std::decay_t<Fn>>;
         return [fn = std::move(fn)](const QList<AbelValue>& args, AbelRuntimeContext& ctx) mutable {
-            if (args.size() != static_cast<qsizetype>(Traits::Arity)) {
+            if (args.size() != static_cast<qsizetype>(Traits::AbelArity)) {
                 ctx.error(QStringLiteral("E0620"),
                           QStringLiteral("backend native function expected %1 argument(s), got %2")
-                              .arg(Traits::Arity)
+                              .arg(Traits::AbelArity)
                               .arg(args.size()),
                           {});
                 return AbelValue::makeUnknown();
             }
-            return invoke<Fn, typename Traits::Return, typename Traits::ArgTuple>(fn, args, ctx);
+            return invoke<Fn,
+                          typename Traits::Return,
+                          typename Traits::AbelArgTuple,
+                          Traits::TakesRuntimeContext>(fn, args, ctx);
         };
     }
 
 private:
+    template <typename>
+    static constexpr bool alwaysFalse = false;
+
+    template <typename T>
+    struct IsRuntimeContextArg
+        : std::bool_constant<std::is_lvalue_reference_v<T>
+                             && std::is_same_v<std::remove_cv_t<std::remove_reference_t<T>>, AbelRuntimeContext>> {};
+
+    template <typename T>
+    struct IsStdVector : std::false_type {};
+
+    template <typename T, typename Alloc>
+    struct IsStdVector<std::vector<T, Alloc>> : std::true_type {
+        using Element = T;
+    };
+
+    template <typename Tuple, typename Indexes>
+    struct TupleTakeImpl;
+
+    template <typename Tuple, size_t... I>
+    struct TupleTakeImpl<Tuple, std::index_sequence<I...>> {
+        using Type = std::tuple<std::tuple_element_t<I, Tuple>...>;
+    };
+
+    template <typename Tuple, size_t Count>
+    using TupleTake = typename TupleTakeImpl<Tuple, std::make_index_sequence<Count>>::Type;
+
+    template <typename Tuple, bool Empty = (std::tuple_size_v<Tuple> == 0)>
+    struct LastArgIsRuntimeContext : std::false_type {};
+
+    template <typename Tuple>
+    struct LastArgIsRuntimeContext<Tuple, false>
+        : IsRuntimeContextArg<std::tuple_element_t<std::tuple_size_v<Tuple> - 1, Tuple>> {};
+
+    template <typename Tuple, bool HasContext>
+    struct AbelArgTupleSelector {
+        using Type = Tuple;
+    };
+
+    template <typename Tuple>
+    struct AbelArgTupleSelector<Tuple, true> {
+        using Type = TupleTake<Tuple, std::tuple_size_v<Tuple> - 1>;
+    };
+
+    template <typename Tuple>
+    struct StripFinalRuntimeContextArg {
+        static constexpr bool HasContext = LastArgIsRuntimeContext<Tuple>::value;
+        using Type = typename AbelArgTupleSelector<Tuple, HasContext>::Type;
+    };
+
     template <typename T>
     struct FunctionTraits : FunctionTraits<decltype(&T::operator())> {};
 
@@ -53,40 +106,47 @@ private:
     struct FunctionTraits<R (*)(Args...)> {
         using Return = R;
         using ArgTuple = std::tuple<Args...>;
+        using AbelArgTuple = typename StripFinalRuntimeContextArg<ArgTuple>::Type;
         static constexpr size_t Arity = sizeof...(Args);
+        static constexpr size_t AbelArity = std::tuple_size_v<AbelArgTuple>;
+        static constexpr bool TakesRuntimeContext = StripFinalRuntimeContextArg<ArgTuple>::HasContext;
     };
 
     template <typename R, typename... Args>
     struct FunctionTraits<std::function<R(Args...)>> {
         using Return = R;
         using ArgTuple = std::tuple<Args...>;
+        using AbelArgTuple = typename StripFinalRuntimeContextArg<ArgTuple>::Type;
         static constexpr size_t Arity = sizeof...(Args);
+        static constexpr size_t AbelArity = std::tuple_size_v<AbelArgTuple>;
+        static constexpr bool TakesRuntimeContext = StripFinalRuntimeContextArg<ArgTuple>::HasContext;
     };
 
     template <typename C, typename R, typename... Args>
     struct FunctionTraits<R (C::*)(Args...) const> {
         using Return = R;
         using ArgTuple = std::tuple<Args...>;
+        using AbelArgTuple = typename StripFinalRuntimeContextArg<ArgTuple>::Type;
         static constexpr size_t Arity = sizeof...(Args);
+        static constexpr size_t AbelArity = std::tuple_size_v<AbelArgTuple>;
+        static constexpr bool TakesRuntimeContext = StripFinalRuntimeContextArg<ArgTuple>::HasContext;
     };
 
     template <typename C, typename R, typename... Args>
     struct FunctionTraits<R (C::*)(Args...)> {
         using Return = R;
         using ArgTuple = std::tuple<Args...>;
+        using AbelArgTuple = typename StripFinalRuntimeContextArg<ArgTuple>::Type;
         static constexpr size_t Arity = sizeof...(Args);
+        static constexpr size_t AbelArity = std::tuple_size_v<AbelArgTuple>;
+        static constexpr bool TakesRuntimeContext = StripFinalRuntimeContextArg<ArgTuple>::HasContext;
     };
 
-    template <typename>
-    static constexpr bool alwaysFalse = false;
-
     template <typename T>
-    static AbelType nativeType()
+    static AbelType nativeScalarType()
     {
         using Bare = std::remove_cvref_t<T>;
-        if constexpr (std::is_same_v<Bare, void>) {
-            return makeType(TypeKind::Void);
-        } else if constexpr (std::is_same_v<Bare, bool>) {
+        if constexpr (std::is_same_v<Bare, bool>) {
             return makeType(TypeKind::Bool);
         } else if constexpr (std::is_same_v<Bare, int>) {
             return makeType(TypeKind::I32);
@@ -94,17 +154,33 @@ private:
             return makeType(TypeKind::I64);
         } else if constexpr (std::is_same_v<Bare, double>) {
             return makeType(TypeKind::F64);
+        } else if constexpr (std::is_same_v<Bare, QChar> || std::is_same_v<Bare, char>) {
+            return makeType(TypeKind::Char);
         } else if constexpr (std::is_same_v<Bare, QString>) {
             return makeType(TypeKind::Str);
         } else if constexpr (std::is_same_v<Bare, AbelValue>) {
             return makeType(TypeKind::Any);
-        } else if constexpr (std::is_same_v<Bare, std::vector<int>>) {
-            AbelType vectorType = makeVectorType(makeType(TypeKind::I32));
+        } else {
+            static_assert(alwaysFalse<T>, "unsupported backend scalar native type");
+        }
+    }
+
+    template <typename T>
+    static AbelType nativeType()
+    {
+        using Bare = std::remove_cvref_t<T>;
+        if constexpr (std::is_same_v<Bare, void>) {
+            return makeType(TypeKind::Void);
+        } else if constexpr (IsRuntimeContextArg<T>::value) {
+            static_assert(alwaysFalse<T>, "AbelRuntimeContext& is only allowed as the last C++ backend parameter");
+        } else if constexpr (IsStdVector<Bare>::value) {
+            using Element = typename IsStdVector<Bare>::Element;
+            AbelType vectorType = makeVectorType(nativeScalarType<Element>());
             if constexpr (std::is_lvalue_reference_v<T>)
                 return makeReferenceType(vectorType);
             return vectorType;
         } else {
-            static_assert(alwaysFalse<T>, "unsupported backend native type");
+            return nativeScalarType<T>();
         }
     }
 
@@ -121,8 +197,59 @@ private:
     }
 
     template <typename T>
+    static T fromAbelScalar(const AbelValue& value)
+    {
+        using Bare = std::remove_cvref_t<T>;
+        if constexpr (std::is_same_v<Bare, bool>) {
+            return value.asBool();
+        } else if constexpr (std::is_same_v<Bare, int>) {
+            return static_cast<int>(value.asInt());
+        } else if constexpr (std::is_same_v<Bare, qint64>) {
+            return value.asInt();
+        } else if constexpr (std::is_same_v<Bare, double>) {
+            return value.asDouble();
+        } else if constexpr (std::is_same_v<Bare, QChar>) {
+            return value.asChar();
+        } else if constexpr (std::is_same_v<Bare, char>) {
+            return value.asChar().toLatin1();
+        } else if constexpr (std::is_same_v<Bare, QString>) {
+            return value.asString();
+        } else if constexpr (std::is_same_v<Bare, AbelValue>) {
+            return value;
+        } else {
+            static_assert(alwaysFalse<T>, "unsupported backend scalar native type");
+        }
+    }
+
+    template <typename T>
+    static AbelValue toAbelScalar(T&& value)
+    {
+        using Bare = std::remove_cvref_t<T>;
+        if constexpr (std::is_same_v<Bare, AbelValue>) {
+            return std::forward<T>(value);
+        } else if constexpr (std::is_same_v<Bare, bool>) {
+            return AbelValue::makeBool(value);
+        } else if constexpr (std::is_same_v<Bare, int>) {
+            return AbelValue::makeInt(value, TypeKind::I32);
+        } else if constexpr (std::is_same_v<Bare, qint64>) {
+            return AbelValue::makeInt(value, TypeKind::I64);
+        } else if constexpr (std::is_same_v<Bare, double>) {
+            return AbelValue::makeDouble(value);
+        } else if constexpr (std::is_same_v<Bare, QChar>) {
+            return AbelValue::makeChar(value);
+        } else if constexpr (std::is_same_v<Bare, char>) {
+            return AbelValue::makeChar(QChar::fromLatin1(value));
+        } else if constexpr (std::is_same_v<Bare, QString>) {
+            return AbelValue::makeString(value);
+        } else {
+            static_assert(alwaysFalse<T>, "unsupported backend scalar return type");
+        }
+    }
+
+    template <typename T>
     struct NativeArg {
         using Bare = std::remove_cvref_t<T>;
+        using VectorStorage = std::conditional_t<IsStdVector<Bare>::value, Bare, std::vector<int>>;
 
         explicit NativeArg(const AbelValue& value, AbelRuntimeContext& ctx, int index)
         {
@@ -150,6 +277,18 @@ private:
                     return;
                 }
                 doubleValue = value.asDouble();
+            } else if constexpr (std::is_same_v<Bare, QChar>) {
+                if (value.type().kind != TypeKind::Char) {
+                    ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects char").arg(index), {});
+                    return;
+                }
+                charValue = value.asChar();
+            } else if constexpr (std::is_same_v<Bare, char>) {
+                if (value.type().kind != TypeKind::Char) {
+                    ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects char").arg(index), {});
+                    return;
+                }
+                char8Value = value.asChar().toLatin1();
             } else if constexpr (std::is_same_v<Bare, QString>) {
                 if (value.type().kind != TypeKind::Str) {
                     ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects str").arg(index), {});
@@ -158,15 +297,24 @@ private:
                 stringValue = value.asString();
             } else if constexpr (std::is_same_v<Bare, AbelValue>) {
                 valueValue = value;
-            } else if constexpr (std::is_same_v<Bare, std::vector<int>>) {
-                if (value.type().kind != TypeKind::Vector || !value.type().pointee || value.type().pointee->kind != TypeKind::I32) {
-                    ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects vector<int>").arg(index), {});
+            } else if constexpr (IsStdVector<Bare>::value) {
+                using Element = typename IsStdVector<Bare>::Element;
+                const AbelType elementType = nativeScalarType<Element>();
+                if (value.type().kind != TypeKind::Vector || !value.type().pointee || *value.type().pointee != elementType) {
+                    ctx.error(QStringLiteral("E0621"),
+                              QStringLiteral("backend argument %1 expects %2")
+                                  .arg(index)
+                                  .arg(nativeType<Bare>().displayName()),
+                              {});
                     return;
                 }
-                vectorValue.reserve(value.asVector()->elements.size());
-                for (const auto& element : value.asVector()->elements)
-                    vectorValue.push_back(static_cast<int>(element.asInt()));
-                sourceVector = value.asVector();
+                auto vector = value.asVector();
+                vectorValue.reserve(vector->elements.size());
+                for (const auto& element : vector->elements)
+                    vectorValue.push_back(fromAbelScalar<Element>(element));
+                sourceVector = std::move(vector);
+            } else {
+                static_assert(alwaysFalse<T>, "unsupported backend native argument type");
             }
         }
 
@@ -180,6 +328,13 @@ private:
                 return static_cast<T>(i64Value);
             } else if constexpr (std::is_same_v<Bare, double>) {
                 return static_cast<T>(doubleValue);
+            } else if constexpr (std::is_same_v<Bare, QChar>) {
+                if constexpr (std::is_lvalue_reference_v<T>)
+                    return static_cast<T>(charValue);
+                else
+                    return charValue;
+            } else if constexpr (std::is_same_v<Bare, char>) {
+                return static_cast<T>(char8Value);
             } else if constexpr (std::is_same_v<Bare, QString>) {
                 if constexpr (std::is_lvalue_reference_v<T>)
                     return static_cast<T>(stringValue);
@@ -190,20 +345,27 @@ private:
                     return static_cast<T>(valueValue);
                 else
                     return valueValue;
-            } else if constexpr (std::is_same_v<Bare, std::vector<int>>) {
+            } else if constexpr (IsStdVector<Bare>::value) {
                 return static_cast<T>(vectorValue);
+            } else {
+                static_assert(alwaysFalse<T>, "unsupported backend native argument type");
             }
         }
 
         void commit()
         {
-            if constexpr (std::is_same_v<Bare, std::vector<int>> && !std::is_const_v<std::remove_reference_t<T>>) {
+            if constexpr (IsStdVector<Bare>::value
+                          && std::is_lvalue_reference_v<T>
+                          && !std::is_const_v<std::remove_reference_t<T>>) {
+                using Element = typename IsStdVector<Bare>::Element;
                 if (!sourceVector)
                     return;
                 sourceVector->elements.clear();
                 sourceVector->elements.reserve(vectorValue.size());
-                for (int value : vectorValue)
-                    sourceVector->elements.push_back(AbelValue::makeInt(value, TypeKind::I32));
+                for (size_t i = 0; i < vectorValue.size(); ++i) {
+                    Element element = vectorValue[i];
+                    sourceVector->elements.push_back(toAbelScalar(element));
+                }
             }
         }
 
@@ -211,9 +373,11 @@ private:
         int intValue = 0;
         qint64 i64Value = 0;
         double doubleValue = 0.0;
+        QChar charValue;
+        char char8Value = '\0';
         QString stringValue;
         AbelValue valueValue = AbelValue::makeUnknown();
-        std::vector<int> vectorValue;
+        VectorStorage vectorValue;
         AbelValue::VectorPtr sourceVector;
     };
 
@@ -221,44 +385,63 @@ private:
     static AbelValue toAbelValue(R&& value)
     {
         using Bare = std::remove_cvref_t<R>;
-        if constexpr (std::is_same_v<Bare, AbelValue>) {
-            return std::forward<R>(value);
-        } else if constexpr (std::is_same_v<Bare, bool>) {
-            return AbelValue::makeBool(value);
-        } else if constexpr (std::is_same_v<Bare, int>) {
-            return AbelValue::makeInt(value, TypeKind::I32);
-        } else if constexpr (std::is_same_v<Bare, qint64>) {
-            return AbelValue::makeInt(value, TypeKind::I64);
-        } else if constexpr (std::is_same_v<Bare, double>) {
-            return AbelValue::makeDouble(value);
-        } else if constexpr (std::is_same_v<Bare, QString>) {
-            return AbelValue::makeString(value);
+        if constexpr (IsStdVector<Bare>::value) {
+            using Element = typename IsStdVector<Bare>::Element;
+            std::vector<AbelValue> elements;
+            elements.reserve(value.size());
+            for (size_t i = 0; i < value.size(); ++i) {
+                Element element = value[i];
+                elements.push_back(toAbelScalar(element));
+            }
+            return AbelValue::makeVector(nativeScalarType<Element>(), std::move(elements));
         } else {
-            static_assert(alwaysFalse<R>, "unsupported backend return type");
+            return toAbelScalar(std::forward<R>(value));
         }
     }
 
-    template <typename Fn, typename R, typename Tuple, size_t... I>
-    static AbelValue invokeImpl(Fn& fn, const QList<AbelValue>& args, AbelRuntimeContext& ctx, std::index_sequence<I...>)
+    template <typename Fn, typename R, typename AbelTuple, bool TakesRuntimeContext, size_t... I>
+    static AbelValue invokeImpl(Fn& fn,
+                                const QList<AbelValue>& args,
+                                AbelRuntimeContext& ctx,
+                                std::index_sequence<I...>)
     {
-        std::tuple<NativeArg<std::tuple_element_t<I, Tuple>>...> native{NativeArg<std::tuple_element_t<I, Tuple>>(args[static_cast<qsizetype>(I)], ctx, static_cast<int>(I))...};
+        std::tuple<NativeArg<std::tuple_element_t<I, AbelTuple>>...> native{
+            NativeArg<std::tuple_element_t<I, AbelTuple>>(args[static_cast<qsizetype>(I)], ctx, static_cast<int>(I))...
+        };
         if (ctx.hasError())
             return AbelValue::makeUnknown();
+
         if constexpr (std::is_void_v<R>) {
-            std::invoke(fn, std::get<I>(native).get()...);
+            if constexpr (TakesRuntimeContext)
+                std::invoke(fn, std::get<I>(native).get()..., ctx);
+            else
+                std::invoke(fn, std::get<I>(native).get()...);
             (std::get<I>(native).commit(), ...);
+            if (ctx.hasError())
+                return AbelValue::makeUnknown();
             return AbelValue::makeVoid();
         } else {
-            auto result = std::invoke(fn, std::get<I>(native).get()...);
+            auto result = [&]() {
+                if constexpr (TakesRuntimeContext)
+                    return std::invoke(fn, std::get<I>(native).get()..., ctx);
+                else
+                    return std::invoke(fn, std::get<I>(native).get()...);
+            }();
             (std::get<I>(native).commit(), ...);
+            if (ctx.hasError())
+                return AbelValue::makeUnknown();
             return toAbelValue(std::move(result));
         }
     }
 
-    template <typename Fn, typename R, typename Tuple>
+    template <typename Fn, typename R, typename AbelTuple, bool TakesRuntimeContext>
     static AbelValue invoke(Fn& fn, const QList<AbelValue>& args, AbelRuntimeContext& ctx)
     {
-        return invokeImpl<Fn, R, Tuple>(fn, args, ctx, std::make_index_sequence<std::tuple_size_v<Tuple>>{});
+        return invokeImpl<Fn, R, AbelTuple, TakesRuntimeContext>(
+            fn,
+            args,
+            ctx,
+            std::make_index_sequence<std::tuple_size_v<AbelTuple>>{});
     }
 };
 

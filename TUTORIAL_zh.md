@@ -744,7 +744,7 @@ LD_LIBRARY_PATH="$ABEL_PREFIX/lib:$LD_LIBRARY_PATH" \
 
 旧的 build-tree SDK 做法（手写 `$ABEL_ROOT/src` 和 `$ABEL_BUILD/libabelcore.so`）只作为没有安装 SDK 时的临时 fallback，不再是推荐路径。
 
-#### v0 binder 类型矩阵
+#### v1 binder 常用类型矩阵
 
 当前 `AbelBackendBinder` 可以稳定用于这些 C++ lambda 参数：
 
@@ -753,10 +753,18 @@ Abel bool          -> C++ bool
 Abel int/i32       -> C++ int
 Abel long/ll/i64   -> C++ qint64
 Abel double/f64    -> C++ double
+Abel char          -> C++ QChar 或 char
 Abel str           -> C++ QString
 Abel any           -> C++ abel::AbelValue
-Abel vector<int>   -> C++ std::vector<int>
-Abel vector<int>&  -> C++ std::vector<int>&，并在调用结束后写回 Abel vector
+Abel vector<T>     -> C++ std::vector<T>
+Abel vector<T>&    -> C++ std::vector<T>&，并在调用结束后写回 Abel vector
+AbelRuntimeContext& 可作为最后一个 C++ lambda 参数，用于自定义结构化诊断
+```
+
+其中 `vector<T>` 的 T 覆盖常用标量：
+
+```text
+bool / int / qint64 / double / QChar / char / QString / abel::AbelValue
 ```
 
 当前直接返回值建议使用：
@@ -767,18 +775,22 @@ bool
 int
 qint64
 double
+QChar
+char
 QString
 abel::AbelValue
+std::vector<bool/int/qint64/double/QChar/char/QString/AbelValue>
 ```
 
 注意：
 
 ```text
 str 对应 C++ QString。
-char/QChar 当前不在 backend binder 常用矩阵中。
-vector<int> 作为参数支持；若要返回 vector，当前建议返回 abel::AbelValue 手动构造，而不是直接返回 std::vector<int>。
-除了 std::vector<int>&，不要假设普通 T& 参数会写回 Abel。
-当前 binder lambda 不能直接接收 AbelRuntimeContext& 来报告自定义错误；需要错误信息时，先用 bool/int/status/空字符串等方式编码，或后续扩 binder。
+char 对应 C++ QChar；C++ char 走 Latin-1 映射。
+vector<T> 可以直接作为参数或返回值；vector<T>& 调用结束后写回 Abel vector。
+除了 vector<T>&，不要假设普通 T& 参数会写回 Abel。
+AbelRuntimeContext& 必须放在 lambda 最后一个参数；放在中间不是 Abel 调用签名的一部分，不支持。
+当前不支持任意 struct/class 自动拆装箱，不支持任意 pointer/reference 矩阵。
 ```
 
 例如：
@@ -912,13 +924,16 @@ bool
 int
 qint64
 double
+QChar
+char
 QString
 abel::AbelValue
-std::vector<int>
-std::vector<int>&
+std::vector<bool/int/qint64/double/QChar/char/QString/AbelValue>
+std::vector<T>&
+AbelRuntimeContext&  // 仅最后一个参数
 ```
 
-`std::vector<int>&` 会在 plugin 返回后写回 Abel 的 `vector<int>`。
+`std::vector<T>&` 会在 plugin 返回后写回 Abel 的 `vector<T>`。普通 `T&` 不承诺写回。
 
 #### 第三步：写 backend/CMakeLists.txt
 
@@ -1088,7 +1103,7 @@ LD_LIBRARY_PATH="$ABEL_PREFIX/lib:$LD_LIBRARY_PATH" \
 9. 若这是 Abel 本体新增能力，再给 resource / backend / interpreter 增加 QTest。
 ```
 
-v0 binder 当前覆盖的是核心通路需要的类型矩阵，不是完整 C++ 类型宇宙。扩类型前先看 `src/abelcore/backend_binder.h`。
+v1 binder 当前覆盖常用标量/vector/诊断通道，不是完整 C++ 类型宇宙。扩类型前先看 `src/abelcore/backend_binder.h`。
 
 ---
 

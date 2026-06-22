@@ -8,7 +8,13 @@
   "kit": "gcc_64",
   "symbols": [
     "MathSystem.fast_add",
-    "MathSystem.sort"
+    "MathSystem.sort",
+    "MathSystem.first_char",
+    "MathSystem.char_code",
+    "MathSystem.make_range",
+    "MathSystem.sum_f64",
+    "MathSystem.flip_bools",
+    "MathSystem.fail_if_negative"
   ],
   "state": "unloaded",
   "lastError": ""

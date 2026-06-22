@@ -684,7 +684,7 @@ add_library(abelcore SHARED IMPORTED GLOBAL)
 不承诺跨 Qt 版本 ABI。
 不承诺跨编译器 ABI。
 不包含 registry/semver/download。
-backend binder 类型矩阵仍有限。
+backend binder 覆盖常用 Abel 标量/vector，但不是任意 C++ 类型宇宙。
 ```
 
 当前 backend binder 稳定可用参数：
@@ -694,10 +694,12 @@ bool
 int
 qint64
 double
+QChar / char         对应 Abel char
 QString              对应 Abel str
 abel::AbelValue      对应 Abel any
-std::vector<int>
-std::vector<int>&    对应 Abel vector<int>&，调用后写回
+std::vector<bool/int/qint64/double/QChar/char/QString/AbelValue>
+std::vector<T>&      对应 Abel vector<T>&，调用后写回，T 为上述常用标量
+AbelRuntimeContext&  只能作为最后一个 C++ lambda 参数，用于结构化诊断
 ```
 
 当前直接返回值：
@@ -708,17 +710,20 @@ bool
 int
 qint64
 double
+QChar / char
 QString
 abel::AbelValue
+std::vector<bool/int/qint64/double/QChar/char/QString/AbelValue>
 ```
 
 不要假设：
 
 ```text
-QChar/char backend binder 已完成
-std::vector<int> 直接返回已完成
+任意 struct/class 自动拆装箱
+任意 pointer/reference 矩阵
 任意 T& 都会写回
-lambda 能接 AbelRuntimeContext& 报自定义错误
+AbelRuntimeContext& 可以放在非末尾参数
+跨 Qt/编译器 ABI 稳定
 ```
 
 如果用户问 `fn void some_call(str a, str b)` 是否支持：
@@ -768,6 +773,15 @@ public:
         });
         bind(QStringLiteral("MathSystem.sort"), [](std::vector<int>& xs) {
             std::sort(xs.begin(), xs.end());
+        });
+        bind(QStringLiteral("MathSystem.fail_if_negative"), [](int x, abel::AbelRuntimeContext& ctx) {
+            if (x < 0) {
+                ctx.error(QStringLiteral("E0623"),
+                          QStringLiteral("negative value rejected by backend"),
+                          {});
+                return 0;
+            }
+            return x;
         });
     }
 
