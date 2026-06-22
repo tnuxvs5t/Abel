@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 4：C/C++ 指针/引用值模型最小闭环已建立，进入 vector<T> / lvalue 扩展闭环。
+Stage 5：vector<T> 值类型与元素 lvalue 最小闭环已建立，进入 BuiltinRegistry / typechecker 闭环。
 ```
 
 ### 已完成
@@ -1976,6 +1976,11 @@ Stage 4：C/C++ 指针/引用值模型最小闭环已建立，进入 vector<T> /
 28. 实现 T& 引用变量初始化、引用赋值写回、引用参数按调用方 lvalue 绑定。
 29. 实现 T*、`&x`、`*p`、`nullptr`、指针与 nullptr/指针相等比较。
 30. 增加 pointer/reference interpreter tests：引用写回、指针解引用写回、引用参数写回、nullptr 比较、拒绝未初始化引用与 prvalue 引用绑定。
+31. 实现 vector<T> 运行时类型和值表示，当前覆盖已支持元素类型，重点验证 vector<int>。
+32. 实现 vector initializer list、vector 值复制、index 读写 lvalue。
+33. 实现 vector 方法最小分发：len/empty/push/pop/front/back。
+34. 实现 vector<T>& 参数按调用方 lvalue 绑定，函数内修改原 vector。
+35. 增加 vector interpreter tests：索引写回、方法、赋值复制、引用参数写回。
 ```
 
 ### 最近验证
@@ -2017,6 +2022,13 @@ Stage 4：C/C++ 指针/引用值模型最小闭环已建立，进入 vector<T> /
 - Stage 4 CLI run smoke 通过：
   /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
   输出 exit=0。
+- Stage 5 构建通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
+- Stage 5 在 4GB 虚拟内存上限下测试通过：
+  /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+- Stage 5 CLI run smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
+  输出 exit=0。
 ```
 
 ### 未完成
@@ -2025,19 +2037,20 @@ Stage 4：C/C++ 指针/引用值模型最小闭环已建立，进入 vector<T> /
 1. 尚无独立 typechecker；Stage 3 仅在解释器内做最小运行时类型检查。
 2. 尚无 backend plugin 示例。
 3. parser 仍是最小闭环，尚未覆盖 struct/lambda/for/range-for。
-4. interpreter 尚未实现 vector/struct/lambda/backend/any/BuiltinRegistry。
+4. interpreter 尚未实现 struct/lambda/backend/any/BuiltinRegistry。
 5. const 指针、const 引用的完整静态语义尚未实现；当前只保留基础 const 变量写保护。
+6. vector 方法仍是 interpreter 内硬编码，尚未迁移到 BuiltinRegistry。
 ```
 
 ### 下一步
 
 ```text
-Stage 5：
-1. 实现 vector<T> 值类型运行时表示，先覆盖 vector<int>。
-2. 实现 initializer list、index lvalue、push/len/back/front 的最小方法分发。
-3. 实现 vector<T>& 参数与 index 返回 lvalue，验证 vector 元素写回。
-4. 增加 vector interpreter tests 与 smoke example。
-5. 继续为 Stage 3/4/5 已支持语义拆出独立 typechecker。
+Stage 6：
+1. 设计 BuiltinRegistry 最小接口，先覆盖 vector methods 与普通 builtin function/method 描述。
+2. 将 vector.len/empty/push/pop/front/back 的查找与运行时回调迁入 registry。
+3. 为 build_string/print/println/any... 预留签名结构，但不要一口气实现全部。
+4. 继续为 Stage 3/4/5 已支持语义拆出独立 typechecker。
+5. 增加 registry 单测，确保新增内建能力不散落在 parser/interpreter。
 6. build + ctest + commit。
 ```
 
@@ -2059,7 +2072,8 @@ ca49a01 docs: replace Abel design with agent manual
 18d97c6 build: add Qt C++23 project skeleton
 1073d7d parser: add Abel lexer and parser baseline
 de2fa03 interpreter: add Stage 3 tree runner
-待本次 Stage 4 pointer/reference 提交后追加 commit hash。
+8805f8c runtime: add pointer and reference locations
+待本次 Stage 5 vector 提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。

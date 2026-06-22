@@ -55,6 +55,14 @@ AbelValue AbelValue::makeNullptr()
     return AbelValue(makeType(TypeKind::Nullptr), static_cast<AbelLocation*>(nullptr));
 }
 
+AbelValue AbelValue::makeVector(const AbelType& elementType, std::vector<AbelValue> elements)
+{
+    auto vector = std::make_shared<AbelVectorValue>();
+    vector->elementType = elementType;
+    vector->elements = std::move(elements);
+    return AbelValue(makeVectorType(elementType), vector);
+}
+
 AbelValue AbelValue::makeUnknown()
 {
     return AbelValue(makeType(TypeKind::Unknown), std::monostate{});
@@ -92,6 +100,11 @@ AbelLocation* AbelValue::asPointer() const
     return std::get<AbelLocation*>(m_payload);
 }
 
+AbelValue::VectorPtr AbelValue::asVector() const
+{
+    return std::get<VectorPtr>(m_payload);
+}
+
 QString AbelValue::debugString() const
 {
     switch (m_type.kind) {
@@ -107,6 +120,8 @@ QString AbelValue::debugString() const
         return asPointer() ? QStringLiteral("<ptr>") : QStringLiteral("nullptr");
     case TypeKind::Reference: return QStringLiteral("<ref>");
     case TypeKind::Nullptr: return QStringLiteral("nullptr");
+    case TypeKind::Vector:
+        return QStringLiteral("<vector len=%1>").arg(asVector()->elements.size());
     case TypeKind::Unknown: return QStringLiteral("<unknown>");
     }
     return QStringLiteral("<unknown>");
@@ -128,6 +143,8 @@ AbelValue defaultValueForType(const AbelType& type)
         return AbelValue::makeUnknown();
     case TypeKind::Nullptr:
         return AbelValue::makeNullptr();
+    case TypeKind::Vector:
+        return type.pointee ? AbelValue::makeVector(*type.pointee, {}) : AbelValue::makeUnknown();
     case TypeKind::Any:
     case TypeKind::Unknown: return AbelValue::makeUnknown();
     }
@@ -136,6 +153,10 @@ AbelValue defaultValueForType(const AbelType& type)
 
 AbelValue convertValue(const AbelValue& value, const AbelType& target)
 {
+    if (target.kind == TypeKind::Vector && value.type().kind == TypeKind::Vector && target.pointee) {
+        auto copied = value.asVector();
+        return AbelValue::makeVector(*target.pointee, copied->elements);
+    }
     if (value.type().kind == target.kind)
         return value;
     if (target.kind == TypeKind::I32 && value.type().isInteger())

@@ -8,7 +8,7 @@ bool AbelType::operator==(const AbelType& other) const
 {
     if (kind != other.kind)
         return false;
-    if ((kind == TypeKind::Pointer || kind == TypeKind::Reference) && pointee && other.pointee)
+    if ((kind == TypeKind::Pointer || kind == TypeKind::Reference || kind == TypeKind::Vector) && pointee && other.pointee)
         return *pointee == *other.pointee;
     return true;
 }
@@ -61,6 +61,8 @@ QString AbelType::displayName() const
     case TypeKind::Reference:
         return pointee ? pointee->displayName() + QStringLiteral("&") : QStringLiteral("<unknown>&");
     case TypeKind::Nullptr: return QStringLiteral("nullptr");
+    case TypeKind::Vector:
+        return pointee ? QStringLiteral("vector<") + pointee->displayName() + QStringLiteral(">") : QStringLiteral("vector<?>");
     case TypeKind::Unknown: return QStringLiteral("<unknown>");
     }
     return QStringLiteral("<unknown>");
@@ -90,6 +92,14 @@ AbelType makeReferenceType(const AbelType& referred)
     return t;
 }
 
+AbelType makeVectorType(const AbelType& element)
+{
+    AbelType t;
+    t.kind = TypeKind::Vector;
+    t.pointee = std::make_shared<AbelType>(element);
+    return t;
+}
+
 AbelType typeFromName(const QString& name)
 {
     if (name == QStringLiteral("void"))
@@ -113,9 +123,7 @@ AbelType typeFromName(const QString& name)
 
 AbelType typeFromAst(const TypeNode& node)
 {
-    if (node.elementType)
-        return makeType(TypeKind::Unknown, node.displayName());
-    AbelType base = typeFromName(node.name);
+    AbelType base = node.elementType ? makeVectorType(typeFromAst(*node.elementType)) : typeFromName(node.name);
     for (int i = 0; i < node.pointerDepth; ++i)
         base = makePointerType(base);
     if (node.isReference)
@@ -132,7 +140,10 @@ bool canAssignValue(const AbelType& target, const AbelType& source)
     if (target.kind == TypeKind::Any)
         return true;
     if (target.kind == source.kind)
-        return target.kind != TypeKind::Pointer || !target.pointee || !source.pointee || *target.pointee == *source.pointee;
+        return (target.kind != TypeKind::Pointer && target.kind != TypeKind::Vector)
+            || !target.pointee
+            || !source.pointee
+            || *target.pointee == *source.pointee;
     if (target.isInteger() && source.isInteger())
         return true;
     if (target.kind == TypeKind::F64 && source.isNumeric())

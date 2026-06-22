@@ -40,6 +40,8 @@ struct AbelStorage {
 
 struct AbelLocation {
     AbelStorage* storage = nullptr;
+    AbelVectorValue* vector = nullptr;
+    size_t index = 0;
 
     AbelValue read() const;
     void write(const AbelValue& value);
@@ -53,6 +55,7 @@ public:
     void popFrame();
 
     AbelLocation* createStorage(const AbelValue& value);
+    AbelLocation* createVectorElementLocation(AbelVectorValue* vector, size_t index);
     bool defineVariable(const QString& name, AbelLocation* location, bool isConst, bool isReference, const SourceSpan& span);
     bool defineValueVariable(const QString& name, const AbelValue& value, bool isConst, const SourceSpan& span);
     VariableSlot* lookupVariable(const QString& name);

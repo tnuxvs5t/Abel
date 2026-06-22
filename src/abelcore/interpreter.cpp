@@ -290,7 +290,21 @@ ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
         m_ctx->defineVariable(stmt.name, loc, stmt.isConst || stmt.type->isConst, true, stmt.span);
         return ExecResult::normal();
     }
-    AbelValue value = stmt.init ? convertOrError(evalExpr(*stmt.init), type, stmt.span) : defaultValueForType(type);
+    AbelValue value;
+    if (stmt.init && dynamic_cast<InitListExprNode*>(stmt.init.get())) {
+        if (type.kind != TypeKind::Vector || !type.pointee) {
+            error(QStringLiteral("E0544"), QStringLiteral("initializer list requires a vector target in the current interpreter"), stmt.span);
+            return ExecResult::normal();
+        }
+        auto* init = dynamic_cast<InitListExprNode*>(stmt.init.get());
+        std::vector<AbelValue> values;
+        values.reserve(init->values.size());
+        for (const auto& element : init->values)
+            values.push_back(convertOrError(evalExpr(*element), *type.pointee, element->span));
+        value = AbelValue::makeVector(*type.pointee, std::move(values));
+    } else {
+        value = stmt.init ? convertOrError(evalExpr(*stmt.init), type, stmt.span) : defaultValueForType(type);
+    }
     m_ctx->defineValueVariable(stmt.name, value, stmt.isConst || stmt.type->isConst, stmt.span);
     return ExecResult::normal();
 }
@@ -324,6 +338,14 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
         return evalAssignment(*e);
     if (auto* e = dynamic_cast<const CallExprNode*>(&expr))
         return evalCall(*e);
+    if (auto* e = dynamic_cast<const IndexExprNode*>(&expr)) {
+        AbelLocation* loc = evalLocation(*e);
+        return loc ? loc->read() : AbelValue::makeUnknown();
+    }
+    if (dynamic_cast<const InitListExprNode*>(&expr)) {
+        error(QStringLiteral("E0545"), QStringLiteral("initializer list needs a target type"), expr.span);
+        return AbelValue::makeUnknown();
+    }
     if (dynamic_cast<const StaticAccessExprNode*>(&expr)) {
         error(QStringLiteral("E0514"), QStringLiteral("static/backend access is parsed but not executable in Stage 3"), expr.span);
         return AbelValue::makeUnknown();
@@ -355,6 +377,22 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
             return nullptr;
         }
         return loc;
+    }
+    if (auto* e = dynamic_cast<const IndexExprNode*>(&expr)) {
+        AbelValue base = evalExpr(*e->base);
+        if (base.type().kind != TypeKind::Vector || !base.type().pointee) {
+            error(QStringLiteral("E0546"), QStringLiteral("indexing requires vector value"), e->span);
+            return nullptr;
+        }
+        qint64 idx = 0;
+        if (!requireInteger(evalExpr(*e->index), e->index->span, idx))
+            return nullptr;
+        auto vector = base.asVector();
+        if (idx < 0 || static_cast<size_t>(idx) >= vector->elements.size()) {
+            error(QStringLiteral("E0547"), QStringLiteral("vector index out of range"), e->span);
+            return nullptr;
+        }
+        return m_ctx->createVectorElementLocation(vector.get(), static_cast<size_t>(idx));
     }
     error(QStringLiteral("E0538"), QStringLiteral("expression is not an lvalue"), expr.span);
     return nullptr;
@@ -526,6 +564,9 @@ AbelValue Interpreter::evalUnary(const UnaryExprNode& expr)
 
 AbelValue Interpreter::evalCall(const CallExprNode& expr)
 {
+    if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get()))
+        return evalVectorMethod(*field, expr.args);
+
     auto* name = dynamic_cast<NameExprNode*>(expr.callee.get());
     if (!name) {
         error(QStringLiteral("E0524"), QStringLiteral("only direct function calls are executable in Stage 3"), expr.span);
@@ -537,6 +578,70 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         return AbelValue::makeUnknown();
     }
     return callFunctionExpr(*fn, expr.args, expr.span).value;
+}
+
+AbelValue Interpreter::evalVectorMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args)
+{
+    AbelLocation* baseLoc = evalLocation(*callee.base);
+    if (!baseLoc)
+        return AbelValue::makeUnknown();
+    AbelValue base = baseLoc->read();
+    if (base.type().kind != TypeKind::Vector || !base.type().pointee) {
+        error(QStringLiteral("E0548"), QStringLiteral("method '%1' requires vector receiver").arg(callee.field), callee.span);
+        return AbelValue::makeUnknown();
+    }
+    auto vector = base.asVector();
+    const AbelType& elementType = *base.type().pointee;
+
+    if (callee.field == QStringLiteral("len")) {
+        if (!args.empty()) {
+            error(QStringLiteral("E0549"), QStringLiteral("vector.len expects no arguments"), callee.span);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeInt(static_cast<qint64>(vector->elements.size()), TypeKind::I32);
+    }
+    if (callee.field == QStringLiteral("empty")) {
+        if (!args.empty()) {
+            error(QStringLiteral("E0550"), QStringLiteral("vector.empty expects no arguments"), callee.span);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeBool(vector->elements.empty());
+    }
+    if (callee.field == QStringLiteral("push")) {
+        if (args.size() != 1) {
+            error(QStringLiteral("E0551"), QStringLiteral("vector.push expects one argument"), callee.span);
+            return AbelValue::makeUnknown();
+        }
+        vector->elements.push_back(convertOrError(evalExpr(*args[0]), elementType, args[0]->span));
+        return AbelValue::makeVoid();
+    }
+    if (callee.field == QStringLiteral("pop")) {
+        if (!args.empty()) {
+            error(QStringLiteral("E0552"), QStringLiteral("vector.pop expects no arguments"), callee.span);
+            return AbelValue::makeUnknown();
+        }
+        if (vector->elements.empty()) {
+            error(QStringLiteral("E0553"), QStringLiteral("cannot pop empty vector"), callee.span);
+            return AbelValue::makeUnknown();
+        }
+        AbelValue value = vector->elements.back();
+        vector->elements.pop_back();
+        return value;
+    }
+    if (callee.field == QStringLiteral("front") || callee.field == QStringLiteral("back")) {
+        if (!args.empty()) {
+            error(QStringLiteral("E0554"), QStringLiteral("vector.%1 expects no arguments").arg(callee.field), callee.span);
+            return AbelValue::makeUnknown();
+        }
+        if (vector->elements.empty()) {
+            error(QStringLiteral("E0555"), QStringLiteral("cannot read %1 of empty vector").arg(callee.field), callee.span);
+            return AbelValue::makeUnknown();
+        }
+        return callee.field == QStringLiteral("front") ? vector->elements.front() : vector->elements.back();
+    }
+
+    error(QStringLiteral("E0556"), QStringLiteral("unknown vector method '%1'").arg(callee.field), callee.span);
+    return AbelValue::makeUnknown();
 }
 
 AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)

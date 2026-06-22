@@ -32,6 +32,7 @@ private:
     AbelValue evalBinary(const BinaryExprNode& expr);
     AbelValue evalUnary(const UnaryExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);
+    AbelValue evalVectorMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     AbelValue evalAssignment(const AssignExprNode& expr);
 
     bool requireBool(const AbelValue& value, const SourceSpan& span, bool& out);

@@ -197,6 +197,77 @@ private slots:
         QVERIFY(!result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 1);
     }
+
+    void vectorIndexWritesBack()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1, 2, 3};
+                xs[1] = 10;
+                return xs[1];
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 10);
+    }
+
+    void vectorMethodsWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                xs.push(4);
+                xs.push(7);
+                return xs.len() + xs.back();
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 10);
+    }
+
+    void vectorAssignmentCopies()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<int> a = {1, 2};
+                vector<int> b = a;
+                b[0] = 9;
+                return a[0] + b[0];
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 10);
+    }
+
+    void vectorReferenceParameterWritesBack()
+    {
+        const QString src = QStringLiteral(R"(
+            fn void mutate(vector<int>& xs) {
+                xs[0] = xs[0] + 5;
+                xs.push(8);
+            }
+
+            fn int main() {
+                vector<int> xs = {1};
+                mutate(xs);
+                return xs[0] + xs[1];
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 14);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

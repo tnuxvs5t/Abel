@@ -5,15 +5,19 @@
 #include <QChar>
 #include <QString>
 
+#include <memory>
 #include <variant>
+#include <vector>
 
 namespace abel {
 
 struct AbelLocation;
+struct AbelVectorValue;
 
 class AbelValue {
 public:
-    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*>;
+    using VectorPtr = std::shared_ptr<AbelVectorValue>;
+    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*, VectorPtr>;
 
     AbelValue() = default;
 
@@ -26,6 +30,7 @@ public:
     static AbelValue makePointer(const AbelType& pointee, AbelLocation* location);
     static AbelValue makeNullPointer(const AbelType& pointee);
     static AbelValue makeNullptr();
+    static AbelValue makeVector(const AbelType& elementType, std::vector<AbelValue> elements);
     static AbelValue makeUnknown();
 
     const AbelType& type() const { return m_type; }
@@ -37,6 +42,7 @@ public:
     QString asString() const;
     QChar asChar() const;
     AbelLocation* asPointer() const;
+    VectorPtr asVector() const;
 
     QString debugString() const;
 
@@ -45,6 +51,11 @@ private:
     Payload m_payload;
 
     AbelValue(AbelType type, Payload payload);
+};
+
+struct AbelVectorValue {
+    AbelType elementType;
+    std::vector<AbelValue> elements;
 };
 
 AbelValue defaultValueForType(const AbelType& type);

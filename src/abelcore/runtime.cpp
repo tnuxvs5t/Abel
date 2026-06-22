@@ -4,12 +4,16 @@ namespace abel {
 
 AbelValue AbelLocation::read() const
 {
+    if (vector)
+        return vector->elements[index];
     return storage ? storage->value : AbelValue::makeUnknown();
 }
 
 void AbelLocation::write(const AbelValue& value)
 {
-    if (storage)
+    if (vector)
+        vector->elements[index] = value;
+    else if (storage)
         storage->value = value;
 }
 
@@ -64,6 +68,16 @@ AbelLocation* AbelRuntimeContext::createStorage(const AbelValue& value)
     m_storage.push_back(std::move(storage));
     auto location = std::make_unique<AbelLocation>();
     location->storage = raw;
+    AbelLocation* loc = location.get();
+    m_locations.push_back(std::move(location));
+    return loc;
+}
+
+AbelLocation* AbelRuntimeContext::createVectorElementLocation(AbelVectorValue* vector, size_t index)
+{
+    auto location = std::make_unique<AbelLocation>();
+    location->vector = vector;
+    location->index = index;
     AbelLocation* loc = location.get();
     m_locations.push_back(std::move(location));
     return loc;
