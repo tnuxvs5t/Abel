@@ -37,6 +37,8 @@ struct VariableSlot {
 struct RuntimeFrame {
     QHash<QString, VariableSlot> variables;
     bool boundary = false;
+    QString symbol;
+    SourceSpan callSite;
 };
 
 struct AbelStorage {
@@ -58,7 +60,7 @@ class AbelRuntimeContext {
 public:
     AbelRuntimeContext();
 
-    void pushFrame(bool boundary = false);
+    void pushFrame(bool boundary = false, const QString& symbol = QString(), const SourceSpan& callSite = {});
     void popFrame();
 
     AbelLocation* createStorage(const AbelValue& value);
@@ -81,6 +83,24 @@ private:
     std::vector<std::unique_ptr<AbelStorage>> m_storage;
     std::vector<std::unique_ptr<AbelLocation>> m_locations;
     QList<Diagnostic> m_diagnostics;
+};
+
+class RuntimeFrameGuard {
+public:
+    RuntimeFrameGuard(AbelRuntimeContext& ctx,
+                      bool boundary = false,
+                      const QString& symbol = QString(),
+                      const SourceSpan& callSite = {});
+    ~RuntimeFrameGuard();
+
+    RuntimeFrameGuard(const RuntimeFrameGuard&) = delete;
+    RuntimeFrameGuard& operator=(const RuntimeFrameGuard&) = delete;
+
+    RuntimeFrameGuard(RuntimeFrameGuard&& other) noexcept;
+    RuntimeFrameGuard& operator=(RuntimeFrameGuard&& other) noexcept;
+
+private:
+    AbelRuntimeContext* m_ctx = nullptr;
 };
 
 } // namespace abel

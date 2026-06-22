@@ -20,6 +20,18 @@ static void printDiagnostic(const abel::Diagnostic& d)
         err << " at " << d.primary.file << ":" << d.primary.startLine << ":" << d.primary.startColumn;
     }
     err << Qt::endl;
+    if (!d.stackTrace.isEmpty()) {
+        err << "stack:" << Qt::endl;
+        for (const auto& frame : d.stackTrace) {
+            err << "  at " << frame.symbol;
+            if (!frame.callSite.file.isEmpty()) {
+                err << " (" << frame.callSite.file << ":"
+                    << frame.callSite.startLine << ":"
+                    << frame.callSite.startColumn << ")";
+            }
+            err << Qt::endl;
+        }
+    }
 }
 
 int main(int argc, char** argv)

@@ -6,6 +6,35 @@
 
 namespace abel {
 
+namespace {
+
+QString functionFrameSymbol(const FunctionDeclNode& fn)
+{
+    return QStringLiteral("fn %1").arg(fn.name);
+}
+
+QString methodFrameSymbol(const FunctionDeclNode& fn)
+{
+    return QStringLiteral("method %1").arg(fn.name);
+}
+
+QString lambdaFrameSymbol()
+{
+    return QStringLiteral("lambda");
+}
+
+QString constructorFrameSymbol(const QString& name)
+{
+    return QStringLiteral("init %1").arg(name);
+}
+
+QString backendFrameSymbol(const QString& backendId, const QString& symbol)
+{
+    return QStringLiteral("backend %1::%2").arg(backendId, symbol);
+}
+
+} // namespace
+
 InterpreterResult Interpreter::run(const ProgramNode& program)
 {
     return run(program, nullptr);
@@ -226,7 +255,7 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
-    m_ctx->pushFrame(true);
+    RuntimeFrameGuard frame(*m_ctx, true, methodFrameSymbol(fn), span);
     m_ctx->defineVariable(QStringLiteral("this"), self, fn.isConstMethod, false, span);
     auto object = selfValue.asStruct();
     for (const auto& fieldName : object->fieldOrder)
@@ -243,15 +272,19 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
         m_ctx->defineValueVariable(p.name, AbelValue::makeVector(makeType(TypeKind::Any), std::move(packed)), false, p.span);
     }
     if (m_ctx->hasError()) {
-        m_ctx->popFrame();
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
     ExecResult flow = execBlock(*fn.body);
-    m_ctx->popFrame();
+    if (m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
     const AbelType returnType = typeFromAst(*fn.returnType);
     if (flow.kind == FlowKind::Return)
         return ExecResult::returned(convertOrError(flow.value, returnType, fn.span));
+    if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
+        error(QStringLiteral("E0569"), QStringLiteral("break/continue cannot leave method '%1'").arg(fn.name), fn.span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
     if (returnType.kind == TypeKind::Void)
         return ExecResult::returned(AbelValue::makeVoid());
     error(QStringLiteral("E0569"), QStringLiteral("method '%1' ended without return").arg(fn.name), fn.span);
@@ -274,7 +307,7 @@ ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vect
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
-    m_ctx->pushFrame(true);
+    RuntimeFrameGuard frame(*m_ctx, true, functionFrameSymbol(fn), fn.span);
     for (size_t i = 0; i < args.size(); ++i) {
         const ParameterNode& p = *fn.params[i];
         const AbelType target = typeFromAst(*p.type);
@@ -282,14 +315,13 @@ ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vect
         m_ctx->defineValueVariable(p.name, converted, false, p.span);
     }
     if (m_ctx->hasError()) {
-        m_ctx->popFrame();
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
-    ExecResult flow = execBlock(*fn.body);
-    m_ctx->popFrame();
-
     const AbelType returnType = typeFromAst(*fn.returnType);
+    ExecResult flow = execBlock(*fn.body);
+    if (m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
     if (flow.kind == FlowKind::Return) {
         AbelValue converted = convertOrError(flow.value, returnType, fn.span);
         return ExecResult::returned(converted);
@@ -298,8 +330,9 @@ ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vect
         error(QStringLiteral("E0532"), QStringLiteral("break/continue cannot leave function '%1'").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
     }
-    if (returnType.kind == TypeKind::Void)
+    if (returnType.kind == TypeKind::Void) {
         return ExecResult::returned(AbelValue::makeVoid());
+    }
     error(QStringLiteral("E0509"), QStringLiteral("function '%1' ended without return").arg(fn.name), fn.span);
     return ExecResult::returned(AbelValue::makeUnknown());
 }
@@ -366,7 +399,7 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
-    m_ctx->pushFrame(true);
+    RuntimeFrameGuard frame(*m_ctx, true, functionFrameSymbol(fn), span);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         if (prepared[i].byReference)
@@ -379,12 +412,12 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
         m_ctx->defineValueVariable(p.name, AbelValue::makeVector(makeType(TypeKind::Any), std::move(packed)), false, p.span);
     }
     if (m_ctx->hasError()) {
-        m_ctx->popFrame();
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
     ExecResult flow = execBlock(*fn.body);
-    m_ctx->popFrame();
+    if (m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
 
     const AbelType returnType = typeFromAst(*fn.returnType);
     if (flow.kind == FlowKind::Return)
@@ -468,7 +501,7 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
 
-    m_ctx->pushFrame(true);
+    RuntimeFrameGuard frame(*m_ctx, true, functionFrameSymbol(fn), span);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         if (prepared[i].byReference)
@@ -481,12 +514,12 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
         m_ctx->defineValueVariable(p.name, AbelValue::makeVector(makeType(TypeKind::Any), std::move(packed)), false, p.span);
     }
     if (m_ctx->hasError()) {
-        m_ctx->popFrame();
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
     ExecResult flow = execBlock(*fn.body);
-    m_ctx->popFrame();
+    if (m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
 
     const AbelType returnType = typeFromAst(*fn.returnType);
     if (flow.kind == FlowKind::Return)
@@ -546,7 +579,7 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
         return AbelValue::makeUnknown();
 
     const LambdaExprNode& lambda = *function->lambda;
-    m_ctx->pushFrame(true);
+    RuntimeFrameGuard frame(*m_ctx, true, lambdaFrameSymbol(), span);
     for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
         m_ctx->defineValueVariable(it.key(), it.value(), true, lambda.span);
     for (auto it = function->refCaptures.constBegin(); it != function->refCaptures.constEnd(); ++it)
@@ -559,12 +592,12 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
             m_ctx->defineValueVariable(name, values[i], false, lambda.span);
     }
     if (m_ctx->hasError()) {
-        m_ctx->popFrame();
         return AbelValue::makeUnknown();
     }
 
     ExecResult flow = execBlock(*lambda.ownedBody);
-    m_ctx->popFrame();
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
 
     const AbelType& returnType = *fnValue.type().pointee;
     if (flow.kind == FlowKind::Return)
@@ -632,7 +665,7 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
         return AbelValue::makeUnknown();
 
     const LambdaExprNode& lambda = *function->lambda;
-    m_ctx->pushFrame(true);
+    RuntimeFrameGuard frame(*m_ctx, true, lambdaFrameSymbol(), span);
     for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
         m_ctx->defineValueVariable(it.key(), it.value(), true, lambda.span);
     for (auto it = function->refCaptures.constBegin(); it != function->refCaptures.constEnd(); ++it)
@@ -645,12 +678,12 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
             m_ctx->defineValueVariable(name, values[i], false, lambda.span);
     }
     if (m_ctx->hasError()) {
-        m_ctx->popFrame();
         return AbelValue::makeUnknown();
     }
 
     ExecResult flow = execBlock(*lambda.ownedBody);
-    m_ctx->popFrame();
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
 
     const AbelType& returnType = *fnValue.type().pointee;
     if (flow.kind == FlowKind::Return)
@@ -1397,6 +1430,7 @@ AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
         return AbelValue::makeUnknown();
 
     QList<Diagnostic> diagnostics;
+    RuntimeFrameGuard frame(*m_ctx, true, backendFrameSymbol(backendName->name, callee.member), span);
     AbelValue result = m_activeBackendRegistry->call({backendName->name, callee.member, std::move(values), span, std::move(locations)}, diagnostics, m_ctx);
     for (const auto& diagnostic : diagnostics)
         m_ctx->error(diagnostic.code, diagnostic.message, diagnostic.primary);
@@ -1513,7 +1547,7 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
     if (m_ctx->hasError())
         return AbelValue::makeUnknown();
 
-    m_ctx->pushFrame(true);
+    RuntimeFrameGuard frame(*m_ctx, true, constructorFrameSymbol(name), span);
     m_ctx->defineVariable(QStringLiteral("this"), self, false, false, span);
     auto structValue = self->read().asStruct();
     for (const auto& fieldName : structValue->fieldOrder)
@@ -1522,8 +1556,12 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
         const ParameterNode& p = *info.constructor->params[i];
         m_ctx->defineValueVariable(p.name, prepared[i], false, p.span);
     }
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
+
     ExecResult flow = execBlock(*info.constructor->body);
-    m_ctx->popFrame();
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
     if (flow.kind == FlowKind::Return)
         error(QStringLiteral("E0577"), QStringLiteral("constructor cannot return a value"), span);
     return m_ctx->hasError() ? AbelValue::makeUnknown() : self->read();

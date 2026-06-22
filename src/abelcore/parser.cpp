@@ -4,6 +4,23 @@
 
 namespace abel {
 
+namespace {
+
+SourceSpan mergeSpans(const SourceSpan& first, const SourceSpan& last)
+{
+    if (first.file.isEmpty())
+        return last;
+    if (last.file.isEmpty())
+        return first;
+    SourceSpan out = first;
+    out.endOffset = last.endOffset;
+    out.endLine = last.endLine;
+    out.endColumn = last.endColumn;
+    return out;
+}
+
+} // namespace
+
 ParseResult Parser::parse(const QList<Token>& tokens)
 {
     m_tokens = tokens;
@@ -17,6 +34,8 @@ ParseResult Parser::parse(const QList<Token>& tokens)
         else if (!atEnd())
             ++m_pos;
     }
+    if (!program->declarations.empty())
+        program->span = mergeSpans(program->declarations.front()->span, program->declarations.back()->span);
     return {std::move(program), m_diagnostics};
 }
 
@@ -83,10 +102,12 @@ std::unique_ptr<DeclNode> Parser::parseDeclaration()
 std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt)
 {
     auto fn = std::make_unique<FunctionDeclNode>();
+    const SourceSpan startSpan = previous().span;
     fn->exported = exported;
     fn->debt = debt;
     fn->returnType = parseType();
-    fn->name = consume(TokenKind::Identifier, QStringLiteral("expected function name")).text;
+    const Token name = consume(TokenKind::Identifier, QStringLiteral("expected function name"));
+    fn->name = name.text;
     consume(TokenKind::LParen, QStringLiteral("expected '('"));
     if (!check(TokenKind::RParen)) {
         do {
@@ -108,9 +129,11 @@ std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt
             errorAtSpan(param->span, QStringLiteral("only any... variadic parameters are supported"));
     }
     if (debt) {
-        consume(TokenKind::Semicolon, QStringLiteral("expected ';' after debt function"));
+        const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';' after debt function"));
+        fn->span = mergeSpans(startSpan, semi.span);
     } else {
         fn->body = parseBlock();
+        fn->span = mergeSpans(startSpan, fn->body->span);
     }
     return fn;
 }
@@ -118,6 +141,7 @@ std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt
 std::unique_ptr<StructDeclNode> Parser::parseStruct(bool exported)
 {
     auto s = std::make_unique<StructDeclNode>();
+    const SourceSpan startSpan = previous().span;
     s->exported = exported;
     s->name = consume(TokenKind::Identifier, QStringLiteral("expected struct name")).text;
     consume(TokenKind::LBrace, QStringLiteral("expected '{'"));
@@ -137,7 +161,8 @@ std::unique_ptr<StructDeclNode> Parser::parseStruct(bool exported)
             }
         }
     }
-    consume(TokenKind::RBrace, QStringLiteral("expected '}'"));
+    const Token close = consume(TokenKind::RBrace, QStringLiteral("expected '}'"));
+    s->span = mergeSpans(startSpan, close.span);
     return s;
 }
 
@@ -145,14 +170,17 @@ std::unique_ptr<FieldDeclNode> Parser::parseStructField()
 {
     auto field = std::make_unique<FieldDeclNode>();
     field->type = parseType();
-    field->name = consume(TokenKind::Identifier, QStringLiteral("expected field name")).text;
-    consume(TokenKind::Semicolon, QStringLiteral("expected ';' after field"));
+    const Token name = consume(TokenKind::Identifier, QStringLiteral("expected field name"));
+    field->name = name.text;
+    const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';' after field"));
+    field->span = mergeSpans(field->type->span, semi.span);
     return field;
 }
 
 std::unique_ptr<ConstructorDeclNode> Parser::parseConstructor()
 {
     auto ctor = std::make_unique<ConstructorDeclNode>();
+    const SourceSpan startSpan = previous().span;
     consume(TokenKind::LParen, QStringLiteral("expected '(' after init"));
     if (!check(TokenKind::RParen)) {
         do {
@@ -161,12 +189,14 @@ std::unique_ptr<ConstructorDeclNode> Parser::parseConstructor()
     }
     consume(TokenKind::RParen, QStringLiteral("expected ')'"));
     ctor->body = parseBlock();
+    ctor->span = mergeSpans(startSpan, ctor->body->span);
     return ctor;
 }
 
 std::unique_ptr<BackendBlockNode> Parser::parseBackend(bool exported)
 {
     auto backend = std::make_unique<BackendBlockNode>();
+    const SourceSpan startSpan = previous().span;
     backend->exported = exported;
     backend->name = consume(TokenKind::Identifier, QStringLiteral("expected backend name")).text;
     consume(TokenKind::LBrace, QStringLiteral("expected '{'"));
@@ -174,7 +204,8 @@ std::unique_ptr<BackendBlockNode> Parser::parseBackend(bool exported)
         consume(TokenKind::KwFn, QStringLiteral("expected backend function declaration"));
         backend->functions.push_back(parseFunction(false, true));
     }
-    consume(TokenKind::RBrace, QStringLiteral("expected '}'"));
+    const Token close = consume(TokenKind::RBrace, QStringLiteral("expected '}'"));
+    backend->span = mergeSpans(startSpan, close.span);
     return backend;
 }
 
@@ -184,13 +215,16 @@ std::unique_ptr<ParameterNode> Parser::parseParameter()
     p->type = parseType();
     if (match(TokenKind::Ellipsis))
         p->variadic = true;
-    p->name = consume(TokenKind::Identifier, QStringLiteral("expected parameter name")).text;
+    const Token name = consume(TokenKind::Identifier, QStringLiteral("expected parameter name"));
+    p->name = name.text;
+    p->span = mergeSpans(p->type->span, name.span);
     return p;
 }
 
 std::unique_ptr<TypeNode> Parser::parseType()
 {
     auto t = std::make_unique<TypeNode>();
+    SourceSpan startSpan = peek().span;
     t->isConst = match(TokenKind::KwConst);
     if (match(TokenKind::KwVector)) {
         consume(TokenKind::Less, QStringLiteral("expected '<' after vector"));
@@ -216,16 +250,18 @@ std::unique_ptr<TypeNode> Parser::parseType()
         ++t->pointerDepth;
     if (match(TokenKind::Amp))
         t->isReference = true;
+    t->span = mergeSpans(startSpan, previous().span);
     return t;
 }
 
 std::unique_ptr<BlockStmtNode> Parser::parseBlock()
 {
-    consume(TokenKind::LBrace, QStringLiteral("expected '{'"));
+    const Token open = consume(TokenKind::LBrace, QStringLiteral("expected '{'"));
     auto block = std::make_unique<BlockStmtNode>();
     while (!check(TokenKind::RBrace) && !atEnd())
         block->statements.push_back(parseStatement());
-    consume(TokenKind::RBrace, QStringLiteral("expected '}'"));
+    const Token close = consume(TokenKind::RBrace, QStringLiteral("expected '}'"));
+    block->span = mergeSpans(open.span, close.span);
     return block;
 }
 
@@ -237,13 +273,17 @@ std::unique_ptr<StmtNode> Parser::parseStatement()
     if (match(TokenKind::KwFor)) return parseFor();
     if (match(TokenKind::KwRepeat)) return parseRepeat();
     if (match(TokenKind::KwBreak)) {
+        const SourceSpan startSpan = previous().span;
         auto s = std::make_unique<BreakStmtNode>();
-        consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+        const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+        s->span = mergeSpans(startSpan, semi.span);
         return s;
     }
     if (match(TokenKind::KwContinue)) {
+        const SourceSpan startSpan = previous().span;
         auto s = std::make_unique<ContinueStmtNode>();
-        consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+        const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+        s->span = mergeSpans(startSpan, semi.span);
         return s;
     }
     if (check(TokenKind::LBrace)) return parseBlock();
@@ -253,6 +293,7 @@ std::unique_ptr<StmtNode> Parser::parseStatement()
 std::unique_ptr<StmtNode> Parser::parseIf()
 {
     auto ifs = std::make_unique<IfStmtNode>();
+    const SourceSpan startSpan = previous().span;
     consume(TokenKind::LParen, QStringLiteral("expected '('"));
     IfStmtNode::Branch first;
     first.condition = parseExpression();
@@ -272,21 +313,26 @@ std::unique_ptr<StmtNode> Parser::parseIf()
         branch.body = parseBlock();
         ifs->branches.push_back(std::move(branch));
     }
+    if (!ifs->branches.empty())
+        ifs->span = mergeSpans(startSpan, ifs->branches.back().body->span);
     return ifs;
 }
 
 std::unique_ptr<StmtNode> Parser::parseWhile()
 {
     auto s = std::make_unique<WhileStmtNode>();
+    const SourceSpan startSpan = previous().span;
     consume(TokenKind::LParen, QStringLiteral("expected '('"));
     s->condition = parseExpression();
     consume(TokenKind::RParen, QStringLiteral("expected ')'"));
     s->body = parseBlock();
+    s->span = mergeSpans(startSpan, s->body->span);
     return s;
 }
 
 std::unique_ptr<StmtNode> Parser::parseFor()
 {
+    const SourceSpan startSpan = previous().span;
     consume(TokenKind::LParen, QStringLiteral("expected '('"));
     if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::KwIn) {
         auto s = std::make_unique<RangeForStmtNode>();
@@ -295,6 +341,7 @@ std::unique_ptr<StmtNode> Parser::parseFor()
         s->range = parseExpression();
         consume(TokenKind::RParen, QStringLiteral("expected ')'"));
         s->body = parseBlock();
+        s->span = mergeSpans(startSpan, s->body->span);
         return s;
     }
 
@@ -309,25 +356,30 @@ std::unique_ptr<StmtNode> Parser::parseFor()
         s->step = parseExpression();
     consume(TokenKind::RParen, QStringLiteral("expected ')'"));
     s->body = parseBlock();
+    s->span = mergeSpans(startSpan, s->body->span);
     return s;
 }
 
 std::unique_ptr<StmtNode> Parser::parseRepeat()
 {
     auto s = std::make_unique<RepeatStmtNode>();
+    const SourceSpan startSpan = previous().span;
     consume(TokenKind::LParen, QStringLiteral("expected '('"));
     s->count = parseExpression();
     consume(TokenKind::RParen, QStringLiteral("expected ')'"));
     s->body = parseBlock();
+    s->span = mergeSpans(startSpan, s->body->span);
     return s;
 }
 
 std::unique_ptr<StmtNode> Parser::parseReturn()
 {
     auto s = std::make_unique<ReturnStmtNode>();
+    const SourceSpan startSpan = previous().span;
     if (!check(TokenKind::Semicolon))
         s->expr = parseExpression();
-    consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+    const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+    s->span = mergeSpans(startSpan, semi.span);
     return s;
 }
 
@@ -336,13 +388,16 @@ std::unique_ptr<StmtNode> Parser::parseForInit()
     if (looksLikeType()) {
         auto s = std::make_unique<VarDeclStmtNode>();
         s->type = parseType();
-        s->name = consume(TokenKind::Identifier, QStringLiteral("expected variable name")).text;
+        const Token name = consume(TokenKind::Identifier, QStringLiteral("expected variable name"));
+        s->name = name.text;
         if (match(TokenKind::Equal))
             s->init = parseExpression();
+        s->span = mergeSpans(s->type->span, s->init ? s->init->span : name.span);
         return s;
     }
     auto s = std::make_unique<ExprStmtNode>();
     s->expr = parseExpression();
+    s->span = s->expr->span;
     return s;
 }
 
@@ -362,15 +417,18 @@ std::unique_ptr<StmtNode> Parser::parseVarOrExprStatement()
     if (looksLikeType()) {
         auto s = std::make_unique<VarDeclStmtNode>();
         s->type = parseType();
-        s->name = consume(TokenKind::Identifier, QStringLiteral("expected variable name")).text;
+        const Token name = consume(TokenKind::Identifier, QStringLiteral("expected variable name"));
+        s->name = name.text;
         if (match(TokenKind::Equal))
             s->init = parseExpression();
-        consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+        const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+        s->span = mergeSpans(s->type->span, semi.span);
         return s;
     }
     auto s = std::make_unique<ExprStmtNode>();
     s->expr = parseExpression();
-    consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+    const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+    s->span = mergeSpans(s->expr->span, semi.span);
     return s;
 }
 
@@ -383,6 +441,7 @@ std::unique_ptr<ExprNode> Parser::parseAssignment()
         auto node = std::make_unique<AssignExprNode>();
         node->lhs = std::move(lhs);
         node->rhs = parseAssignment();
+        node->span = mergeSpans(node->lhs->span, node->rhs->span);
         return node;
     }
     return lhs;
@@ -427,6 +486,7 @@ std::unique_ptr<ExprNode> Parser::parseBinary(int minPrec)
         node->op = opText(op);
         node->lhs = std::move(lhs);
         node->rhs = std::move(rhs);
+        node->span = mergeSpans(node->lhs->span, node->rhs->span);
         lhs = std::move(node);
     }
     return lhs;
@@ -436,19 +496,23 @@ std::unique_ptr<ExprNode> Parser::parseUnary()
 {
     if (match(TokenKind::KwCast)) {
         auto node = std::make_unique<CastExprNode>();
+        const SourceSpan startSpan = previous().span;
         consume(TokenKind::Less, QStringLiteral("expected '<' after cast"));
         node->targetType = parseType();
         consume(TokenKind::Greater, QStringLiteral("expected '>' after cast target type"));
         consume(TokenKind::LParen, QStringLiteral("expected '(' after cast target type"));
         node->expr = parseExpression();
-        consume(TokenKind::RParen, QStringLiteral("expected ')' after cast argument"));
+        const Token close = consume(TokenKind::RParen, QStringLiteral("expected ')' after cast argument"));
+        node->span = mergeSpans(startSpan, close.span);
         return node;
     }
     if (match(TokenKind::Bang) || match(TokenKind::Minus) || match(TokenKind::Plus)
         || match(TokenKind::Amp) || match(TokenKind::Star)) {
         auto node = std::make_unique<UnaryExprNode>();
+        const SourceSpan startSpan = previous().span;
         node->op = previous().text;
         node->expr = parseUnary();
+        node->span = mergeSpans(startSpan, node->expr->span);
         return node;
     }
     return parsePostfix();
@@ -460,30 +524,40 @@ std::unique_ptr<ExprNode> Parser::parsePostfix()
     for (;;) {
         if (match(TokenKind::LParen)) {
             auto call = std::make_unique<CallExprNode>();
+            const SourceSpan startSpan = expr->span;
             call->callee = std::move(expr);
             if (!check(TokenKind::RParen)) {
                 do {
                     call->args.push_back(parseExpression());
                 } while (match(TokenKind::Comma));
             }
-            consume(TokenKind::RParen, QStringLiteral("expected ')'"));
+            const Token close = consume(TokenKind::RParen, QStringLiteral("expected ')'"));
+            call->span = mergeSpans(startSpan, close.span);
             expr = std::move(call);
         } else if (match(TokenKind::LBracket)) {
             auto idx = std::make_unique<IndexExprNode>();
+            const SourceSpan startSpan = expr->span;
             idx->base = std::move(expr);
             idx->index = parseExpression();
-            consume(TokenKind::RBracket, QStringLiteral("expected ']'"));
+            const Token close = consume(TokenKind::RBracket, QStringLiteral("expected ']'"));
+            idx->span = mergeSpans(startSpan, close.span);
             expr = std::move(idx);
         } else if (match(TokenKind::Dot) || match(TokenKind::Arrow)) {
             auto field = std::make_unique<FieldAccessExprNode>();
+            const SourceSpan startSpan = expr->span;
             field->pointer = previous().kind == TokenKind::Arrow;
             field->base = std::move(expr);
-            field->field = consume(TokenKind::Identifier, QStringLiteral("expected field or method name")).text;
+            const Token name = consume(TokenKind::Identifier, QStringLiteral("expected field or method name"));
+            field->field = name.text;
+            field->span = mergeSpans(startSpan, name.span);
             expr = std::move(field);
         } else if (match(TokenKind::Scope)) {
             auto access = std::make_unique<StaticAccessExprNode>();
+            const SourceSpan startSpan = expr->span;
             access->base = std::move(expr);
-            access->member = consume(TokenKind::Identifier, QStringLiteral("expected static member name")).text;
+            const Token name = consume(TokenKind::Identifier, QStringLiteral("expected static member name"));
+            access->member = name.text;
+            access->span = mergeSpans(startSpan, name.span);
             expr = std::move(access);
         } else {
             break;
@@ -502,53 +576,64 @@ std::unique_ptr<ExprNode> Parser::parsePrimary()
             : tok.kind == TokenKind::Float ? LiteralExprNode::Kind::Float
             : tok.kind == TokenKind::String ? LiteralExprNode::Kind::String
             : LiteralExprNode::Kind::Char;
+        lit->span = tok.span;
         return lit;
     }
     if (match(TokenKind::KwTrue) || match(TokenKind::KwFalse)) {
         auto lit = std::make_unique<LiteralExprNode>();
         lit->kind = LiteralExprNode::Kind::Bool;
         lit->text = previous().text;
+        lit->span = previous().span;
         return lit;
     }
     if (match(TokenKind::KwNullptr)) {
         auto lit = std::make_unique<LiteralExprNode>();
         lit->kind = LiteralExprNode::Kind::Nullptr;
+        lit->span = previous().span;
         return lit;
     }
-    if (match(TokenKind::KwThis))
-        return std::make_unique<ThisExprNode>();
+    if (match(TokenKind::KwThis)) {
+        auto self = std::make_unique<ThisExprNode>();
+        self->span = previous().span;
+        return self;
+    }
     if (check(TokenKind::KwLambda))
         return parseLambda();
     if (match(TokenKind::Identifier)) {
         auto name = std::make_unique<NameExprNode>();
         name->name = previous().text;
+        name->span = previous().span;
         return name;
     }
     if (match(TokenKind::LBrace)) {
         auto init = std::make_unique<InitListExprNode>();
+        const SourceSpan startSpan = previous().span;
         if (!check(TokenKind::RBrace)) {
             do {
                 init->values.push_back(parseExpression());
             } while (match(TokenKind::Comma));
         }
-        consume(TokenKind::RBrace, QStringLiteral("expected '}'"));
+        const Token close = consume(TokenKind::RBrace, QStringLiteral("expected '}'"));
+        init->span = mergeSpans(startSpan, close.span);
         return init;
     }
     if (match(TokenKind::LParen)) {
         auto expr = parseExpression();
-        consume(TokenKind::RParen, QStringLiteral("expected ')'"));
+        const Token close = consume(TokenKind::RParen, QStringLiteral("expected ')'"));
+        expr->span = mergeSpans(expr->span, close.span);
         return expr;
     }
     errorAt(peek(), QStringLiteral("expected expression"));
     auto dummy = std::make_unique<LiteralExprNode>();
     dummy->kind = LiteralExprNode::Kind::Int;
     dummy->text = QStringLiteral("0");
+    dummy->span = peek().span;
     return dummy;
 }
 
 std::unique_ptr<ExprNode> Parser::parseLambda()
 {
-    consume(TokenKind::KwLambda, QStringLiteral("expected lambda"));
+    const Token start = consume(TokenKind::KwLambda, QStringLiteral("expected lambda"));
     auto lambda = std::make_unique<LambdaExprNode>();
     consume(TokenKind::LBracket, QStringLiteral("expected '[' after lambda"));
     QStringList captures;
@@ -582,6 +667,7 @@ std::unique_ptr<ExprNode> Parser::parseLambda()
     }
     consume(TokenKind::RParen, QStringLiteral("expected ')' after lambda parameters"));
     lambda->ownedBody = parseBlock();
+    lambda->span = mergeSpans(start.span, lambda->ownedBody->span);
     return lambda;
 }
 

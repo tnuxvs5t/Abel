@@ -36,6 +36,24 @@ private:
         return interpreter.run(*parsed.program);
     }
 
+    static bool stackHasSymbol(const abel::Diagnostic& diagnostic, const QString& symbol)
+    {
+        for (const auto& frame : diagnostic.stackTrace) {
+            if (frame.symbol == symbol)
+                return true;
+        }
+        return false;
+    }
+
+    static int stackIndexOf(const abel::Diagnostic& diagnostic, const QString& symbol)
+    {
+        for (qsizetype i = 0; i < diagnostic.stackTrace.size(); ++i) {
+            if (diagnostic.stackTrace[i].symbol == symbol)
+                return static_cast<int>(i);
+        }
+        return -1;
+    }
+
 private slots:
     void returnsArithmetic()
     {
@@ -637,6 +655,82 @@ private slots:
         QCOMPARE(result.exitCode, 4);
     }
 
+    void runtimeErrorReportsUserCallStack()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int inner() {
+                return 1 / 0;
+            }
+
+            fn int outer() {
+                return inner();
+            }
+
+            fn int main() {
+                return outer();
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        const auto& diagnostic = result.diagnostics.front();
+        QCOMPARE(diagnostic.code, QStringLiteral("E0517"));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn inner")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn outer")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
+        QVERIFY(stackIndexOf(diagnostic, QStringLiteral("fn inner")) < stackIndexOf(diagnostic, QStringLiteral("fn outer")));
+        QVERIFY(stackIndexOf(diagnostic, QStringLiteral("fn outer")) < stackIndexOf(diagnostic, QStringLiteral("fn main")));
+        QCOMPARE(diagnostic.primary.file, QStringLiteral("<test>"));
+        QVERIFY(diagnostic.primary.startLine > 0);
+        QVERIFY(diagnostic.primary.startColumn > 0);
+        QCOMPARE(result.exitCode, 1);
+    }
+
+    void runtimeErrorReportsLambdaCallStack()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                func int() f = lambda [] int() {
+                    return 1 / 0;
+                };
+                return f();
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        const auto& diagnostic = result.diagnostics.front();
+        QCOMPARE(diagnostic.code, QStringLiteral("E0517"));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("lambda")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
+        QVERIFY(stackIndexOf(diagnostic, QStringLiteral("lambda")) < stackIndexOf(diagnostic, QStringLiteral("fn main")));
+        QCOMPARE(result.exitCode, 1);
+    }
+
+    void runtimeErrorReportsMethodCallStack()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                int x;
+
+                fn int crash() {
+                    return 1 / 0;
+                }
+            }
+
+            fn int main() {
+                Box b = Box(1);
+                return b.crash();
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        const auto& diagnostic = result.diagnostics.front();
+        QCOMPARE(diagnostic.code, QStringLiteral("E0517"));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("method crash")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
+        QVERIFY(stackIndexOf(diagnostic, QStringLiteral("method crash")) < stackIndexOf(diagnostic, QStringLiteral("fn main")));
+        QCOMPARE(result.exitCode, 1);
+    }
+
     void backendCallReportsUnboundBackend()
     {
         const QString src = QStringLiteral(R"(
@@ -650,7 +744,11 @@ private slots:
         )");
         auto result = runSource(src);
         QVERIFY(!result.diagnostics.isEmpty());
-        QCOMPARE(result.diagnostics.front().code, QStringLiteral("E0607"));
+        const auto& diagnostic = result.diagnostics.front();
+        QCOMPARE(diagnostic.code, QStringLiteral("E0607"));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("backend MathSystem::fast_add")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
+        QVERIFY(stackIndexOf(diagnostic, QStringLiteral("backend MathSystem::fast_add")) < stackIndexOf(diagnostic, QStringLiteral("fn main")));
         QCOMPARE(result.exitCode, 1);
     }
 };

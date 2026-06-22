@@ -53,10 +53,12 @@ AbelRuntimeContext::AbelRuntimeContext()
     pushFrame();
 }
 
-void AbelRuntimeContext::pushFrame(bool boundary)
+void AbelRuntimeContext::pushFrame(bool boundary, const QString& symbol, const SourceSpan& callSite)
 {
     RuntimeFrame frame;
     frame.boundary = boundary;
+    frame.symbol = symbol;
+    frame.callSite = callSite;
     m_frames.push_back(std::move(frame));
 }
 
@@ -185,7 +187,44 @@ void AbelRuntimeContext::error(const QString& code, const QString& message, cons
     d.code = code;
     d.message = message;
     d.primary = span;
+    for (auto it = m_frames.crbegin(); it != m_frames.crend(); ++it) {
+        if (it->symbol.isEmpty())
+            continue;
+        d.stackTrace.push_back(DiagnosticStackFrame{it->symbol, it->callSite});
+    }
     m_diagnostics.push_back(d);
+}
+
+RuntimeFrameGuard::RuntimeFrameGuard(AbelRuntimeContext& ctx,
+                                     bool boundary,
+                                     const QString& symbol,
+                                     const SourceSpan& callSite)
+    : m_ctx(&ctx)
+{
+    m_ctx->pushFrame(boundary, symbol, callSite);
+}
+
+RuntimeFrameGuard::~RuntimeFrameGuard()
+{
+    if (m_ctx)
+        m_ctx->popFrame();
+}
+
+RuntimeFrameGuard::RuntimeFrameGuard(RuntimeFrameGuard&& other) noexcept
+    : m_ctx(other.m_ctx)
+{
+    other.m_ctx = nullptr;
+}
+
+RuntimeFrameGuard& RuntimeFrameGuard::operator=(RuntimeFrameGuard&& other) noexcept
+{
+    if (this == &other)
+        return *this;
+    if (m_ctx)
+        m_ctx->popFrame();
+    m_ctx = other.m_ctx;
+    other.m_ctx = nullptr;
+    return *this;
 }
 
 } // namespace abel
