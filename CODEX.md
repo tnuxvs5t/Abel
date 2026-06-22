@@ -601,17 +601,107 @@ my_abel_project/
   README.md
 ```
 
+Codex 搭 backend 前必须先确认或发现这些路径：
+
+```text
+ABEL_ROOT   Abel 仓库路径，例如 /home/you/Abel
+ABEL_BUILD  Abel build 路径，例如 /home/you/Abel/build
+ABEL_BIN    Abel CLI，例如 /home/you/Abel/build/abel
+QT_PREFIX   Qt prefix，例如 /home/tnuzy/Qt/6.11.1/gcc_64
+CMAKE       CMake，例如 /home/tnuzy/Qt/Tools/CMake/bin/cmake
+```
+
+如果找不到 `ABEL_ROOT` / `ABEL_BIN`，不要编造 CMake，先问用户。
+
+### 15.1 Abel SDK v0 事实
+
+Codex 必须知道：当前 Abel v0 没有正式安装版 SDK，也没有 `AbelConfig.cmake`。
+
+当前可消费的是 build-tree SDK：
+
+```text
+headers:       $ABEL_ROOT/src
+include:       #include "abelcore/backend_plugin_base.h"
+core library:  $ABEL_BUILD/libabelcore.so
+CLI:           $ABEL_BUILD/abel
+Qt:            Qt6::Core，通过 CMAKE_PREFIX_PATH 指向 Qt prefix
+ABI:           必须和 Abel 本体使用同一 Qt kit / compiler / C++23 配置
+```
+
+不要生成：
+
+```cmake
+find_package(Abel REQUIRED)
+target_link_libraries(x PRIVATE Abel::abelcore)
+```
+
+因为当前仓库没有导出这个 CMake package。
+
+正确做法：
+
+```cmake
+add_library(abelcore SHARED IMPORTED GLOBAL)
+set_target_properties(abelcore PROPERTIES
+    IMPORTED_LOCATION "${ABEL_BUILD}/libabelcore.so"
+    INTERFACE_INCLUDE_DIRECTORIES "${ABEL_ROOT}/src"
+)
+```
+
+当前 backend binder 稳定可用参数：
+
+```text
+bool
+int
+qint64
+double
+QString              对应 Abel str
+abel::AbelValue      对应 Abel any
+std::vector<int>
+std::vector<int>&    对应 Abel vector<int>&，调用后写回
+```
+
+当前直接返回值：
+
+```text
+void
+bool
+int
+qint64
+double
+QString
+abel::AbelValue
+```
+
+不要假设：
+
+```text
+QChar/char backend binder 已完成
+std::vector<int> 直接返回已完成
+任意 T& 都会写回
+lambda 能接 AbelRuntimeContext& 报自定义错误
+```
+
+如果用户问 `fn void some_call(str a, str b)` 是否支持：
+
+```text
+签名层面支持：C++ 可写 [](QString a, QString b) -> void。
+但 void 没有失败返回通道；需要状态时更推荐 Abel 声明返回 bool / int / str。
+```
+
 Abel 侧：
 
 ```abel
 backend MathSystem {
     fn int fast_add(int a, int b);
+    fn void sort(vector<int>& xs);
 }
 
 fn int main() {
-    int x = MathSystem::fast_add(1, 2);
+    vector<int> xs = {3, 1, 2};
+    MathSystem::sort(xs);
+    int x = MathSystem::fast_add(xs[0], xs[2]);
     println(build_string("x=", x));
-    return 0;
+    return x;
 }
 ```
 
@@ -619,6 +709,11 @@ C++ plugin 侧参考模板：
 
 ```cpp
 #include "abelcore/backend_plugin_base.h"
+
+#include <QString>
+
+#include <algorithm>
+#include <vector>
 
 class MathBackend final : public abel::AbelBackendPluginBase {
     Q_OBJECT
@@ -631,6 +726,9 @@ public:
         bind(QStringLiteral("MathSystem.fast_add"), [](int a, int b) {
             return a + b;
         });
+        bind(QStringLiteral("MathSystem.sort"), [](std::vector<int>& xs) {
+            std::sort(xs.begin(), xs.end());
+        });
     }
 
     QString backendId() const override
@@ -642,19 +740,69 @@ public:
 #include "math_backend.moc"
 ```
 
+`backend/CMakeLists.txt` 模板：
+
+```cmake
+cmake_minimum_required(VERSION 3.30)
+
+project(MyAbelMathBackend LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core)
+
+set(ABEL_ROOT "" CACHE PATH "Path to Abel source repository")
+set(ABEL_BUILD "" CACHE PATH "Path to Abel build directory")
+
+if (NOT ABEL_ROOT)
+    message(FATAL_ERROR "Set -DABEL_ROOT=/path/to/Abel")
+endif()
+
+if (NOT ABEL_BUILD)
+    message(FATAL_ERROR "Set -DABEL_BUILD=/path/to/Abel/build")
+endif()
+
+add_library(abelcore SHARED IMPORTED GLOBAL)
+set_target_properties(abelcore PROPERTIES
+    IMPORTED_LOCATION "${ABEL_BUILD}/libabelcore.so"
+    INTERFACE_INCLUDE_DIRECTORIES "${ABEL_ROOT}/src"
+)
+
+add_library(math_backend MODULE
+    math_backend.cpp
+)
+
+target_link_libraries(math_backend
+    PRIVATE
+        abelcore
+        Qt6::Core
+)
+
+set_target_properties(math_backend PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+    OUTPUT_NAME math_backend
+    BUILD_RPATH "${ABEL_BUILD}"
+)
+```
+
 resource JSON：
 
 ```json
 {
   "id": "math.backend",
   "kind": "qt_plugin",
-  "path": "plugins/libmath_backend.so",
+  "path": "/absolute/path/to/my_abel_project/build/backend/plugins/libmath_backend.so",
   "iid": "org.abel.IAbelBackend/1.0",
   "backendId": "MathSystem",
   "qtVersion": "6.11.1",
   "kit": "gcc_64",
   "symbols": [
-    "MathSystem.fast_add"
+    "MathSystem.fast_add",
+    "MathSystem.sort"
   ],
   "state": "unloaded",
   "lastError": ""
@@ -669,9 +817,84 @@ C++ bind: MathSystem.fast_add
 JSON:     MathSystem.fast_add
 ```
 
-如果你不知道 Abel SDK/include/lib 路径，不要编造 CMake。先询问用户 Abel 仓库路径，或寻找相邻 `Abel/` 仓库。
+还要注意 ResourceNode 的 `path`：
 
----
+```text
+推荐：写 plugin 的绝对路径。
+如果写相对路径，它是相对 ABEL_BIN 所在目录，不是相对用户工程目录。
+```
+
+例如 `"path": "plugins/libmath_backend.so"` 实际指向：
+
+```text
+$ABEL_BUILD/plugins/libmath_backend.so
+```
+
+这种情况下必须把插件复制过去：
+
+```bash
+mkdir -p "$ABEL_BUILD/plugins"
+cp build/backend/plugins/libmath_backend.so "$ABEL_BUILD/plugins/"
+```
+
+Codex 操作 backend 的完整步骤：
+
+```text
+1. 创建 src/main.abel，写 backend block 和调用。
+2. 创建 backend/math_backend.cpp。
+3. 创建 backend/CMakeLists.txt。
+4. 创建 resources/math_backend.json，优先写绝对 path。
+5. 运行 $ABEL_BIN check src/main.abel。
+6. 配置 backend CMake。
+7. 构建 backend plugin。
+8. 运行 $ABEL_BIN resources check resources/math_backend.json。
+9. 运行 $ABEL_BIN run --resource resources/math_backend.json src/main.abel。
+10. 如果动态库找不到 libabelcore.so，用 LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" 兜底。
+```
+
+配置 backend：
+
+```bash
+$CMAKE -S backend -B build/backend -G Ninja \
+  -DABEL_ROOT="$ABEL_ROOT" \
+  -DABEL_BUILD="$ABEL_BUILD" \
+  -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
+  -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
+  -DCMAKE_CXX_STANDARD=23
+```
+
+构建 backend：
+
+```bash
+$CMAKE --build build/backend
+```
+
+运行：
+
+```bash
+$ABEL_BIN resources check resources/math_backend.json
+$ABEL_BIN run --resource resources/math_backend.json src/main.abel
+```
+
+若需要动态库搜索路径兜底：
+
+```bash
+LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" \
+  $ABEL_BIN run --resource resources/math_backend.json src/main.abel
+```
+
+backend 排错顺序：
+
+```text
+1. Abel 源码是否 check 通过。
+2. build/backend/plugins/libmath_backend.so 是否存在。
+3. resource JSON path 是否指向真实 .so。
+4. iid 是否是 org.abel.IAbelBackend/1.0。
+5. backendId 是否是 MathSystem。
+6. Abel 声明、C++ bind、JSON symbols 是否一致。
+7. Abel 签名和 C++ lambda 参数/返回是否一致。
+8. 运行时是否需要 LD_LIBRARY_PATH 指向 ABEL_BUILD。
+```
 
 ## 16. 验证命令
 
