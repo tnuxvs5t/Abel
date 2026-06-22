@@ -183,6 +183,8 @@ AbelType typeFromAst(const TypeNode& node)
 
 bool canAssignValue(const AbelType& target, const AbelType& source)
 {
+    if (target.kind == TypeKind::Unknown || source.kind == TypeKind::Unknown)
+        return true;
     if (target.isReference())
         return target.pointee && canAssignValue(*target.pointee, source);
     if (target.isPointer() && source.kind == TypeKind::Nullptr)
@@ -194,7 +196,7 @@ bool canAssignValue(const AbelType& target, const AbelType& source)
             || !target.pointee
             || !source.pointee
             || target == source;
-    if (target.isInteger() && source.isInteger())
+    if (target.isInteger() && source.isNumeric())
         return true;
     if (target.kind == TypeKind::F64 && source.isNumeric())
         return true;

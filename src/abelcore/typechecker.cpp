@@ -507,9 +507,14 @@ ExprType TypeChecker::checkCast(const CastExprNode& expr)
         return errorExpr(expr.targetType->span, QStringLiteral("cast target must be a value type"));
 
     ExprType source = checkExpr(*expr.expr);
-    if (source.type.kind != TypeKind::Any)
-        return errorExpr(expr.expr->span, QStringLiteral("cast<T>() expects any source, got %1").arg(source.type.displayName()));
-    return {target, ValueCategory::PRValue, false};
+    if (source.type.kind == TypeKind::Any)
+        return {target, ValueCategory::PRValue, false};
+    if (source.type.isNumeric() && target.isNumeric())
+        return {target, ValueCategory::PRValue, false};
+    if (isAssignable(target, source.type))
+        return {target, ValueCategory::PRValue, false};
+    return errorExpr(expr.expr->span,
+                     QStringLiteral("cannot cast %1 to %2").arg(source.type.displayName(), target.displayName()));
 }
 
 ExprType TypeChecker::checkPipe(const BinaryExprNode& expr)
@@ -984,8 +989,8 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
     }
     if (callee.field == QStringLiteral("push")) {
         if (args.size() != 1) return errorExpr(callee.span, QStringLiteral("vector.push expects one argument"));
-        if (receiver.category != ValueCategory::LValue || !receiver.isMutable)
-            return errorExpr(callee.span, QStringLiteral("vector.push requires mutable vector lvalue"));
+        if (receiver.category == ValueCategory::LValue && !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.push requires mutable vector receiver"));
         ExprType arg = checkExpr(*args[0]);
         if (!isAssignable(element, arg.type))
             error(args[0]->span, QStringLiteral("cannot push %1 into vector<%2>").arg(arg.type.displayName(), element.displayName()));
@@ -994,8 +999,8 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
     if (callee.field == QStringLiteral("pop") || callee.field == QStringLiteral("clear")) {
         if (!args.empty())
             return errorExpr(callee.span, QStringLiteral("vector.%1 expects no arguments").arg(callee.field));
-        if (receiver.category != ValueCategory::LValue || !receiver.isMutable)
-            return errorExpr(callee.span, QStringLiteral("vector.%1 requires mutable vector lvalue").arg(callee.field));
+        if (receiver.category == ValueCategory::LValue && !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.%1 requires mutable vector receiver").arg(callee.field));
         return callee.field == QStringLiteral("pop")
             ? ExprType{element, ValueCategory::PRValue, false}
             : ExprType{makeType(TypeKind::Void), ValueCategory::PRValue, false};
@@ -1003,19 +1008,17 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
     if (callee.field == QStringLiteral("reserve") || callee.field == QStringLiteral("resize")) {
         if (args.size() != 1)
             return errorExpr(callee.span, QStringLiteral("vector.%1 expects one argument").arg(callee.field));
-        if (receiver.category != ValueCategory::LValue || !receiver.isMutable)
-            return errorExpr(callee.span, QStringLiteral("vector.%1 requires mutable vector lvalue").arg(callee.field));
+        if (receiver.category == ValueCategory::LValue && !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.%1 requires mutable vector receiver").arg(callee.field));
         ExprType count = checkExpr(*args[0]);
-        if (!count.type.isInteger())
+        if (!isAssignable(makeType(TypeKind::I64), count.type))
             error(args[0]->span, QStringLiteral("vector.%1 size must be integer").arg(callee.field));
         return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
     }
     if (callee.field == QStringLiteral("front") || callee.field == QStringLiteral("back")) {
         if (!args.empty())
             return errorExpr(callee.span, QStringLiteral("vector.%1 expects no arguments").arg(callee.field));
-        if (receiver.category != ValueCategory::LValue)
-            return errorExpr(callee.span, QStringLiteral("vector.%1 requires vector lvalue").arg(callee.field));
-        return {element, ValueCategory::LValue, receiver.isMutable};
+        return {element, ValueCategory::LValue, receiver.category == ValueCategory::PRValue || receiver.isMutable};
     }
     return errorExpr(callee.span, QStringLiteral("unsupported builtin method '%1'").arg(callee.field));
 }
@@ -1028,7 +1031,7 @@ ExprType TypeChecker::checkIndex(const IndexExprNode& expr)
         return errorExpr(expr.span, QStringLiteral("indexing requires vector"));
     if (!index.type.isInteger())
         error(expr.index->span, QStringLiteral("vector index must be integer"));
-    return {*base.type.pointee, ValueCategory::LValue, base.isMutable};
+    return {*base.type.pointee, ValueCategory::LValue, base.category == ValueCategory::PRValue || base.isMutable};
 }
 
 ExprType TypeChecker::checkInitListAgainst(const InitListExprNode& init, const AbelType& target)

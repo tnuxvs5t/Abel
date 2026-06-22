@@ -391,6 +391,41 @@ private slots:
         QCOMPARE(result.exitCode, 25);
     }
 
+    void prvalueVectorReceiverAndNumericConversionsWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int take_int(int x) {
+                return x;
+            }
+
+            fn int main() {
+                str ans = "abc";
+                int len = 5;
+                while (str_to_chars(ans).len() < len) {
+                    len = len - 10;
+                }
+
+                str_to_chars(ans).push('d');
+                char front = str_to_chars(ans).front();
+
+                int a = 4.6;
+                int b = cast<int>(4.6);
+                double d = cast<double>(a);
+                int e = take_int(3.9);
+
+                if (front == 'a') {
+                    return len + a + b + cast<int>(d) + e + 100;
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 110);
+    }
+
     void buildStringUsesUserToStr()
     {
         const QString src = QStringLiteral(R"ABEL(

@@ -999,6 +999,7 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
             error(QStringLiteral("E0546"), QStringLiteral("indexing requires vector value"), e->span);
             return nullptr;
         }
+        m_ctx->createStorage(base);
         qint64 idx = 0;
         if (!requireInteger(evalExpr(*e->index), e->index->span, idx))
             return nullptr;
@@ -1016,14 +1017,12 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
                 error(QStringLiteral("E0562"), QStringLiteral("vector.%1 expects no arguments").arg(field->field), e->span);
                 return nullptr;
             }
-            AbelLocation* baseLoc = evalLocation(*field->base);
-            if (!baseLoc)
-                return nullptr;
-            AbelValue base = baseLoc->read();
+            AbelValue base = evalExpr(*field->base);
             if (base.type().kind != TypeKind::Vector || !base.type().pointee) {
                 error(QStringLiteral("E0563"), QStringLiteral("vector.%1 requires vector receiver").arg(field->field), field->span);
                 return nullptr;
             }
+            m_ctx->createStorage(base);
             auto vector = base.asVector();
             if (vector->elements.empty()) {
                 error(QStringLiteral("E0564"), QStringLiteral("cannot read %1 of empty vector").arg(field->field), field->span);
@@ -1167,22 +1166,26 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
 AbelValue Interpreter::evalCast(const CastExprNode& expr)
 {
     AbelValue source = evalExpr(*expr.expr);
-    if (source.type().kind != TypeKind::Any) {
+    const AbelType target = typeFromAst(*expr.targetType);
+
+    if (source.type().kind == TypeKind::Any) {
+        const AbelValue inner = source.asAny()->value;
+        if (!canAssignValue(target, inner.type())) {
+            error(QStringLiteral("E0591"),
+                  QStringLiteral("cannot cast any containing %1 to %2").arg(inner.type().displayName(), target.displayName()),
+                  expr.span);
+            return AbelValue::makeUnknown();
+        }
+        return convertValue(inner, target);
+    }
+
+    if (!canAssignValue(target, source.type())) {
         error(QStringLiteral("E0590"),
-              QStringLiteral("cast<T>() expects any source, got %1").arg(source.type().displayName()),
+              QStringLiteral("cannot cast %1 to %2").arg(source.type().displayName(), target.displayName()),
               expr.expr->span);
         return AbelValue::makeUnknown();
     }
-
-    const AbelType target = typeFromAst(*expr.targetType);
-    const AbelValue inner = source.asAny()->value;
-    if (inner.type() != target) {
-        error(QStringLiteral("E0591"),
-              QStringLiteral("cannot cast any containing %1 to %2").arg(inner.type().displayName(), target.displayName()),
-              expr.span);
-        return AbelValue::makeUnknown();
-    }
-    return convertValue(inner, target);
+    return convertValue(source, target);
 }
 
 AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
@@ -1549,9 +1552,10 @@ AbelValue Interpreter::evalStructMethod(const FieldAccessExprNode& callee,
 
 AbelValue Interpreter::evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args)
 {
-    AbelLocation* baseLoc = evalLocation(*callee.base);
-    if (!baseLoc)
+    AbelValue receiver = evalExpr(*callee.base);
+    if (receiver.type().kind == TypeKind::Unknown)
         return AbelValue::makeUnknown();
+    AbelLocation* baseLoc = m_ctx->createStorage(receiver);
     BuiltinMethodCall call{
         *m_ctx,
         baseLoc,

@@ -217,10 +217,18 @@ AbelValue convertValue(const AbelValue& value, const AbelType& target)
         return value;
     if (value.type().kind == target.kind)
         return value;
-    if (target.kind == TypeKind::I32 && value.type().isInteger())
-        return AbelValue::makeInt(value.asInt(), TypeKind::I32);
-    if (target.kind == TypeKind::I64 && value.type().isInteger())
-        return AbelValue::makeInt(value.asInt(), TypeKind::I64);
+    if (target.kind == TypeKind::I32 && value.type().isNumeric()) {
+        const qint64 converted = value.type().kind == TypeKind::F64
+            ? static_cast<qint64>(value.asDouble())
+            : value.asInt();
+        return AbelValue::makeInt(converted, TypeKind::I32);
+    }
+    if (target.kind == TypeKind::I64 && value.type().isNumeric()) {
+        const qint64 converted = value.type().kind == TypeKind::F64
+            ? static_cast<qint64>(value.asDouble())
+            : value.asInt();
+        return AbelValue::makeInt(converted, TypeKind::I64);
+    }
     if (target.kind == TypeKind::F64 && value.type().isNumeric())
         return AbelValue::makeDouble(value.asDouble());
     if (target.kind == TypeKind::Pointer && value.type().kind == TypeKind::Nullptr && target.pointee)

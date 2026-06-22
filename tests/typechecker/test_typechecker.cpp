@@ -107,6 +107,40 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsPrvalueVectorReceiverAndNumericConversions()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int take_int(int x) {
+                return x;
+            }
+
+            backend MathSystem {
+                fn int accept_int(int x);
+            }
+
+            fn int main() {
+                str ans = "abc";
+                int len = 5;
+                while (str_to_chars(ans).len() < len) {
+                    len = len - 10;
+                }
+
+                str_to_chars(ans).push('d');
+                char c = str_to_chars(ans).front();
+
+                int a = 4.6;
+                int b = cast<int>(4.6);
+                double d = cast<double>(a);
+                int e = take_int(3.9);
+                return MathSystem::accept_int(d) + a + b + e;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void acceptsUserToStrForBuildString()
     {
         const QString src = QStringLiteral(R"ABEL(
@@ -148,9 +182,9 @@ private slots:
         QVERIFY(!result.diagnostics.isEmpty());
     }
 
-    void rejectsCastFromNonAny()
+    void rejectsCastFromNonAnyNonNumeric()
     {
-        auto result = checkSource(QStringLiteral("fn int main() { int x = cast<int>(1); return x; }"));
+        auto result = checkSource(QStringLiteral("fn int main() { int x = cast<int>(\"bad\"); return x; }"));
         QVERIFY(!result.diagnostics.isEmpty());
     }
 
