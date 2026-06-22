@@ -1,13 +1,16 @@
 #include "abelcore/abel_version.h"
 #include "abelcore/interpreter.h"
 #include "abelcore/lexer.h"
+#include "abelcore/package_manifest.h"
 #include "abelcore/parser.h"
 #include "abelcore/resource_node.h"
 #include "abelcore/typechecker.h"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTextStream>
 
 #include <vector>
@@ -34,6 +37,49 @@ static void printDiagnostic(const abel::Diagnostic& d)
     }
 }
 
+struct CliInput {
+    QString sourceFile;
+    QString sourceText;
+    QString packageRoot;
+    QList<abel::ResourceNode> packageResources;
+    QList<abel::Diagnostic> diagnostics;
+    bool isPackage = false;
+};
+
+static CliInput readCliInput(const QString& path)
+{
+    CliInput input;
+    const QFileInfo info(path);
+    QString filePath = path;
+
+    if (info.isDir()) {
+        input.isPackage = true;
+        auto package = abel::packageManifestFromDirectory(path);
+        input.diagnostics.append(package.diagnostics);
+        if (!package.diagnostics.isEmpty())
+            return input;
+        input.sourceFile = package.package.entryFilePath();
+        input.packageRoot = package.package.rootDir;
+        input.packageResources = package.package.backendArtifacts;
+        filePath = input.sourceFile;
+    } else {
+        input.sourceFile = info.absoluteFilePath();
+    }
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        abel::Diagnostic d;
+        d.severity = abel::Severity::Error;
+        d.code = QStringLiteral("E0004");
+        d.message = QStringLiteral("cannot open '%1'").arg(filePath);
+        d.primary.file = filePath;
+        input.diagnostics.push_back(d);
+        return input;
+    }
+    input.sourceText = QString::fromUtf8(file.readAll());
+    return input;
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -41,7 +87,7 @@ int main(int argc, char** argv)
     QCoreApplication::setApplicationVersion(abel::versionString());
 
     QCommandLineParser parser;
-    parser.setApplicationDescription(QStringLiteral("Abel v0 CLI"));
+    parser.setApplicationDescription(QStringLiteral("Abel CLI"));
     parser.addHelpOption();
     parser.addVersionOption();
 
@@ -53,7 +99,7 @@ int main(int argc, char** argv)
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
     parser.addPositionalArgument(QStringLiteral("command"),
-                                 QStringLiteral("Command: check | run | resources | version"));
+                                 QStringLiteral("Command: check | run | package | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
                                  QStringLiteral("Input file, resource subcommand, or entry."),
                                  QStringLiteral("[input]"));
@@ -76,6 +122,20 @@ int main(int argc, char** argv)
     }
 
     const QString command = args[0];
+    if (command == QStringLiteral("package")) {
+        if (args.size() != 3 || args[1] != QStringLiteral("check")) {
+            err << "E0007: package expects: abel package check <project-dir>" << Qt::endl;
+            return 2;
+        }
+        auto package = abel::packageManifestFromDirectory(args[2]);
+        for (const auto& d : package.diagnostics)
+            printDiagnostic(d);
+        if (!package.diagnostics.isEmpty())
+            return 1;
+        out << "ok" << Qt::endl;
+        return 0;
+    }
+
     if (command == QStringLiteral("resources")) {
         if (args.size() != 3 || args[1] != QStringLiteral("check")) {
             err << "E0005: resources expects: abel resources check <resource.json>" << Qt::endl;
@@ -98,17 +158,16 @@ int main(int argc, char** argv)
 
     if (command == QStringLiteral("check") || command == QStringLiteral("run")) {
         if (args.size() < 2) {
-            err << "E0003: " << command << " expects an input file" << Qt::endl;
+            err << "E0003: " << command << " expects an input file or project directory" << Qt::endl;
             return 2;
         }
-        QFile file(args[1]);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            err << "E0004: cannot open '" << args[1] << "'" << Qt::endl;
-            return 2;
-        }
-        const QString source = QString::fromUtf8(file.readAll());
+        CliInput input = readCliInput(args[1]);
+        for (const auto& d : input.diagnostics)
+            printDiagnostic(d);
+        if (!input.diagnostics.isEmpty())
+            return 1;
         abel::Lexer lexer;
-        auto lexed = lexer.lex(args[1], source);
+        auto lexed = lexer.lex(input.sourceFile, input.sourceText);
         for (const auto& d : lexed.diagnostics)
             printDiagnostic(d);
         if (!lexed.diagnostics.isEmpty())
@@ -129,7 +188,17 @@ int main(int argc, char** argv)
             abel::BackendRegistry backendRegistry;
             std::vector<abel::ResourceNodeLoadResult> loadedResources;
             const QStringList resourceFiles = parser.values(resourceOption);
-            loadedResources.reserve(static_cast<size_t>(resourceFiles.size()));
+            loadedResources.reserve(static_cast<size_t>(resourceFiles.size() + input.packageResources.size()));
+            for (const auto& resourceNode : input.packageResources) {
+                auto loaded = abel::loadBackendResourceNode(resourceNode,
+                                                            backendRegistry,
+                                                            input.packageRoot);
+                for (const auto& d : loaded.diagnostics)
+                    printDiagnostic(d);
+                if (!loaded.ok())
+                    return 1;
+                loadedResources.push_back(std::move(loaded));
+            }
             for (const QString& resourceFile : resourceFiles) {
                 QFile rf(resourceFile);
                 if (!rf.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -151,7 +220,8 @@ int main(int argc, char** argv)
                 loadedResources.push_back(std::move(loaded));
             }
             abel::Interpreter interpreter;
-            auto result = resourceFiles.isEmpty()
+            const bool hasBackendResources = !resourceFiles.isEmpty() || !input.packageResources.isEmpty();
+            auto result = !hasBackendResources
                 ? interpreter.run(*parsed.program)
                 : interpreter.run(*parsed.program, &backendRegistry);
             for (const auto& d : result.diagnostics)

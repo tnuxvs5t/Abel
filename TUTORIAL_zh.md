@@ -1144,15 +1144,52 @@ v0 binder 当前覆盖的是核心通路需要的类型矩阵，不是完整 C++
 
 ```text
 my_abel_project/
+  abel.package.json
   src/
     main.abel
-  resources/
-    math.resource.json
-  plugins/
-    libmath_backend.so
 ```
 
-但 v0 CLI 还没有完整包管理和模块系统，所以最稳妥的方式是：把 Abel 仓库作为工具链项目，先用单文件 `.abel` 练习。
+当前 v1 第一片已经支持项目级入口：`abel.package.json` 描述包名、版本、入口文件，`abel check/run <project-dir>` 会自动读取入口。
+
+最小 `abel.package.json`：
+
+```json
+{
+  "name": "my-abel-project",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+```
+
+检查和运行：
+
+```bash
+ABEL=/path/to/Abel/build/abel
+$ABEL package check .
+$ABEL check .
+$ABEL run .
+```
+
+注意：这只是 v1 包管理引擎的第一片。完整 `abel init/add/remove/update/build`、依赖解析、lockfile、registry、backend artifact 自动构建仍是后续 v1 工作。
+
+若项目需要 C++ backend，当前可以在包描述里写 `backendArtifacts`，让 `abel run <project-dir>` 自动加载 plugin，而不用在普通运行命令里手动传 `--resource`：
+
+```json
+{
+  "name": "my-abel-project",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "backendArtifacts": [
+    {
+      "backendId": "MathSystem",
+      "path": "build/plugins/libmath_backend.so",
+      "symbols": ["fast_add", "sort"]
+    }
+  ]
+}
+```
+
+`path` 相对项目根目录解析。这里仍是过渡形态；v1 complete 的目标是由包管理引擎生成和维护 backend artifact/resource 信息。
 
 示例 `src/main.abel`：
 
@@ -1181,14 +1218,14 @@ fn int main() {
 检查和运行：
 
 ```bash
-/path/to/Abel/build/abel check src/main.abel
-/path/to/Abel/build/abel run src/main.abel
+$ABEL check .
+$ABEL run .
 ```
 
 如果你需要 backend：
 
 ```bash
-/path/to/Abel/build/abel run --resource resources/math.resource.json src/main.abel
+$ABEL run .
 ```
 
 ---

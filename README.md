@@ -1,16 +1,17 @@
 # Abel
 
-Abel is an experimental v0 programming language runtime built with Qt 6 and C++23.
+Abel is an experimental programming language runtime built with Qt 6 and C++23.
 
-Current v0 scope:
+Current implementation scope:
 
 - lexer, parser, AST, basic name/type checking, and tree-run interpreter;
 - C/C++-style value model with storage, lvalues/prvalues, pointers, references, structs, and vector values;
 - `any`, `any...`, lambda/function values, control flow, and core builtins such as `build_string`, `print`, and vector methods;
 - backend blocks, resource-node JSON, `QPluginLoader` loading, and Qt/C++ plugin dispatch through `libabelcore.so`;
-- CLI commands: `abel check`, `abel run`, `abel resources check`, and `abel run --resource`.
+- v1 project entry skeleton with `abel.package.json`, `abel package check <project-dir>`, and `abel check/run <project-dir>`;
+- CLI commands: `abel check`, `abel run`, `abel package check`, `abel resources check`, and `abel run --resource`.
 
-Abel v0 intentionally does **not** implement split/JIT, a large VM, a package manager, a manifest/hash system, or a context exporter.
+Abel still does **not** implement split/JIT, a large VM, a full dependency resolver, registry downloads, a lockfile engine, a manifest/hash audit system, or a context exporter.
 
 ## Build
 
@@ -39,6 +40,11 @@ Use the 4GB memory cap when running tests:
 ```bash
 build/abel check examples/smoke/hello.abel
 build/abel run examples/smoke/hello.abel
+build/abel package check examples/project
+build/abel check examples/project
+build/abel run examples/project
+build/abel package check examples/project_backend
+build/abel run examples/project_backend
 build/abel resources check plugins/examples/math_backend/resource.json
 build/abel run --resource plugins/examples/math_backend/resource.json examples/smoke/backend.abel
 ```

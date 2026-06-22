@@ -41,6 +41,8 @@ add_library(abelcore SHARED
     src/abelcore/backend_registry.cpp
     src/abelcore/resource_node.h
     src/abelcore/resource_node.cpp
+    src/abelcore/package_manifest.h
+    src/abelcore/package_manifest.cpp
     src/abelcore/builtin_registry.h
     src/abelcore/builtin_registry.cpp
     src/abelcore/typechecker.h
@@ -170,3 +172,16 @@ target_link_libraries(abel_backend_resource_tests
 add_dependencies(abel_backend_resource_tests math_backend)
 
 add_test(NAME abel_backend_resource_tests COMMAND abel_backend_resource_tests)
+
+add_executable(abel_package_manifest_tests
+    tests/package/test_package_manifest.cpp
+)
+
+target_link_libraries(abel_package_manifest_tests
+    PRIVATE
+        abelcore
+        Qt6::Core
+        Qt6::Test
+)
+
+add_test(NAME abel_package_manifest_tests COMMAND abel_package_manifest_tests)

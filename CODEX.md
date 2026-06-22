@@ -22,9 +22,9 @@
 
 不要默认修改 Abel 编译器/解释器源码。
 不要把用户项目扩成大型框架。
-不要幻想 Abel 已经有包管理、JIT、模块构建系统或成熟 IDE。
+不要幻想 Abel 已经有完整依赖解析器、registry、lockfile、JIT、模块构建系统或成熟 IDE。
 
-Abel v0 的正确定位：
+当前 Abel 的正确定位：
 
 ```text
 C/C++ 值模型
@@ -33,6 +33,7 @@ C/C++ 值模型
 + struct / lambda / any / any...
 + builtin print / println / build_string
 + backend block 调 Qt/C++ plugin
++ abel.package.json 项目入口骨架
 + abel check / abel run
 ```
 
@@ -88,8 +89,8 @@ ABEL_BIN=/path/to/abel
 后续命令优先写成：
 
 ```bash
-$ABEL_BIN check src/main.abel
-$ABEL_BIN run src/main.abel
+$ABEL_BIN check .
+$ABEL_BIN run .
 ```
 
 如果 shell 中不能持久保存变量，就在回复里给出完整路径命令。
@@ -102,21 +103,21 @@ $ABEL_BIN run src/main.abel
 
 ```text
 my_abel_project/
+  abel.package.json
   CODEX.md
   README.md
   .gitignore
   src/
     main.abel
   examples/
-  resources/
 ```
 
 含义：
 
 ```text
+abel.package.json Abel 项目入口描述：包名、版本、入口文件、可选 backend artifacts
 src/main.abel     主程序入口
 examples/         后续放示例 Abel 程序
-resources/        后续放 backend resource JSON
 README.md         项目说明、运行命令、Abel CLI 路径说明
 .gitignore        忽略临时文件和本地构建产物
 ```
@@ -127,11 +128,27 @@ README.md         项目说明、运行命令、Abel CLI 路径说明
 backend/
   CMakeLists.txt
   <name>_backend.cpp
-resources/
-  <name>_backend.json
 ```
 
-不要一上来创建复杂目录、包管理器、脚手架、CI、GUI 或插件系统。
+不要一上来创建复杂目录、完整包管理器、脚手架、CI、GUI 或插件系统。
+
+当前最小 `abel.package.json`：
+
+```json
+{
+  "name": "my-abel-project",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+```
+
+验证：
+
+```bash
+$ABEL_BIN package check .
+$ABEL_BIN check .
+$ABEL_BIN run .
+```
 
 ---
 
@@ -149,13 +166,13 @@ fn int main() {
 检查：
 
 ```bash
-$ABEL_BIN check src/main.abel
+$ABEL_BIN check .
 ```
 
 运行：
 
 ```bash
-$ABEL_BIN run src/main.abel
+$ABEL_BIN run .
 ```
 
 注意：
@@ -163,7 +180,7 @@ $ABEL_BIN run src/main.abel
 - `fn int main()` 的返回值会成为进程退出码；
 - 普通成功建议 `return 0;`；
 - 如果要观察计算结果，优先用 `println(...)` 输出，不要只依赖退出码；
-- v0 先按单文件程序工作，不要假设成熟模块系统。
+- 当前项目入口只解决 entry/backend artifact 自动读取，不要假设已有成熟模块系统、完整依赖解析、registry 或 lockfile。
 
 ---
 
@@ -521,14 +538,16 @@ fn int main() {
 ```text
 1. 检查当前目录和 Git 状态。
 2. 找到 Abel CLI。
-3. 创建最小目录：src/ examples/ resources/。
+3. 创建最小目录：src/ examples/。
 4. 创建 src/main.abel。
-5. 创建 README.md，记录 check/run 命令。
-6. 创建 .gitignore。
-7. 运行 abel check src/main.abel。
-8. 运行 abel run src/main.abel。
-9. 如果成功，提交或建议提交。
-10. 告诉用户下一步可扩展方向。
+5. 创建 abel.package.json，写 name/version/entry。
+6. 创建 README.md，记录 package check / check / run 命令。
+7. 创建 .gitignore。
+8. 运行 abel package check .。
+9. 运行 abel check .。
+10. 运行 abel run .。
+11. 如果成功，提交或建议提交。
+12. 告诉用户下一步可扩展方向。
 ```
 
 默认 `.gitignore`：
@@ -843,12 +862,12 @@ Codex 操作 backend 的完整步骤：
 1. 创建 src/main.abel，写 backend block 和调用。
 2. 创建 backend/math_backend.cpp。
 3. 创建 backend/CMakeLists.txt。
-4. 创建 resources/math_backend.json，优先写绝对 path。
-5. 运行 $ABEL_BIN check src/main.abel。
+4. 在 abel.package.json 写 backendArtifacts。
+5. 运行 $ABEL_BIN package check .。
 6. 配置 backend CMake。
 7. 构建 backend plugin。
-8. 运行 $ABEL_BIN resources check resources/math_backend.json。
-9. 运行 $ABEL_BIN run --resource resources/math_backend.json src/main.abel。
+8. 运行 $ABEL_BIN check .。
+9. 运行 $ABEL_BIN run .。
 10. 如果动态库找不到 libabelcore.so，用 LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" 兜底。
 ```
 
@@ -872,15 +891,16 @@ $CMAKE --build build/backend
 运行：
 
 ```bash
-$ABEL_BIN resources check resources/math_backend.json
-$ABEL_BIN run --resource resources/math_backend.json src/main.abel
+$ABEL_BIN package check .
+$ABEL_BIN check .
+$ABEL_BIN run .
 ```
 
 若需要动态库搜索路径兜底：
 
 ```bash
 LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" \
-  $ABEL_BIN run --resource resources/math_backend.json src/main.abel
+  $ABEL_BIN run .
 ```
 
 backend 排错顺序：
@@ -901,15 +921,17 @@ backend 排错顺序：
 纯 Abel 项目：
 
 ```bash
-$ABEL_BIN check src/main.abel
-$ABEL_BIN run src/main.abel
+$ABEL_BIN package check .
+$ABEL_BIN check .
+$ABEL_BIN run .
 ```
 
 backend 项目：
 
 ```bash
-$ABEL_BIN resources check resources/math_backend.json
-$ABEL_BIN run --resource resources/math_backend.json src/main.abel
+$ABEL_BIN package check .
+$ABEL_BIN check .
+$ABEL_BIN run .
 ```
 
 如果在 Abel 编译器仓库内跑测试，必须卡 4GB：
