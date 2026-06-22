@@ -9,9 +9,10 @@ Current implementation scope:
 - `any`, `any...`, lambda/function values, control flow, and core builtins such as `build_string`, `print`, and vector methods;
 - backend blocks, resource-node JSON, `QPluginLoader` loading, and Qt/C++ plugin dispatch through `libabelcore.so`;
 - v1 package skeleton with `abel init [project-dir]`, `abel.package.json`, `abel add/remove/update/build`, local path dependencies, `abel.lock.json`, package graph consumption, and project-local backend artifact cache under `.abel/cache/backend`;
+- installable Abel SDK first slice: headers, `libabelcore.so`, `abel` CLI, `AbelConfig.cmake`, `AbelTargets.cmake`, and external backend fixture coverage for `find_package(Abel REQUIRED)`;
 - CLI commands: `abel init`, `abel add`, `abel remove`, `abel update`, `abel build`, `abel check`, `abel run`, `abel package check`, `abel resources check`, and `abel run --resource`.
 
-Abel still does **not** implement split/JIT, a large VM, registry downloads, semantic-version solving, backend plugin auto-builds, versioned cache invalidation, a manifest/hash audit system, or a context exporter.
+Abel still does **not** implement split/JIT, a large VM, registry downloads, semantic-version solving, backend plugin auto-builds, versioned cache invalidation, a stable cross-Qt/cross-compiler ABI, a manifest/hash audit system, or a context exporter.
 
 ## Build
 
@@ -26,6 +27,25 @@ This repository is currently pinned to the local Qt/GCC toolchain described in `
 
 /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
 ```
+
+## Install / SDK
+
+Install into a local prefix:
+
+```bash
+/home/tnuzy/Qt/Tools/CMake/bin/cmake --install build --prefix build/abel-sdk
+```
+
+External Qt backend plugins can then use:
+
+```cmake
+find_package(Abel REQUIRED)
+
+add_library(my_backend MODULE my_backend.cpp)
+target_link_libraries(my_backend PRIVATE Abel::abelcore)
+```
+
+The installed SDK is still tied to the same Qt kit/compiler ABI used to build Abel.
 
 ## Test
 

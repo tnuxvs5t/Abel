@@ -671,97 +671,78 @@ public:
 }
 ```
 
-### 14.1 Abel SDK v0 的实际范围
+### 14.1 Abel SDK 当前实际范围
 
-先把机关量清楚：当前 Abel v0 还没有“安装好的正式 SDK”，也没有 `AbelConfig.cmake`。
+先把机关量清楚：当前 Abel 已有 **安装版 SDK 第一片**。它不是最终稳定 ABI 发行包，但已经能让外部 backend 工程用 CMake 正常消费：
 
-当前可被外部 backend 工程消费的是 **build-tree SDK**：
-
-```text
-Abel 源码根目录:
-  $ABEL_ROOT/src
-
-Abel 构建目录:
-  $ABEL_BUILD/libabelcore.so
-  $ABEL_BUILD/abel
-
-核心 headers:
-  $ABEL_ROOT/src/abelcore/backend_interface.h
-  $ABEL_ROOT/src/abelcore/backend_binder.h
-  $ABEL_ROOT/src/abelcore/backend_plugin_base.h
-  $ABEL_ROOT/src/abelcore/type.h
-  $ABEL_ROOT/src/abelcore/value.h
-  $ABEL_ROOT/src/abelcore/runtime.h
-
-Qt/C++ 工具链:
-  Qt6::Core
-  C++23
-  和 Abel 本体相同的 Qt kit / compiler / ABI
-
-运行侧协议:
-  ResourceNode JSON
-  QPluginLoader
-  IAbelBackend IID: org.abel.IAbelBackend/1.0
+```bash
+/home/tnuzy/Qt/Tools/CMake/bin/cmake --install /path/to/Abel/build --prefix "$ABEL_PREFIX"
 ```
 
-当前没有：
+安装后目录大致是：
 
 ```text
-install target
-AbelConfig.cmake
-AbelTargets.cmake
-稳定跨 Qt 版本 ABI
-稳定跨编译器 ABI
-完整 SDK 打包目录
-完整 backend binder 类型矩阵
+$ABEL_PREFIX/
+  bin/
+    abel
+  lib/
+    libabelcore.so
+    cmake/Abel/
+      AbelConfig.cmake
+      AbelConfigVersion.cmake
+      AbelTargets.cmake
+  include/
+    abelcore/
+      backend_interface.h
+      backend_binder.h
+      backend_plugin_base.h
+      type.h
+      value.h
+      runtime.h
+      ...
 ```
 
-所以外部 plugin 的 CMake 不能写：
+外部 backend CMake 可以写：
 
 ```cmake
 find_package(Abel REQUIRED)
 target_link_libraries(my_backend PRIVATE Abel::abelcore)
 ```
 
-因为这在当前 v0 并不存在。
-
-当前正确方式是：
+`AbelConfig.cmake` 会引入：
 
 ```text
-1. 显式提供 ABEL_ROOT。
-2. 显式提供 ABEL_BUILD。
-3. include $ABEL_ROOT/src。
-4. 把 $ABEL_BUILD/libabelcore.so 作为 IMPORTED SHARED library 链接。
-5. 用和 Abel 相同的 Qt6/C++23 工具链编译 plugin。
+Abel::abelcore
+Abel::abel
+Abel_INCLUDE_DIR
+Abel_CORE_TARGET
+Abel_CLI_TARGET
 ```
 
-include 路径对应：
-
-```cpp
-#include "abelcore/backend_plugin_base.h"
-```
-
-链接对象对应：
+仍然必须注意 ABI：
 
 ```text
-$ABEL_BUILD/libabelcore.so
+Qt6::Core
+C++23
+和 Abel 本体相同的 Qt kit / compiler / ABI
+不承诺跨 Qt 版本 ABI
+不承诺跨编译器 ABI
 ```
 
-这份 `libabelcore.so` 对外部 plugin 是足够的，前提是：
-
-```text
-1. Abel 已经成功构建；
-2. plugin 使用同一个 Abel 源码树的 headers；
-3. plugin 使用同一套 Qt kit 和兼容编译器；
-4. 运行时 loader 能找到 libabelcore.so。
-```
-
-如果运行时找不到 `libabelcore.so`，用：
+如果外部工程找不到 `AbelConfig.cmake`，配置时显式给：
 
 ```bash
-LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" \
-  $ABEL_BIN run --resource resources/xxx_backend.json src/main.abel
+-DAbel_DIR="$ABEL_PREFIX/lib/cmake/Abel"
 ```
+
+如果运行时找不到 `libabelcore.so`，优先检查 plugin 的 RPATH。临时兜底可以用：
+
+```bash
+LD_LIBRARY_PATH="$ABEL_PREFIX/lib:$LD_LIBRARY_PATH" \
+  $ABEL_BIN run .
+```
+
+旧的 build-tree SDK 做法（手写 `$ABEL_ROOT/src` 和 `$ABEL_BUILD/libabelcore.so`）只作为没有安装 SDK 时的临时 fallback，不再是推荐路径。
 
 #### v0 binder 类型矩阵
 
@@ -830,17 +811,16 @@ bind(QStringLiteral("ExampleSystem.notify"), [](QString message) {
 假设你有：
 
 ```text
-Abel 仓库：/home/you/Abel
-Abel CLI： /home/you/Abel/build/abel
+Abel SDK： /home/you/abel-sdk
+Abel CLI： /home/you/abel-sdk/bin/abel
 用户工程：/home/you/my_abel_project
 ```
 
 先约定路径：
 
 ```bash
-export ABEL_ROOT=/home/you/Abel
-export ABEL_BUILD=/home/you/Abel/build
-export ABEL_BIN=/home/you/Abel/build/abel
+export ABEL_PREFIX=/home/you/abel-sdk
+export ABEL_BIN=/home/you/abel-sdk/bin/abel
 export QT_PREFIX=/home/tnuzy/Qt/6.11.1/gcc_64
 export CMAKE=/home/tnuzy/Qt/Tools/CMake/bin/cmake
 ```
@@ -956,23 +936,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 find_package(Qt6 6.11 REQUIRED COMPONENTS Core)
-
-set(ABEL_ROOT "" CACHE PATH "Path to Abel source repository")
-set(ABEL_BUILD "" CACHE PATH "Path to Abel build directory")
-
-if (NOT ABEL_ROOT)
-    message(FATAL_ERROR "Set -DABEL_ROOT=/path/to/Abel")
-endif()
-
-if (NOT ABEL_BUILD)
-    message(FATAL_ERROR "Set -DABEL_BUILD=/path/to/Abel/build")
-endif()
-
-add_library(abelcore SHARED IMPORTED GLOBAL)
-set_target_properties(abelcore PROPERTIES
-    IMPORTED_LOCATION "${ABEL_BUILD}/libabelcore.so"
-    INTERFACE_INCLUDE_DIRECTORIES "${ABEL_ROOT}/src"
-)
+find_package(Abel REQUIRED)
 
 add_library(math_backend MODULE
     math_backend.cpp
@@ -980,14 +944,13 @@ add_library(math_backend MODULE
 
 target_link_libraries(math_backend
     PRIVATE
-        abelcore
-        Qt6::Core
+        Abel::abelcore
 )
 
 set_target_properties(math_backend PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
     OUTPUT_NAME math_backend
-    BUILD_RPATH "${ABEL_BUILD}"
+    BUILD_RPATH "$<TARGET_FILE_DIR:Abel::abelcore>"
 )
 ```
 
@@ -995,7 +958,7 @@ set_target_properties(math_backend PROPERTIES
 
 ```text
 1. 找 Qt6::Core。
-2. 把 Abel 已构建出的 libabelcore.so 作为 IMPORTED library 链接。
+2. 通过 AbelConfig.cmake 引入 Abel::abelcore。
 3. 把 plugin 编译到 build/backend/plugins/libmath_backend.so。
 ```
 
@@ -1005,8 +968,7 @@ set_target_properties(math_backend PROPERTIES
 
 ```bash
 $CMAKE -S backend -B build/backend -G Ninja \
-  -DABEL_ROOT="$ABEL_ROOT" \
-  -DABEL_BUILD="$ABEL_BUILD" \
+  -DAbel_DIR="$ABEL_PREFIX/lib/cmake/Abel" \
   -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
   -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
   -DCMAKE_CXX_STANDARD=23
@@ -1050,25 +1012,17 @@ build/backend/plugins/libmath_backend.so
 "path": "plugins/libmath_backend.so"
 ```
 
-那么 Abel v0 会把它解析为相对 `$ABEL_BIN` 所在目录，也就是通常的：
+那么底层 `--resource` 路径会把它解析为相对 `$ABEL_BIN` 所在目录，也就是通常的：
 
 ```text
-/home/you/Abel/build/plugins/libmath_backend.so
+/home/you/abel-sdk/bin/plugins/libmath_backend.so
 ```
 
-不是相对用户工程目录。
-所以有两种安全做法：
+不是相对用户工程目录。所以有两种安全做法：
 
 ```text
 方案 A：resource JSON 里写 plugin 绝对路径。
-方案 B：把 libmath_backend.so 复制到 $ABEL_BUILD/plugins/，然后使用 "plugins/libmath_backend.so"。
-```
-
-方案 B 的操作：
-
-```bash
-mkdir -p "$ABEL_BUILD/plugins"
-cp build/backend/plugins/libmath_backend.so "$ABEL_BUILD/plugins/"
+方案 B：更推荐 package backendArtifacts，让 path 相对 package 根目录，再由 abel build 复制到 .abel/cache/backend。
 ```
 
 #### 第六步：检查 resource 和运行
@@ -1105,18 +1059,18 @@ backend answer=4
 ```text
 1. $ABEL_BIN check src/main.abel 是否通过。
 2. build/backend/plugins/libmath_backend.so 是否存在。
-3. resource JSON 的 path 是否是绝对路径，或 plugin 是否已复制到 $ABEL_BUILD/plugins/。
+3. resource JSON 的 path 是否是绝对路径，或 package backendArtifacts path 是否相对 package 根目录正确。
 4. resource JSON 的 iid 是否是 org.abel.IAbelBackend/1.0。
 5. backendId 是否三处一致：MathSystem。
 6. symbol 是否三处一致：MathSystem.fast_add / MathSystem.sort。
 7. Abel backend block 的签名是否和 C++ lambda 签名一致。
-8. 若提示找不到 libabelcore.so，运行前设置 LD_LIBRARY_PATH=$ABEL_BUILD。
+8. 若提示找不到 libabelcore.so，优先检查 plugin BUILD_RPATH，临时设置 LD_LIBRARY_PATH=$ABEL_PREFIX/lib。
 ```
 
 `LD_LIBRARY_PATH` 兜底运行方式：
 
 ```bash
-LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" \
+LD_LIBRARY_PATH="$ABEL_PREFIX/lib:$LD_LIBRARY_PATH" \
   $ABEL_BIN run --resource resources/math_backend.json src/main.abel
 ```
 
@@ -1126,9 +1080,9 @@ LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" \
 1. 在 Abel 源码里写 backend Block，锁定函数签名。
 2. 在 C++ plugin 里继承 AbelBackendPluginBase。
 3. 用 bind("Backend.symbol", lambda) 注册实现。
-4. 用 backend/CMakeLists.txt 链接 Qt6::Core 和 Abel build 里的 libabelcore.so。
+4. 用 backend/CMakeLists.txt 链接 Abel::abelcore。
 5. 编译出 libxxx_backend.so。
-6. resource.json 写绝对 path，或把 .so 复制到 $ABEL_BUILD/plugins/。
+6. resource.json 写绝对 path，或在 abel.package.json 里写 backendArtifacts 并运行 abel build。
 7. 运行 $ABEL_BIN resources check resource.json。
 8. 运行 $ABEL_BIN run --resource resource.json your_file.abel。
 9. 若这是 Abel 本体新增能力，再给 resource / backend / interpreter 增加 QTest。
@@ -1199,7 +1153,7 @@ $ABEL remove some_dep .
 
 `abel run <project-dir>` 会读取 package graph；如果依赖包在 `backendArtifacts` 声明了 Qt plugin，根项目只要通过 `abel add path` 依赖它，运行时也会自动加载这个依赖 backend。若已经运行过 `abel build`，`run` 优先加载 `.abel/cache/backend/...` 下的缓存 artifact；若缓存不存在，则回退到依赖包声明的源 artifact 路径。lockfile 若已经过期，`abel check/run` 会提示先运行 `abel update` 或 `abel build`，避免悄悄使用旧依赖图。
 
-注意：这仍只是 v1 包管理引擎的早期闭环。registry、semver solver、download cache、backend artifact 自动构建、安装版 SDK 与版本化缓存失效仍是后续 v1 工作。
+注意：这仍只是 v1 包管理引擎的早期闭环。registry、semver solver、download cache、backend artifact 自动构建、安装版 SDK 成熟化与版本化缓存失效仍是后续 v1 工作。
 
 若项目需要 C++ backend，当前可以在根包或依赖包描述里写 `backendArtifacts`，让 `abel run <project-dir>` 自动加载 plugin，而不用在普通运行命令里手动传 `--resource`：
 

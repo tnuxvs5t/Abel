@@ -6,6 +6,9 @@ project(Abel
     LANGUAGES C CXX
 )
 
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -15,6 +18,8 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 6.11 REQUIRED COMPONENTS Core Test)
+
+get_filename_component(ABEL_QT_LIBRARY_DIR "${Qt6Core_DIR}/../.." ABSOLUTE)
 
 add_library(abelcore SHARED
     src/abelcore/source_span.h
@@ -53,7 +58,8 @@ add_library(abelcore SHARED
 
 target_include_directories(abelcore
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_link_libraries(abelcore
@@ -66,6 +72,12 @@ target_compile_definitions(abelcore
         ABELCORE_LIBRARY
 )
 
+set_target_properties(abelcore PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION 0
+    INSTALL_RPATH "${ABEL_QT_LIBRARY_DIR}"
+)
+
 add_executable(abel
     src/abelcli/main.cpp
 )
@@ -74,6 +86,10 @@ target_link_libraries(abel
     PRIVATE
         abelcore
         Qt6::Core
+)
+
+set_target_properties(abel PROPERTIES
+    INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR};${ABEL_QT_LIBRARY_DIR}"
 )
 
 add_library(math_backend MODULE
@@ -89,6 +105,41 @@ target_link_libraries(math_backend
 set_target_properties(math_backend PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
     OUTPUT_NAME math_backend
+)
+
+install(TARGETS abelcore abel
+    EXPORT AbelTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(DIRECTORY src/abelcore
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILES_MATCHING PATTERN "*.h"
+)
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/cmake/AbelConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AbelConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/cmake/AbelConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Abel
+)
+
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/cmake/AbelConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/cmake/AbelConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Abel
+)
+
+install(EXPORT AbelTargets
+    NAMESPACE Abel::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Abel
 )
 
 enable_testing()
@@ -185,3 +236,49 @@ target_link_libraries(abel_package_manifest_tests
 )
 
 add_test(NAME abel_package_manifest_tests COMMAND abel_package_manifest_tests)
+
+set(ABEL_SDK_TEST_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/sdk-test-install")
+set(ABEL_SDK_TEST_BUILD_DIR "${CMAKE_BINARY_DIR}/sdk-backend-fixture")
+
+add_test(NAME abel_sdk_install_tests
+    COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --prefix "${ABEL_SDK_TEST_INSTALL_PREFIX}"
+)
+set_tests_properties(abel_sdk_install_tests PROPERTIES
+    FIXTURES_SETUP abel_sdk_install_fixture
+)
+
+add_test(NAME abel_sdk_backend_configure_tests
+    COMMAND ${CMAKE_COMMAND}
+        -S "${CMAKE_CURRENT_SOURCE_DIR}/tests/sdk_backend"
+        -B "${ABEL_SDK_TEST_BUILD_DIR}"
+        -G Ninja
+        "-DAbel_DIR=${ABEL_SDK_TEST_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/cmake/Abel"
+        "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}"
+        "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        -DCMAKE_CXX_STANDARD=23
+)
+set_tests_properties(abel_sdk_backend_configure_tests PROPERTIES
+    FIXTURES_REQUIRED abel_sdk_install_fixture
+    FIXTURES_SETUP abel_sdk_configure_fixture
+)
+
+add_test(NAME abel_sdk_backend_build_tests
+    COMMAND ${CMAKE_COMMAND} --build "${ABEL_SDK_TEST_BUILD_DIR}"
+)
+set_tests_properties(abel_sdk_backend_build_tests PROPERTIES
+    FIXTURES_REQUIRED abel_sdk_configure_fixture
+    FIXTURES_SETUP abel_sdk_build_fixture
+)
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/sdk_backend/run_installed_sdk_fixture.cmake.in"
+    "${CMAKE_BINARY_DIR}/run_installed_sdk_fixture.cmake"
+    @ONLY
+)
+
+add_test(NAME abel_sdk_backend_run_tests
+    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_BINARY_DIR}/run_installed_sdk_fixture.cmake"
+)
+set_tests_properties(abel_sdk_backend_run_tests PROPERTIES
+    FIXTURES_REQUIRED abel_sdk_build_fixture
+)

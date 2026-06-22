@@ -1,0 +1,64 @@
+set(ABEL_BIN "@ABEL_SDK_TEST_INSTALL_PREFIX@/@CMAKE_INSTALL_BINDIR@/abel")
+set(PROJECT_DIR "@CMAKE_BINARY_DIR@/sdk-package-fixture")
+set(PLUGIN_PATH "@ABEL_SDK_TEST_BUILD_DIR@/plugins/libsdk_fixture_backend.so")
+set(EXPECTED_CACHE "${PROJECT_DIR}/.abel/cache/backend/sdk-app/SdkSystem/libsdk_fixture_backend.so")
+
+if (NOT EXISTS "${ABEL_BIN}")
+    message(FATAL_ERROR "installed abel CLI does not exist: ${ABEL_BIN}")
+endif()
+
+if (NOT EXISTS "${PLUGIN_PATH}")
+    message(FATAL_ERROR "SDK fixture plugin does not exist: ${PLUGIN_PATH}")
+endif()
+
+file(REMOVE_RECURSE "${PROJECT_DIR}")
+file(MAKE_DIRECTORY "${PROJECT_DIR}/src")
+
+file(WRITE "${PROJECT_DIR}/abel.package.json" [=[
+{
+  "name": "sdk-app",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "backendArtifacts": [
+    {
+      "backendId": "SdkSystem",
+      "path": "]=] "${PLUGIN_PATH}" [=[",
+      "symbols": ["add"]
+    }
+  ]
+}
+]=])
+
+file(WRITE "${PROJECT_DIR}/src/main.abel" [=[
+backend SdkSystem {
+    fn int add(int a, int b);
+}
+
+fn int main() {
+    return SdkSystem::add(3, 4);
+}
+]=])
+
+execute_process(
+    COMMAND "${ABEL_BIN}" build "${PROJECT_DIR}"
+    RESULT_VARIABLE build_result
+    OUTPUT_VARIABLE build_output
+    ERROR_VARIABLE build_error
+)
+if (NOT build_result EQUAL 0)
+    message(FATAL_ERROR "installed abel build failed:\n${build_output}\n${build_error}")
+endif()
+
+if (NOT EXISTS "${EXPECTED_CACHE}")
+    message(FATAL_ERROR "abel build did not cache SDK fixture backend at ${EXPECTED_CACHE}")
+endif()
+
+execute_process(
+    COMMAND "${ABEL_BIN}" run "${PROJECT_DIR}"
+    RESULT_VARIABLE run_result
+    OUTPUT_VARIABLE run_output
+    ERROR_VARIABLE run_error
+)
+if (NOT run_result EQUAL 7)
+    message(FATAL_ERROR "installed abel run expected exit 7, got ${run_result}:\n${run_output}\n${run_error}")
+endif()

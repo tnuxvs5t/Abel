@@ -632,47 +632,59 @@ my_abel_project/
 Codex 搭 backend 前必须先确认或发现这些路径：
 
 ```text
-ABEL_ROOT   Abel 仓库路径，例如 /home/you/Abel
-ABEL_BUILD  Abel build 路径，例如 /home/you/Abel/build
-ABEL_BIN    Abel CLI，例如 /home/you/Abel/build/abel
+ABEL_PREFIX 已安装 Abel SDK prefix，例如 /home/you/abel-sdk
+ABEL_BIN    Abel CLI，优先用 $ABEL_PREFIX/bin/abel
 QT_PREFIX   Qt prefix，例如 /home/tnuzy/Qt/6.11.1/gcc_64
 CMAKE       CMake，例如 /home/tnuzy/Qt/Tools/CMake/bin/cmake
 ```
 
-如果找不到 `ABEL_ROOT` / `ABEL_BIN`，不要编造 CMake，先问用户。
+如果找不到 `ABEL_PREFIX` / `ABEL_BIN`，不要编造 CMake，先问用户。
 
-### 15.1 Abel SDK v0 事实
+### 15.1 Abel SDK 事实
 
-Codex 必须知道：当前 Abel v0 没有正式安装版 SDK，也没有 `AbelConfig.cmake`。
+当前 Abel 已有安装版 SDK 第一片。
 
-当前可消费的是 build-tree SDK：
+安装命令：
+
+```bash
+$CMAKE --install /path/to/Abel/build --prefix "$ABEL_PREFIX"
+```
+
+安装后可消费：
 
 ```text
-headers:       $ABEL_ROOT/src
+headers:       $ABEL_PREFIX/include/abelcore/*.h
 include:       #include "abelcore/backend_plugin_base.h"
-core library:  $ABEL_BUILD/libabelcore.so
-CLI:           $ABEL_BUILD/abel
-Qt:            Qt6::Core，通过 CMAKE_PREFIX_PATH 指向 Qt prefix
+core library:  $ABEL_PREFIX/lib/libabelcore.so
+CLI:           $ABEL_PREFIX/bin/abel
+CMake package: $ABEL_PREFIX/lib/cmake/Abel/AbelConfig.cmake
+target:        Abel::abelcore
+Qt:            AbelConfig 会 find_dependency(Qt6 Core)，仍需 CMAKE_PREFIX_PATH 指向 Qt prefix
 ABI:           必须和 Abel 本体使用同一 Qt kit / compiler / C++23 配置
 ```
 
-不要生成：
+推荐生成：
 
 ```cmake
 find_package(Abel REQUIRED)
 target_link_libraries(x PRIVATE Abel::abelcore)
 ```
 
-因为当前仓库没有导出这个 CMake package。
-
-正确做法：
+不要再默认手写：
 
 ```cmake
 add_library(abelcore SHARED IMPORTED GLOBAL)
-set_target_properties(abelcore PROPERTIES
-    IMPORTED_LOCATION "${ABEL_BUILD}/libabelcore.so"
-    INTERFACE_INCLUDE_DIRECTORIES "${ABEL_ROOT}/src"
-)
+```
+
+这是旧 build-tree SDK 过渡做法。只有当用户明确没有安装 SDK、但手头有 Abel 源码树和 build 目录时，才可作为临时 fallback 使用。
+
+当前 SDK 仍不是稳定跨 ABI 发行包：
+
+```text
+不承诺跨 Qt 版本 ABI。
+不承诺跨编译器 ABI。
+不包含 registry/semver/download。
+backend binder 类型矩阵仍有限。
 ```
 
 当前 backend binder 稳定可用参数：
@@ -782,23 +794,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 find_package(Qt6 6.11 REQUIRED COMPONENTS Core)
-
-set(ABEL_ROOT "" CACHE PATH "Path to Abel source repository")
-set(ABEL_BUILD "" CACHE PATH "Path to Abel build directory")
-
-if (NOT ABEL_ROOT)
-    message(FATAL_ERROR "Set -DABEL_ROOT=/path/to/Abel")
-endif()
-
-if (NOT ABEL_BUILD)
-    message(FATAL_ERROR "Set -DABEL_BUILD=/path/to/Abel/build")
-endif()
-
-add_library(abelcore SHARED IMPORTED GLOBAL)
-set_target_properties(abelcore PROPERTIES
-    IMPORTED_LOCATION "${ABEL_BUILD}/libabelcore.so"
-    INTERFACE_INCLUDE_DIRECTORIES "${ABEL_ROOT}/src"
-)
+find_package(Abel REQUIRED)
 
 add_library(math_backend MODULE
     math_backend.cpp
@@ -806,14 +802,13 @@ add_library(math_backend MODULE
 
 target_link_libraries(math_backend
     PRIVATE
-        abelcore
-        Qt6::Core
+        Abel::abelcore
 )
 
 set_target_properties(math_backend PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
     OUTPUT_NAME math_backend
-    BUILD_RPATH "${ABEL_BUILD}"
+    BUILD_RPATH "$<TARGET_FILE_DIR:Abel::abelcore>"
 )
 ```
 
@@ -855,15 +850,10 @@ JSON:     MathSystem.fast_add
 例如 `"path": "plugins/libmath_backend.so"` 实际指向：
 
 ```text
-$ABEL_BUILD/plugins/libmath_backend.so
+$ABEL_PREFIX/bin/plugins/libmath_backend.so
 ```
 
-这种情况下必须把插件复制过去：
-
-```bash
-mkdir -p "$ABEL_BUILD/plugins"
-cp build/backend/plugins/libmath_backend.so "$ABEL_BUILD/plugins/"
-```
+所以普通用户工程不要依赖 ResourceNode 相对路径。推荐在 `abel.package.json` 的 `backendArtifacts` 写相对 package 根目录的 path，然后运行 `$ABEL_BIN build .`，由 Abel 复制到 `.abel/cache/backend/...`。
 
 Codex 操作 backend 的完整步骤：
 
@@ -878,15 +868,14 @@ Codex 操作 backend 的完整步骤：
 8. 运行 $ABEL_BIN build .，把 backend artifact 复制进 .abel/cache/backend。
 9. 运行 $ABEL_BIN check .。
 10. 运行 $ABEL_BIN run .。
-11. 如果动态库找不到 libabelcore.so，用 LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" 兜底。
+11. 如果动态库找不到 libabelcore.so，优先检查 plugin BUILD_RPATH；临时兜底可用 LD_LIBRARY_PATH="$ABEL_PREFIX/lib:$LD_LIBRARY_PATH"。
 ```
 
 配置 backend：
 
 ```bash
 $CMAKE -S backend -B build/backend -G Ninja \
-  -DABEL_ROOT="$ABEL_ROOT" \
-  -DABEL_BUILD="$ABEL_BUILD" \
+  -DAbel_DIR="$ABEL_PREFIX/lib/cmake/Abel" \
   -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
   -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
   -DCMAKE_CXX_STANDARD=23
@@ -918,7 +907,7 @@ $ABEL_BIN run .
 若需要动态库搜索路径兜底：
 
 ```bash
-LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" \
+LD_LIBRARY_PATH="$ABEL_PREFIX/lib:$LD_LIBRARY_PATH" \
   $ABEL_BIN run .
 ```
 
@@ -933,7 +922,7 @@ backend 排错顺序：
 6. backendId 是否是 MathSystem。
 7. Abel 声明、C++ bind、JSON symbols 是否一致。
 8. Abel 签名和 C++ lambda 参数/返回是否一致。
-9. 运行时是否需要 LD_LIBRARY_PATH 指向 ABEL_BUILD。
+9. 运行时是否需要 LD_LIBRARY_PATH 指向 ABEL_PREFIX/lib。
 ```
 
 ## 16. 验证命令
