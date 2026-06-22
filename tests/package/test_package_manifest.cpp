@@ -299,6 +299,129 @@ private slots:
         QVERIFY(lockDoc.isObject());
         QCOMPARE(lockDoc.object().value(QStringLiteral("packages")).toArray().size(), 0);
     }
+
+    void packageGraphCollectsDependencyBackendArtifactsFromLockfile()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("dep/plugins")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/plugins/libdep_backend.so")),
+                  QStringLiteral("placeholder"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.0",
+                      "entry": "src/main.abel",
+                      "backendArtifacts": [
+                          {
+                              "backendId": "DepSystem",
+                              "path": "plugins/libdep_backend.so",
+                              "symbols": ["ping"]
+                          }
+                      ]
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep"}
+                      ]
+                  })"));
+
+        auto graph = abel::updatePackageGraph(root.absoluteFilePath(QStringLiteral("app")));
+        for (const auto& d : graph.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(graph.diagnostics.isEmpty());
+        QCOMPARE(graph.root.name, QStringLiteral("app"));
+        QCOMPARE(graph.entries.size(), 1);
+        QCOMPARE(graph.dependencies.size(), 1);
+        QCOMPARE(graph.dependencies.front().name, QStringLiteral("dep"));
+        QCOMPARE(graph.backendArtifacts.size(), 1);
+        QCOMPARE(graph.backendArtifacts.front().packageName, QStringLiteral("dep"));
+        QCOMPARE(graph.backendArtifacts.front().node.backendId, QStringLiteral("DepSystem"));
+        QCOMPARE(graph.backendArtifacts.front().node.symbols.front(), QStringLiteral("DepSystem.ping"));
+        QVERIFY(QFileInfo(graph.lockFile).isFile());
+
+        auto fromExistingLock = abel::packageGraphFromDirectory(root.absoluteFilePath(QStringLiteral("app")));
+        for (const auto& d : fromExistingLock.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(fromExistingLock.diagnostics.isEmpty());
+        QCOMPARE(fromExistingLock.entries.size(), 1);
+        QCOMPARE(fromExistingLock.backendArtifacts.size(), 1);
+        QCOMPARE(fromExistingLock.backendArtifacts.front().packageRoot,
+                 root.absoluteFilePath(QStringLiteral("dep")));
+    }
+
+    void packageGraphRejectsStaleLockfile()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("other/src")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.0",
+                      "entry": "src/main.abel"
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("other/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("other/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "other",
+                      "version": "0.3.0",
+                      "entry": "src/main.abel"
+                  })"));
+        const QString appManifest = root.absoluteFilePath(QStringLiteral("app/abel.package.json"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(appManifest,
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep"}
+                      ]
+                  })"));
+
+        auto graph = abel::updatePackageGraph(root.absoluteFilePath(QStringLiteral("app")));
+        QVERIFY(graph.diagnostics.isEmpty());
+        QCOMPARE(graph.entries.size(), 1);
+        QCOMPARE(graph.entries.front().name, QStringLiteral("dep"));
+
+        writeText(appManifest,
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "other", "kind": "path", "path": "../other"}
+                      ]
+                  })"));
+
+        auto stale = abel::packageGraphFromDirectory(root.absoluteFilePath(QStringLiteral("app")));
+        QVERIFY(!stale.diagnostics.isEmpty());
+        bool sawStale = false;
+        for (const auto& d : stale.diagnostics)
+            sawStale = sawStale || d.message.contains(QStringLiteral("stale"));
+        QVERIFY(sawStale);
+    }
 };
 
 QTEST_MAIN(AbelPackageManifestTests)

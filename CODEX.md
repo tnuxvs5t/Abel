@@ -22,7 +22,7 @@
 
 不要默认修改 Abel 编译器/解释器源码。
 不要把用户项目扩成大型框架。
-不要幻想 Abel 已经有 registry、semver solver、download/cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、lockfile、add/remove/update/build 做成早期闭环。
+不要幻想 Abel 已经有 registry、semver solver、download/cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、lockfile、package graph consumption、add/remove/update/build 做成早期闭环。
 
 当前 Abel 的正确定位：
 
@@ -35,6 +35,7 @@ C/C++ 值模型
 + backend block 调 Qt/C++ plugin
 + abel.package.json 项目入口骨架
 + 本地 path dependency + abel.lock.json
++ package graph 消费依赖 backendArtifacts
 + abel add/remove/update/build
 + abel check / abel run
 ```

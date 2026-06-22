@@ -275,6 +275,50 @@ QJsonDocument packageLockToJson(const PackageLockResult& lock)
     return QJsonDocument(root);
 }
 
+PackageLockEntry lockEntryFromJson(const QJsonObject& object,
+                                   QList<Diagnostic>& diagnostics,
+                                   const SourceSpan& span)
+{
+    PackageLockEntry entry;
+    entry.name = requiredString(object, QStringLiteral("name"), diagnostics, span);
+    entry.version = requiredString(object, QStringLiteral("version"), diagnostics, span);
+    entry.kind = requiredString(object, QStringLiteral("kind"), diagnostics, span);
+    entry.source = requiredString(object, QStringLiteral("source"), diagnostics, span);
+    entry.resolvedPath = requiredString(object, QStringLiteral("resolvedPath"), diagnostics, span);
+    return entry;
+}
+
+void appendPackageArtifacts(const PackageManifest& package, PackageGraphResult& graph)
+{
+    for (const ResourceNode& node : package.backendArtifacts) {
+        PackageResolvedResource resource;
+        resource.packageName = package.name;
+        resource.packageRoot = package.rootDir;
+        resource.node = node;
+        graph.backendArtifacts.push_back(resource);
+    }
+}
+
+bool sameLockEntry(const PackageLockEntry& a, const PackageLockEntry& b)
+{
+    return a.name == b.name
+        && a.version == b.version
+        && a.kind == b.kind
+        && a.source == b.source
+        && absolutePathFrom(QString(), a.resolvedPath) == absolutePathFrom(QString(), b.resolvedPath);
+}
+
+bool sameLockEntries(const QList<PackageLockEntry>& a, const QList<PackageLockEntry>& b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (qsizetype i = 0; i < a.size(); ++i) {
+        if (!sameLockEntry(a[i], b[i]))
+            return false;
+    }
+    return true;
+}
+
 bool readManifestObjectForUpdate(const QString& dir,
                                  QJsonObject& object,
                                  QString& manifestFile,
@@ -479,6 +523,165 @@ PackageLockResult updatePackageLock(const QString& dir)
         addPackageError(result.diagnostics, QStringLiteral("failed to write lockfile '%1'").arg(result.lockFile), span);
     }
     return result;
+}
+
+PackageLockResult packageLockFromFile(const QString& lockFile)
+{
+    PackageLockResult result;
+    result.lockFile = QFileInfo(lockFile).absoluteFilePath();
+    QFile file(lockFile);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        SourceSpan span;
+        span.file = result.lockFile;
+        addPackageError(result.diagnostics, QStringLiteral("cannot open package lockfile '%1'").arg(result.lockFile), span);
+        return result;
+    }
+
+    SourceSpan span;
+    span.file = result.lockFile;
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        addPackageError(result.diagnostics, QStringLiteral("invalid package lockfile JSON: %1").arg(parseError.errorString()), span);
+        return result;
+    }
+    if (!doc.isObject()) {
+        addPackageError(result.diagnostics, QStringLiteral("package lockfile JSON must be an object"), span);
+        return result;
+    }
+
+    const QJsonObject object = doc.object();
+    const QJsonValue rootValue = object.value(QStringLiteral("root"));
+    if (!rootValue.isObject()) {
+        addPackageError(result.diagnostics, QStringLiteral("package lockfile requires object field 'root'"), span);
+    } else {
+        const QJsonObject root = rootValue.toObject();
+        result.rootName = requiredString(root, QStringLiteral("name"), result.diagnostics, span);
+        result.rootVersion = requiredString(root, QStringLiteral("version"), result.diagnostics, span);
+        result.rootDir = requiredString(root, QStringLiteral("path"), result.diagnostics, span);
+    }
+
+    const QJsonValue packagesValue = object.value(QStringLiteral("packages"));
+    if (!packagesValue.isArray()) {
+        addPackageError(result.diagnostics, QStringLiteral("package lockfile requires array field 'packages'"), span);
+    } else {
+        for (const QJsonValue& raw : packagesValue.toArray()) {
+            if (!raw.isObject()) {
+                addPackageError(result.diagnostics, QStringLiteral("package lockfile package entry must be an object"), span);
+                continue;
+            }
+            result.entries.push_back(lockEntryFromJson(raw.toObject(), result.diagnostics, span));
+        }
+    }
+
+    return result;
+}
+
+PackageGraphResult packageGraphFromDirectory(const QString& dir)
+{
+    PackageGraphResult graph;
+    auto parsed = packageManifestFromDirectory(dir);
+    graph.diagnostics.append(parsed.diagnostics);
+    if (!parsed.ok())
+        return graph;
+    graph.root = parsed.package;
+    graph.lockFile = QDir(graph.root.rootDir).absoluteFilePath(packageLockFileName());
+
+    PackageLockResult lock;
+    const bool usedLockFile = QFileInfo(graph.lockFile).isFile();
+    if (usedLockFile) {
+        lock = packageLockFromFile(graph.lockFile);
+    } else {
+        lock = resolvePackageLock(graph.root.rootDir);
+        lock.lockFile = graph.lockFile;
+    }
+    graph.diagnostics.append(lock.diagnostics);
+    if (!lock.ok())
+        return graph;
+    graph.entries = lock.entries;
+
+    if (usedLockFile) {
+        const PackageLockResult current = resolvePackageLock(graph.root.rootDir);
+        graph.diagnostics.append(current.diagnostics);
+        if (!current.ok())
+            return graph;
+        if (!sameLockEntries(current.entries, lock.entries)) {
+            SourceSpan span;
+            span.file = graph.lockFile;
+            addPackageError(graph.diagnostics,
+                            QStringLiteral("package lockfile is stale; run 'abel update' or 'abel build'"),
+                            span);
+            return graph;
+        }
+    }
+
+    appendPackageArtifacts(graph.root, graph);
+
+    const QString rootKey = absolutePathFrom(QString(), graph.root.rootDir);
+    if (!lock.rootDir.isEmpty() && absolutePathFrom(QString(), lock.rootDir) != rootKey) {
+        SourceSpan span;
+        span.file = graph.lockFile;
+        addPackageError(graph.diagnostics,
+                        QStringLiteral("lockfile root path '%1' does not match package root '%2'")
+                            .arg(lock.rootDir, graph.root.rootDir),
+                        span);
+        return graph;
+    }
+    if (!lock.rootName.isEmpty() && lock.rootName != graph.root.name) {
+        SourceSpan span;
+        span.file = graph.lockFile;
+        addPackageError(graph.diagnostics,
+                        QStringLiteral("lockfile root package '%1' does not match manifest package '%2'")
+                            .arg(lock.rootName, graph.root.name),
+                        span);
+        return graph;
+    }
+
+    for (const PackageLockEntry& entry : lock.entries) {
+        SourceSpan span;
+        span.file = graph.lockFile;
+        if (entry.kind != QStringLiteral("path")) {
+            addPackageError(graph.diagnostics,
+                            QStringLiteral("lockfile package '%1' kind '%2' is not supported yet")
+                                .arg(entry.name, entry.kind),
+                            span);
+            continue;
+        }
+
+        auto dependency = packageManifestFromDirectory(entry.resolvedPath);
+        graph.diagnostics.append(dependency.diagnostics);
+        if (!dependency.ok())
+            continue;
+        if (dependency.package.name != entry.name) {
+            addPackageError(graph.diagnostics,
+                            QStringLiteral("lockfile package name mismatch: lock has '%1' but package is '%2'")
+                                .arg(entry.name, dependency.package.name),
+                            span);
+            continue;
+        }
+        if (!entry.version.isEmpty() && dependency.package.version != entry.version) {
+            addPackageError(graph.diagnostics,
+                            QStringLiteral("lockfile package version mismatch for '%1': lock has '%2' but package is '%3'")
+                                .arg(entry.name, entry.version, dependency.package.version),
+                            span);
+            continue;
+        }
+        graph.dependencies.push_back(dependency.package);
+        appendPackageArtifacts(dependency.package, graph);
+    }
+
+    return graph;
+}
+
+PackageGraphResult updatePackageGraph(const QString& dir)
+{
+    PackageGraphResult graph;
+    const PackageLockResult lock = updatePackageLock(dir);
+    graph.diagnostics.append(lock.diagnostics);
+    if (!lock.ok())
+        return graph;
+    graph = packageGraphFromDirectory(lock.rootDir);
+    return graph;
 }
 
 PackageDependencyChangeResult addPathPackageDependency(const QString& dir, const QString& dependencyDir)

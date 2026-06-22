@@ -41,7 +41,7 @@ struct CliInput {
     QString sourceFile;
     QString sourceText;
     QString packageRoot;
-    QList<abel::ResourceNode> packageResources;
+    QList<abel::PackageResolvedResource> packageResources;
     QList<abel::Diagnostic> diagnostics;
     bool isPackage = false;
 };
@@ -64,13 +64,13 @@ static CliInput readCliInput(const QString& path)
 
     if (info.isDir()) {
         input.isPackage = true;
-        auto package = abel::packageManifestFromDirectory(path);
-        input.diagnostics.append(package.diagnostics);
-        if (!package.diagnostics.isEmpty())
+        auto graph = abel::packageGraphFromDirectory(path);
+        input.diagnostics.append(graph.diagnostics);
+        if (!graph.ok())
             return input;
-        input.sourceFile = package.package.entryFilePath();
-        input.packageRoot = package.package.rootDir;
-        input.packageResources = package.package.backendArtifacts;
+        input.sourceFile = graph.root.entryFilePath();
+        input.packageRoot = graph.root.rootDir;
+        input.packageResources = graph.backendArtifacts;
         filePath = input.sourceFile;
     } else {
         input.sourceFile = info.absoluteFilePath();
@@ -111,18 +111,18 @@ static QList<abel::Diagnostic> checkSourceText(const QString& sourceFile, const 
     return diagnostics;
 }
 
-static QList<abel::Diagnostic> checkPackageBackendArtifacts(const abel::PackageManifest& package)
+static QList<abel::Diagnostic> checkPackageBackendArtifacts(const QList<abel::PackageResolvedResource>& resources)
 {
     QList<abel::Diagnostic> diagnostics;
-    for (const abel::ResourceNode& resource : package.backendArtifacts) {
-        QFileInfo info(resource.path);
+    for (const abel::PackageResolvedResource& resource : resources) {
+        QFileInfo info(resource.node.path);
         if (info.isRelative())
-            info = QFileInfo(QDir(package.rootDir).absoluteFilePath(resource.path));
+            info = QFileInfo(QDir(resource.packageRoot).absoluteFilePath(resource.node.path));
         if (!info.isFile()) {
             diagnostics.push_back(makeCliDiagnostic(QStringLiteral("E0013"),
-                                                    QStringLiteral("backend artifact '%1' does not exist")
-                                                        .arg(resource.path),
-                                                    package.filePath));
+                                                    QStringLiteral("backend artifact '%1' from package '%2' does not exist")
+                                                        .arg(resource.node.path, resource.packageName),
+                                                    QDir(resource.packageRoot).absoluteFilePath(abel::packageManifestFileName())));
         }
     }
     return diagnostics;
@@ -176,43 +176,37 @@ int main(int argc, char** argv)
             return 2;
         }
         const QString projectDir = args.size() == 2 ? args[1] : QStringLiteral(".");
-        auto package = abel::packageManifestFromDirectory(projectDir);
-        for (const auto& d : package.diagnostics)
+        auto graph = abel::updatePackageGraph(projectDir);
+        for (const auto& d : graph.diagnostics)
             printDiagnostic(d);
-        if (!package.ok())
+        if (!graph.ok())
             return 1;
 
-        auto lock = abel::updatePackageLock(package.package.rootDir);
-        for (const auto& d : lock.diagnostics)
-            printDiagnostic(d);
-        if (!lock.ok())
-            return 1;
-
-        const QList<abel::Diagnostic> resourceDiagnostics = checkPackageBackendArtifacts(package.package);
+        const QList<abel::Diagnostic> resourceDiagnostics = checkPackageBackendArtifacts(graph.backendArtifacts);
         for (const auto& d : resourceDiagnostics)
             printDiagnostic(d);
         if (!resourceDiagnostics.isEmpty())
             return 1;
 
-        QFile file(package.package.entryFilePath());
+        QFile file(graph.root.entryFilePath());
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             printDiagnostic(makeCliDiagnostic(QStringLiteral("E0004"),
-                                              QStringLiteral("cannot open '%1'").arg(package.package.entryFilePath()),
-                                              package.package.entryFilePath()));
+                                              QStringLiteral("cannot open '%1'").arg(graph.root.entryFilePath()),
+                                              graph.root.entryFilePath()));
             return 1;
         }
-        const QList<abel::Diagnostic> diagnostics = checkSourceText(package.package.entryFilePath(),
+        const QList<abel::Diagnostic> diagnostics = checkSourceText(graph.root.entryFilePath(),
                                                                     QString::fromUtf8(file.readAll()));
         for (const auto& d : diagnostics)
             printDiagnostic(d);
         if (!diagnostics.isEmpty())
             return 1;
 
-        out << "built " << package.package.name << Qt::endl;
-        out << "entry " << package.package.entryFilePath() << Qt::endl;
-        out << "wrote " << lock.lockFile << Qt::endl;
-        out << "locked " << lock.entries.size() << " package(s)" << Qt::endl;
-        out << "checked " << package.package.backendArtifacts.size() << " backend artifact(s)" << Qt::endl;
+        out << "built " << graph.root.name << Qt::endl;
+        out << "entry " << graph.root.entryFilePath() << Qt::endl;
+        out << "wrote " << graph.lockFile << Qt::endl;
+        out << "locked " << graph.entries.size() << " package(s)" << Qt::endl;
+        out << "checked " << graph.backendArtifacts.size() << " backend artifact(s)" << Qt::endl;
         return 0;
     }
 
@@ -350,10 +344,10 @@ int main(int argc, char** argv)
             std::vector<abel::ResourceNodeLoadResult> loadedResources;
             const QStringList resourceFiles = parser.values(resourceOption);
             loadedResources.reserve(static_cast<size_t>(resourceFiles.size() + input.packageResources.size()));
-            for (const auto& resourceNode : input.packageResources) {
-                auto loaded = abel::loadBackendResourceNode(resourceNode,
+            for (const auto& packageResource : input.packageResources) {
+                auto loaded = abel::loadBackendResourceNode(packageResource.node,
                                                             backendRegistry,
-                                                            input.packageRoot);
+                                                            packageResource.packageRoot);
                 for (const auto& d : loaded.diagnostics)
                     printDiagnostic(d);
                 if (!loaded.ok())

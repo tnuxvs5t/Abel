@@ -80,6 +80,23 @@ struct PackageDependencyChangeResult {
     bool ok() const { return diagnostics.isEmpty(); }
 };
 
+struct PackageResolvedResource {
+    QString packageName;
+    QString packageRoot;
+    ResourceNode node;
+};
+
+struct PackageGraphResult {
+    PackageManifest root;
+    QString lockFile;
+    QList<PackageLockEntry> entries;
+    QList<PackageManifest> dependencies;
+    QList<PackageResolvedResource> backendArtifacts;
+    QList<Diagnostic> diagnostics;
+
+    bool ok() const { return diagnostics.isEmpty(); }
+};
+
 QString packageManifestFileName();
 QString packageLockFileName();
 bool isPackageDirectory(const QString& path);
@@ -87,6 +104,9 @@ bool isPackageDirectory(const QString& path);
 PackageInitResult initPackageProject(const PackageInitOptions& options);
 PackageLockResult resolvePackageLock(const QString& dir);
 PackageLockResult updatePackageLock(const QString& dir);
+PackageLockResult packageLockFromFile(const QString& lockFile);
+PackageGraphResult packageGraphFromDirectory(const QString& dir);
+PackageGraphResult updatePackageGraph(const QString& dir);
 PackageDependencyChangeResult addPathPackageDependency(const QString& dir, const QString& dependencyDir);
 PackageDependencyChangeResult removePackageDependency(const QString& dir, const QString& dependencyName);
 PackageManifestParseResult packageManifestFromJson(const QJsonObject& object,
