@@ -18,6 +18,8 @@ namespace {
 
 constexpr auto kPackageManifestFileName = "abel.package.json";
 constexpr auto kPackageLockFileName = "abel.lock.json";
+constexpr auto kPackageCacheDirName = ".abel";
+constexpr auto kPackageCacheBackendDir = "cache/backend";
 
 void addPackageError(QList<Diagnostic>& diagnostics, const QString& message, const SourceSpan& span)
 {
@@ -90,6 +92,43 @@ QString absolutePathFrom(const QString& rootDir, const QString& path)
         info = QFileInfo(QDir(rootDir).absoluteFilePath(path));
     const QString canonical = info.canonicalFilePath();
     return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
+}
+
+QString sanitizeCacheSegment(QString value)
+{
+    value = value.trimmed();
+    if (value.isEmpty())
+        return QStringLiteral("_");
+    QString out;
+    out.reserve(value.size());
+    for (const QChar ch : value) {
+        if (ch.isLetterOrNumber() || ch == QLatin1Char('.') || ch == QLatin1Char('_') || ch == QLatin1Char('-'))
+            out.push_back(ch);
+        else
+            out.push_back(QLatin1Char('_'));
+    }
+    return out.isEmpty() ? QStringLiteral("_") : out;
+}
+
+QString backendArtifactSourcePath(const PackageResolvedResource& resource)
+{
+    return absolutePathFrom(resource.packageRoot, resource.node.path);
+}
+
+QString backendArtifactCachedPath(const QString& rootDir, const PackageResolvedResource& resource)
+{
+    QString fileName = QFileInfo(resource.node.path).fileName();
+    if (fileName.isEmpty())
+        fileName = QFileInfo(backendArtifactSourcePath(resource)).fileName();
+    if (fileName.isEmpty())
+        fileName = QStringLiteral("backend");
+
+    QDir cacheDir(packageBackendCacheDir(rootDir));
+    const QString packagePart = sanitizeCacheSegment(resource.packageName);
+    const QString backendPart = sanitizeCacheSegment(resource.node.backendId);
+    return cacheDir.absoluteFilePath(packagePart + QStringLiteral("/")
+                                     + backendPart + QStringLiteral("/")
+                                     + fileName);
 }
 
 PackageDependency parseDependency(const QJsonObject& object,
@@ -407,6 +446,19 @@ QString packageLockFileName()
     return QString::fromLatin1(kPackageLockFileName);
 }
 
+QString packageCacheRoot(const QString& rootDir)
+{
+    return QDir(QFileInfo(rootDir).absoluteFilePath()).absoluteFilePath(QString::fromLatin1(kPackageCacheDirName)
+                                                                       + QStringLiteral("/cache"));
+}
+
+QString packageBackendCacheDir(const QString& rootDir)
+{
+    return QDir(QFileInfo(rootDir).absoluteFilePath()).absoluteFilePath(QString::fromLatin1(kPackageCacheDirName)
+                                                                       + QStringLiteral("/")
+                                                                       + QString::fromLatin1(kPackageCacheBackendDir));
+}
+
 bool isPackageDirectory(const QString& path)
 {
     const QFileInfo info(path);
@@ -682,6 +734,117 @@ PackageGraphResult updatePackageGraph(const QString& dir)
         return graph;
     graph = packageGraphFromDirectory(lock.rootDir);
     return graph;
+}
+
+PackageBackendCacheResult updatePackageBackendCache(const PackageGraphResult& graph)
+{
+    PackageBackendCacheResult result;
+    result.rootDir = graph.root.rootDir;
+    result.cacheDir = packageBackendCacheDir(result.rootDir);
+    result.diagnostics.append(graph.diagnostics);
+    if (!graph.ok())
+        return result;
+
+    if (graph.backendArtifacts.isEmpty())
+        return result;
+
+    if (!QDir().mkpath(result.cacheDir)) {
+        SourceSpan span;
+        span.file = result.cacheDir;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("cannot create backend artifact cache directory '%1'").arg(result.cacheDir),
+                        span);
+        return result;
+    }
+
+    for (const PackageResolvedResource& resource : graph.backendArtifacts) {
+        const QString sourcePath = backendArtifactSourcePath(resource);
+        const QFileInfo sourceInfo(sourcePath);
+        SourceSpan span;
+        span.file = QDir(resource.packageRoot).absoluteFilePath(packageManifestFileName());
+        if (!sourceInfo.isFile()) {
+            addPackageError(result.diagnostics,
+                            QStringLiteral("backend artifact '%1' from package '%2' does not exist")
+                                .arg(resource.node.path, resource.packageName),
+                            span);
+            continue;
+        }
+
+        const QString cachedPath = backendArtifactCachedPath(result.rootDir, resource);
+        const QFileInfo cachedInfo(cachedPath);
+        if (!QDir().mkpath(cachedInfo.dir().absolutePath())) {
+            SourceSpan cacheSpan;
+            cacheSpan.file = cachedInfo.dir().absolutePath();
+            addPackageError(result.diagnostics,
+                            QStringLiteral("cannot create backend artifact cache directory '%1'")
+                                .arg(cachedInfo.dir().absolutePath()),
+                            cacheSpan);
+            continue;
+        }
+
+        const QString canonicalSource = sourceInfo.canonicalFilePath().isEmpty()
+            ? sourceInfo.absoluteFilePath()
+            : sourceInfo.canonicalFilePath();
+        const QString canonicalCache = cachedInfo.canonicalFilePath().isEmpty()
+            ? cachedInfo.absoluteFilePath()
+            : cachedInfo.canonicalFilePath();
+
+        if (canonicalSource != canonicalCache) {
+            if (QFileInfo::exists(cachedPath) && !QFile::remove(cachedPath)) {
+                SourceSpan cacheSpan;
+                cacheSpan.file = cachedPath;
+                addPackageError(result.diagnostics,
+                                QStringLiteral("cannot replace cached backend artifact '%1'").arg(cachedPath),
+                                cacheSpan);
+                continue;
+            }
+            if (!QFile::copy(sourcePath, cachedPath)) {
+                SourceSpan cacheSpan;
+                cacheSpan.file = cachedPath;
+                addPackageError(result.diagnostics,
+                                QStringLiteral("cannot copy backend artifact '%1' to cache '%2'")
+                                    .arg(sourcePath, cachedPath),
+                                cacheSpan);
+                continue;
+            }
+        }
+
+        PackageCachedResource cached;
+        cached.packageName = resource.packageName;
+        cached.packageRoot = resource.packageRoot;
+        cached.sourcePath = sourcePath;
+        cached.cachedPath = cachedPath;
+        cached.node = resource.node;
+        cached.node.path = cachedPath;
+        cached.node.state = ResourceNodeState::Unloaded;
+        cached.node.lastError.clear();
+        result.resources.push_back(cached);
+    }
+
+    return result;
+}
+
+QList<PackageResolvedResource> cachedPackageBackendArtifacts(const PackageGraphResult& graph)
+{
+    QList<PackageResolvedResource> resources;
+    resources.reserve(graph.backendArtifacts.size());
+    if (graph.root.rootDir.isEmpty()) {
+        resources = graph.backendArtifacts;
+        return resources;
+    }
+
+    for (const PackageResolvedResource& resource : graph.backendArtifacts) {
+        PackageResolvedResource resolved = resource;
+        const QString cachedPath = backendArtifactCachedPath(graph.root.rootDir, resource);
+        if (QFileInfo(cachedPath).isFile()) {
+            resolved.packageRoot = graph.root.rootDir;
+            resolved.node.path = cachedPath;
+            resolved.node.state = ResourceNodeState::Unloaded;
+            resolved.node.lastError.clear();
+        }
+        resources.push_back(resolved);
+    }
+    return resources;
 }
 
 PackageDependencyChangeResult addPathPackageDependency(const QString& dir, const QString& dependencyDir)

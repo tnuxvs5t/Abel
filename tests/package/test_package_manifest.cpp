@@ -362,6 +362,123 @@ private slots:
                  root.absoluteFilePath(QStringLiteral("dep")));
     }
 
+    void backendCacheCopiesDependencyArtifacts()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("dep/plugins")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/plugins/libdep_backend.so")),
+                  QStringLiteral("dep-binary"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.0",
+                      "entry": "src/main.abel",
+                      "backendArtifacts": [
+                          {
+                              "backendId": "DepSystem",
+                              "path": "plugins/libdep_backend.so",
+                              "symbols": ["ping"]
+                          }
+                      ]
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep"}
+                      ]
+                  })"));
+
+        const QString appRoot = root.absoluteFilePath(QStringLiteral("app"));
+        auto graph = abel::updatePackageGraph(appRoot);
+        for (const auto& d : graph.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(graph.diagnostics.isEmpty());
+
+        auto cache = abel::updatePackageBackendCache(graph);
+        for (const auto& d : cache.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(cache.diagnostics.isEmpty());
+        QCOMPARE(cache.rootDir, appRoot);
+        QCOMPARE(cache.cacheDir, abel::packageBackendCacheDir(appRoot));
+        QCOMPARE(cache.resources.size(), 1);
+
+        const QString expectedCachedPath = QDir(appRoot).absoluteFilePath(
+            QStringLiteral(".abel/cache/backend/dep/DepSystem/libdep_backend.so"));
+        QCOMPARE(cache.resources.front().packageName, QStringLiteral("dep"));
+        QCOMPARE(cache.resources.front().cachedPath, expectedCachedPath);
+        QCOMPARE(cache.resources.front().node.path, expectedCachedPath);
+        QVERIFY(QFileInfo(expectedCachedPath).isFile());
+
+        QFile copied(expectedCachedPath);
+        QVERIFY(copied.open(QIODevice::ReadOnly | QIODevice::Text));
+        QCOMPARE(QString::fromUtf8(copied.readAll()), QStringLiteral("dep-binary"));
+
+        const QList<abel::PackageResolvedResource> runResources = abel::cachedPackageBackendArtifacts(graph);
+        QCOMPARE(runResources.size(), 1);
+        QCOMPARE(runResources.front().packageRoot, appRoot);
+        QCOMPARE(runResources.front().node.path, expectedCachedPath);
+    }
+
+    void backendCacheDiagnosesMissingArtifacts()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.0",
+                      "entry": "src/main.abel",
+                      "backendArtifacts": [
+                          {
+                              "backendId": "DepSystem",
+                              "path": "plugins/missing_backend.so",
+                              "symbols": ["ping"]
+                          }
+                      ]
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep"}
+                      ]
+                  })"));
+
+        auto graph = abel::updatePackageGraph(root.absoluteFilePath(QStringLiteral("app")));
+        QVERIFY(graph.diagnostics.isEmpty());
+        QCOMPARE(graph.backendArtifacts.size(), 1);
+
+        auto cache = abel::updatePackageBackendCache(graph);
+        QVERIFY(!cache.diagnostics.isEmpty());
+        QCOMPARE(cache.resources.size(), 0);
+        bool sawMissing = false;
+        for (const auto& d : cache.diagnostics)
+            sawMissing = sawMissing || d.message.contains(QStringLiteral("does not exist"));
+        QVERIFY(sawMissing);
+    }
+
     void packageGraphRejectsStaleLockfile()
     {
         QTemporaryDir dir;

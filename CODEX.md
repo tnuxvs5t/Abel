@@ -22,7 +22,7 @@
 
 不要默认修改 Abel 编译器/解释器源码。
 不要把用户项目扩成大型框架。
-不要幻想 Abel 已经有 registry、semver solver、download/cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、lockfile、package graph consumption、add/remove/update/build 做成早期闭环。
+不要幻想 Abel 已经有 registry、semver solver、远程 download cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、lockfile、package graph consumption、backend artifact 项目缓存、add/remove/update/build 做成早期闭环。
 
 当前 Abel 的正确定位：
 
@@ -36,6 +36,7 @@ C/C++ 值模型
 + abel.package.json 项目入口骨架
 + 本地 path dependency + abel.lock.json
 + package graph 消费依赖 backendArtifacts
++ .abel/cache/backend 项目级 backend artifact 缓存
 + abel add/remove/update/build
 + abel check / abel run
 ```
@@ -191,7 +192,7 @@ $ABEL_BIN run .
 - `fn int main()` 的返回值会成为进程退出码；
 - 普通成功建议 `return 0;`；
 - 如果要观察计算结果，优先用 `println(...)` 输出，不要只依赖退出码；
-- 当前项目入口、本地 path dependency 与 lockfile 只是早期包管理闭环；不要假设已有成熟模块系统、registry、semver solver 或 download/cache。
+- 当前项目入口、本地 path dependency、lockfile 与 backend artifact 项目缓存只是早期包管理闭环；不要假设已有成熟模块系统、registry、semver solver、远程下载缓存、backend 自动构建或版本化缓存失效。
 
 ---
 
@@ -874,9 +875,10 @@ Codex 操作 backend 的完整步骤：
 5. 运行 $ABEL_BIN package check .。
 6. 配置 backend CMake。
 7. 构建 backend plugin。
-8. 运行 $ABEL_BIN check .。
-9. 运行 $ABEL_BIN run .。
-10. 如果动态库找不到 libabelcore.so，用 LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" 兜底。
+8. 运行 $ABEL_BIN build .，把 backend artifact 复制进 .abel/cache/backend。
+9. 运行 $ABEL_BIN check .。
+10. 运行 $ABEL_BIN run .。
+11. 如果动态库找不到 libabelcore.so，用 LD_LIBRARY_PATH="$ABEL_BUILD:$LD_LIBRARY_PATH" 兜底。
 ```
 
 配置 backend：
@@ -900,9 +902,18 @@ $CMAKE --build build/backend
 
 ```bash
 $ABEL_BIN package check .
+$ABEL_BIN build .
 $ABEL_BIN check .
 $ABEL_BIN run .
 ```
+
+`$ABEL_BIN build .` 会检查 Abel 入口源码，并把根包/依赖包 `backendArtifacts` 声明的 plugin 复制到当前项目：
+
+```text
+.abel/cache/backend/<package>/<backendId>/<plugin-file>
+```
+
+之后 `$ABEL_BIN run .` 优先加载这个缓存；缓存不存在时才回退到 manifest 里的源 artifact path。
 
 若需要动态库搜索路径兜底：
 
@@ -916,12 +927,13 @@ backend 排错顺序：
 ```text
 1. Abel 源码是否 check 通过。
 2. build/backend/plugins/libmath_backend.so 是否存在。
-3. resource JSON path 是否指向真实 .so。
-4. iid 是否是 org.abel.IAbelBackend/1.0。
-5. backendId 是否是 MathSystem。
-6. Abel 声明、C++ bind、JSON symbols 是否一致。
-7. Abel 签名和 C++ lambda 参数/返回是否一致。
-8. 运行时是否需要 LD_LIBRARY_PATH 指向 ABEL_BUILD。
+3. $ABEL_BIN build . 是否成功写入 .abel/cache/backend/...。
+4. resource JSON path 或 backendArtifacts path 是否指向真实 .so。
+5. iid 是否是 org.abel.IAbelBackend/1.0。
+6. backendId 是否是 MathSystem。
+7. Abel 声明、C++ bind、JSON symbols 是否一致。
+8. Abel 签名和 C++ lambda 参数/返回是否一致。
+9. 运行时是否需要 LD_LIBRARY_PATH 指向 ABEL_BUILD。
 ```
 
 ## 16. 验证命令
@@ -930,6 +942,7 @@ backend 排错顺序：
 
 ```bash
 $ABEL_BIN package check .
+$ABEL_BIN build .
 $ABEL_BIN check .
 $ABEL_BIN run .
 ```
@@ -938,6 +951,7 @@ backend 项目：
 
 ```bash
 $ABEL_BIN package check .
+$ABEL_BIN build .
 $ABEL_BIN check .
 $ABEL_BIN run .
 ```

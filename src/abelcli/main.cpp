@@ -70,7 +70,7 @@ static CliInput readCliInput(const QString& path)
             return input;
         input.sourceFile = graph.root.entryFilePath();
         input.packageRoot = graph.root.rootDir;
-        input.packageResources = graph.backendArtifacts;
+        input.packageResources = abel::cachedPackageBackendArtifacts(graph);
         filePath = input.sourceFile;
     } else {
         input.sourceFile = info.absoluteFilePath();
@@ -108,23 +108,6 @@ static QList<abel::Diagnostic> checkSourceText(const QString& sourceFile, const 
     abel::TypeChecker typechecker;
     auto checked = typechecker.check(*parsed.program);
     diagnostics.append(checked.diagnostics);
-    return diagnostics;
-}
-
-static QList<abel::Diagnostic> checkPackageBackendArtifacts(const QList<abel::PackageResolvedResource>& resources)
-{
-    QList<abel::Diagnostic> diagnostics;
-    for (const abel::PackageResolvedResource& resource : resources) {
-        QFileInfo info(resource.node.path);
-        if (info.isRelative())
-            info = QFileInfo(QDir(resource.packageRoot).absoluteFilePath(resource.node.path));
-        if (!info.isFile()) {
-            diagnostics.push_back(makeCliDiagnostic(QStringLiteral("E0013"),
-                                                    QStringLiteral("backend artifact '%1' from package '%2' does not exist")
-                                                        .arg(resource.node.path, resource.packageName),
-                                                    QDir(resource.packageRoot).absoluteFilePath(abel::packageManifestFileName())));
-        }
-    }
     return diagnostics;
 }
 
@@ -182,12 +165,6 @@ int main(int argc, char** argv)
         if (!graph.ok())
             return 1;
 
-        const QList<abel::Diagnostic> resourceDiagnostics = checkPackageBackendArtifacts(graph.backendArtifacts);
-        for (const auto& d : resourceDiagnostics)
-            printDiagnostic(d);
-        if (!resourceDiagnostics.isEmpty())
-            return 1;
-
         QFile file(graph.root.entryFilePath());
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             printDiagnostic(makeCliDiagnostic(QStringLiteral("E0004"),
@@ -202,11 +179,17 @@ int main(int argc, char** argv)
         if (!diagnostics.isEmpty())
             return 1;
 
+        const auto cache = abel::updatePackageBackendCache(graph);
+        for (const auto& d : cache.diagnostics)
+            printDiagnostic(d);
+        if (!cache.ok())
+            return 1;
+
         out << "built " << graph.root.name << Qt::endl;
         out << "entry " << graph.root.entryFilePath() << Qt::endl;
         out << "wrote " << graph.lockFile << Qt::endl;
         out << "locked " << graph.entries.size() << " package(s)" << Qt::endl;
-        out << "checked " << graph.backendArtifacts.size() << " backend artifact(s)" << Qt::endl;
+        out << "cached " << cache.resources.size() << " backend artifact(s)" << Qt::endl;
         return 0;
     }
 
