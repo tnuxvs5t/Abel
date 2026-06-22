@@ -594,11 +594,32 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
 
     if (m_builtins.hasFunction(name->name)) {
         const qsizetype argc = static_cast<qsizetype>(expr.args.size());
-        if (name->name == QStringLiteral("to_str") && argc != 1)
-            return errorExpr(expr.span, QStringLiteral("to_str expects one argument"));
+        if (name->name == QStringLiteral("to_str")) {
+            if (argc != 1)
+                return errorExpr(expr.span, QStringLiteral("to_str expects one argument"));
+            checkExpr(*expr.args[0]);
+            return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
+        }
+        if (name->name == QStringLiteral("str_to_chars")) {
+            if (argc != 1)
+                return errorExpr(expr.span, QStringLiteral("str_to_chars expects one argument"));
+            ExprType arg = checkExpr(*expr.args[0]);
+            if (arg.type.kind != TypeKind::Str)
+                return errorExpr(expr.args[0]->span, QStringLiteral("str_to_chars expects str, got %1").arg(arg.type.displayName()));
+            return {makeVectorType(makeType(TypeKind::Char)), ValueCategory::PRValue, false};
+        }
+        if (name->name == QStringLiteral("chars_to_str")) {
+            if (argc != 1)
+                return errorExpr(expr.span, QStringLiteral("chars_to_str expects one argument"));
+            ExprType arg = checkExpr(*expr.args[0]);
+            const AbelType charVector = makeVectorType(makeType(TypeKind::Char));
+            if (!isAssignable(charVector, arg.type))
+                return errorExpr(expr.args[0]->span, QStringLiteral("chars_to_str expects vector<char>, got %1").arg(arg.type.displayName()));
+            return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
+        }
         for (const auto& arg : expr.args)
             checkExpr(*arg);
-        if (name->name == QStringLiteral("to_str") || name->name == QStringLiteral("build_string"))
+        if (name->name == QStringLiteral("build_string"))
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         if (name->name == QStringLiteral("print") || name->name == QStringLiteral("println"))
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};

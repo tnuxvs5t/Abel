@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 13c：Qt backend plugin interface/base/binder/example plugin 与 ResourceNode 动态加载闭环已完成，进入 v0 剩余差距审计与收口。
+Stage 14a：`str_to_chars` / `chars_to_str` 已完成，继续 v0 剩余差距审计与收口。
 ```
 
 ### 已完成
@@ -2033,6 +2033,9 @@ Stage 13c：Qt backend plugin interface/base/binder/example plugin 与 ResourceN
 85. Interpreter 增加外部 `BackendRegistry` 注入入口；若已有 plugin 绑定，收集 backend block 时校验 Abel 声明与绑定签名一致，不再重复注册破坏绑定。
 86. ResourceNode loader 调用 plugin 时保留引用参数的 `AbelLocation` 当前值，覆盖 `vector<int>&` 从 Abel 调到 Qt plugin 后写回。
 87. backend/resource QTest 增加动态加载闭环：加载 math backend、registry 调用 fast_add、registry 调用 sort 写回 vector、Interpreter 注入 registry 后执行 `MathSystem::fast_add` 和 `MathSystem::sort`。
+88. BuiltinRegistry 接入 `str_to_chars(str) -> vector<char>` 与 `chars_to_str(vector<char>) -> str`。
+89. TypeChecker 增加 `str_to_chars` / `chars_to_str` 静态参数与返回类型检查，拒绝非 `str` / 非 `vector<char>` 实参。
+90. 增加 builtin/typechecker/interpreter tests，覆盖字符串到字符向量、字符向量修改后转回字符串、非法 `chars_to_str(vector<int>)`。
 ```
 
 ### 最近验证
@@ -2187,6 +2190,22 @@ Stage 13c：Qt backend plugin interface/base/binder/example plugin 与 ResourceN
 - Stage 13c ResourceNode CLI smoke 通过：
   /bin/bash -lc 'ulimit -v 4194304; build/abel resources check plugins/examples/math_backend/resource.json'
   输出 ok。
+- Stage 14a diff whitespace 检查通过：
+  git diff --check
+- Stage 14a 构建通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
+- Stage 14a 在 4GB 虚拟内存上限下测试通过：
+  /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+  输出 6/6 tests passed。
+- Stage 14a CLI check smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel check examples/smoke/hello.abel'
+  输出 ok。
+- Stage 14a CLI run smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
+  输出 exit=0。
+- Stage 14a ResourceNode CLI smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel resources check plugins/examples/math_backend/resource.json'
+  输出 ok。
 ```
 
 ### 未完成
@@ -2205,7 +2224,7 @@ Stage 13c：Qt backend plugin interface/base/binder/example plugin 与 ResourceN
 ```text
 Stage 14：
 1. 按 AGENTS.md 对 v0 做剩余差距审计，列出 must-fix / can-defer，并避免继续无边界扩张。
-2. 优先检查 `scan`、用户自定义 `to_str(T)`、`str_to_chars/chars_to_str`、`|>` pipe、const 引用/指针、repeat 负数语义、CLI resource 绑定入口。
+2. 优先检查 `scan`、用户自定义 `to_str(T)`、`|>` pipe、const 引用/指针、repeat 负数语义、CLI resource 绑定入口。
 3. 对每个 must-fix 缺口形成小闭环：实现 + QTest/CLI smoke + 4GB ctest + commit。
 4. 若某项决定延期，必须在 AGENTS.md 的未完成/风险区写明 v0 边界，而不是静默遗漏。
 ```
@@ -2239,7 +2258,8 @@ dab7040 struct: add fields constructors and methods
 dee8b16 lambda: add function values and captures
 2cde7e4 backend: typecheck static calls
 78de6ff backend: add registry and resource nodes
-待本次 Stage 13c backend-plugin-loader 提交后追加 commit hash。
+01cf078 backend: load Qt plugin resources
+待本次 Stage 14a string-char-builtins 提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。

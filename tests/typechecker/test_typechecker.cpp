@@ -69,6 +69,34 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsStringCharConversions()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<char> cs = str_to_chars("ab");
+                str s = chars_to_str(cs);
+                return cs.len();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsCharsToStrWithNonCharVector()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1, 2};
+                str s = chars_to_str(xs);
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
+
     void rejectsBadVectorPushArgument()
     {
         auto result = checkSource(QStringLiteral(R"(

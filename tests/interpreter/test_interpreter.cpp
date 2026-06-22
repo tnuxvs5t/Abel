@@ -326,6 +326,26 @@ private slots:
         QCOMPARE(result.exitCode, 12);
     }
 
+    void stringCharConversionsWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<char> cs = str_to_chars("az");
+                cs[1] = 'b';
+                str s = chars_to_str(cs);
+                if (s == "ab") {
+                    return cs.len() + 20;
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 22);
+    }
+
     void anyVariadicUserFunctionPacksArgs()
     {
         const QString src = QStringLiteral(R"(

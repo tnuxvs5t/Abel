@@ -102,6 +102,43 @@ AbelValue builtinPrintln(BuiltinFunctionCall& call)
     return AbelValue::makeVoid();
 }
 
+AbelValue builtinStrToChars(BuiltinFunctionCall& call)
+{
+    const AbelValue& value = call.args[0];
+    if (value.type().kind != TypeKind::Str) {
+        const SourceSpan span = call.argSpans.empty() ? call.callSpan : call.argSpans[0];
+        call.ctx.error(QStringLiteral("E0413"),
+                       QStringLiteral("str_to_chars expects str, got %1").arg(value.type().displayName()),
+                       span);
+        return AbelValue::makeUnknown();
+    }
+    std::vector<AbelValue> chars;
+    const QString s = value.asString();
+    chars.reserve(static_cast<size_t>(s.size()));
+    for (QChar ch : s)
+        chars.push_back(AbelValue::makeChar(ch));
+    return AbelValue::makeVector(makeType(TypeKind::Char), std::move(chars));
+}
+
+AbelValue builtinCharsToStr(BuiltinFunctionCall& call)
+{
+    const AbelValue& value = call.args[0];
+    const AbelType charVector = makeVectorType(makeType(TypeKind::Char));
+    if (!canAssignValue(charVector, value.type())) {
+        const SourceSpan span = call.argSpans.empty() ? call.callSpan : call.argSpans[0];
+        call.ctx.error(QStringLiteral("E0414"),
+                       QStringLiteral("chars_to_str expects vector<char>, got %1").arg(value.type().displayName()),
+                       span);
+        return AbelValue::makeUnknown();
+    }
+    QString out;
+    const auto vector = value.asVector();
+    out.reserve(static_cast<qsizetype>(vector->elements.size()));
+    for (const auto& element : vector->elements)
+        out.push_back(element.asChar());
+    return AbelValue::makeString(out);
+}
+
 AbelValue vectorLen(BuiltinMethodCall& call)
 {
     return AbelValue::makeInt(static_cast<qint64>(call.receiver.asVector()->elements.size()), TypeKind::I32);
@@ -219,6 +256,8 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("build_string"), 0, -1, true, builtinBuildString, QStringLiteral("concatenate stringified values")});
     registry.registerFunction({QStringLiteral("print"), 0, -1, true, builtinPrint, QStringLiteral("print stringified values")});
     registry.registerFunction({QStringLiteral("println"), 0, -1, true, builtinPrintln, QStringLiteral("print stringified values plus newline")});
+    registry.registerFunction({QStringLiteral("str_to_chars"), 1, 1, false, builtinStrToChars, QStringLiteral("convert str to vector<char>")});
+    registry.registerFunction({QStringLiteral("chars_to_str"), 1, 1, false, builtinCharsToStr, QStringLiteral("convert vector<char> to str")});
 
     return registry;
 }

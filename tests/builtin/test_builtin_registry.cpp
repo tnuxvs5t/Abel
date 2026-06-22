@@ -123,6 +123,8 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("build_string")));
         QVERIFY(registry.hasFunction(QStringLiteral("print")));
         QVERIFY(registry.hasFunction(QStringLiteral("println")));
+        QVERIFY(registry.hasFunction(QStringLiteral("str_to_chars")));
+        QVERIFY(registry.hasFunction(QStringLiteral("chars_to_str")));
 
         abel::AbelRuntimeContext ctx;
         abel::BuiltinFunctionCall call{
@@ -141,6 +143,39 @@ private slots:
 
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(value.asString(), QStringLiteral("x=7, ok=true"));
+    }
+
+    void stringCharConversionsWork()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+
+        abel::BuiltinFunctionCall toChars{
+            ctx,
+            QStringLiteral("str_to_chars"),
+            {abel::AbelValue::makeString(QStringLiteral("ab"))},
+            {},
+            {},
+        };
+        auto chars = registry.callFunction(std::move(toChars));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(chars.type().kind, abel::TypeKind::Vector);
+        QVERIFY(chars.type().pointee);
+        QCOMPARE(chars.type().pointee->kind, abel::TypeKind::Char);
+        QCOMPARE(chars.asVector()->elements.size(), static_cast<size_t>(2));
+        QCOMPARE(chars.asVector()->elements[0].asChar(), QChar('a'));
+        QCOMPARE(chars.asVector()->elements[1].asChar(), QChar('b'));
+
+        abel::BuiltinFunctionCall toStr{
+            ctx,
+            QStringLiteral("chars_to_str"),
+            {chars},
+            {},
+            {},
+        };
+        auto text = registry.callFunction(std::move(toStr));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(text.asString(), QStringLiteral("ab"));
     }
 };
 
