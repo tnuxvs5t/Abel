@@ -22,7 +22,7 @@
 
 不要默认修改 Abel 编译器/解释器源码。
 不要把用户项目扩成大型框架。
-不要幻想 Abel 已经有完整依赖解析器、registry、lockfile、JIT、模块构建系统或成熟 IDE。
+不要幻想 Abel 已经有 registry、semver solver、download/cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、lockfile、add/remove/update 做成早期闭环。
 
 当前 Abel 的正确定位：
 
@@ -34,6 +34,8 @@ C/C++ 值模型
 + builtin print / println / build_string
 + backend block 调 Qt/C++ plugin
 + abel.package.json 项目入口骨架
++ 本地 path dependency + abel.lock.json
++ abel add/remove/update
 + abel check / abel run
 ```
 
@@ -152,6 +154,7 @@ $ABEL_BIN init .
 
 ```bash
 $ABEL_BIN package check .
+$ABEL_BIN update .
 $ABEL_BIN check .
 $ABEL_BIN run .
 ```
@@ -186,7 +189,7 @@ $ABEL_BIN run .
 - `fn int main()` 的返回值会成为进程退出码；
 - 普通成功建议 `return 0;`；
 - 如果要观察计算结果，优先用 `println(...)` 输出，不要只依赖退出码；
-- 当前项目入口只解决 entry/backend artifact 自动读取，不要假设已有成熟模块系统、完整依赖解析、registry 或 lockfile。
+- 当前项目入口、本地 path dependency 与 lockfile 只是早期包管理闭环；不要假设已有成熟模块系统、registry、semver solver 或 download/cache。
 
 ---
 

@@ -245,6 +245,18 @@ QJsonObject lockEntryToJson(const PackageLockEntry& entry)
     return object;
 }
 
+QJsonObject dependencyToJson(const PackageDependency& dependency)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("name"), dependency.name);
+    object.insert(QStringLiteral("kind"), dependency.kind);
+    if (!dependency.path.isEmpty())
+        object.insert(QStringLiteral("path"), dependency.path);
+    if (!dependency.version.isEmpty())
+        object.insert(QStringLiteral("version"), dependency.version);
+    return object;
+}
+
 QJsonDocument packageLockToJson(const PackageLockResult& lock)
 {
     QJsonObject root;
@@ -261,6 +273,74 @@ QJsonDocument packageLockToJson(const PackageLockResult& lock)
         packages.push_back(lockEntryToJson(entry));
     root.insert(QStringLiteral("packages"), packages);
     return QJsonDocument(root);
+}
+
+bool readManifestObjectForUpdate(const QString& dir,
+                                 QJsonObject& object,
+                                 QString& manifestFile,
+                                 QString& rootDir,
+                                 QList<Diagnostic>& diagnostics)
+{
+    const QFileInfo rootInfo(dir);
+    if (!rootInfo.isDir()) {
+        SourceSpan span;
+        span.file = dir;
+        addPackageError(diagnostics, QStringLiteral("package path '%1' is not a directory").arg(dir), span);
+        return false;
+    }
+
+    rootDir = rootInfo.absoluteFilePath();
+    manifestFile = QDir(rootDir).absoluteFilePath(packageManifestFileName());
+    QFile file(manifestFile);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        SourceSpan span;
+        span.file = manifestFile;
+        addPackageError(diagnostics, QStringLiteral("cannot open package manifest '%1'").arg(manifestFile), span);
+        return false;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    SourceSpan span;
+    span.file = manifestFile;
+    if (parseError.error != QJsonParseError::NoError) {
+        addPackageError(diagnostics, QStringLiteral("invalid package manifest JSON: %1").arg(parseError.errorString()), span);
+        return false;
+    }
+    if (!doc.isObject()) {
+        addPackageError(diagnostics, QStringLiteral("package manifest JSON must be an object"), span);
+        return false;
+    }
+    object = doc.object();
+    return true;
+}
+
+bool writeManifestObject(const QString& manifestFile,
+                         const QJsonObject& object,
+                         QList<Diagnostic>& diagnostics)
+{
+    QFile file(manifestFile);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        SourceSpan span;
+        span.file = manifestFile;
+        addPackageError(diagnostics, QStringLiteral("cannot write package manifest '%1'").arg(manifestFile), span);
+        return false;
+    }
+    const QByteArray bytes = QJsonDocument(object).toJson(QJsonDocument::Indented);
+    if (file.write(bytes) != bytes.size()) {
+        SourceSpan span;
+        span.file = manifestFile;
+        addPackageError(diagnostics, QStringLiteral("failed to write package manifest '%1'").arg(manifestFile), span);
+        return false;
+    }
+    return true;
+}
+
+void copyLockResultIntoChange(PackageDependencyChangeResult& result, const PackageLockResult& lock)
+{
+    result.lockFile = lock.lockFile;
+    result.lockedPackages = lock.entries.size();
+    result.diagnostics.append(lock.diagnostics);
 }
 
 } // namespace
@@ -396,6 +476,137 @@ PackageLockResult updatePackageLock(const QString& dir)
         span.file = result.lockFile;
         addPackageError(result.diagnostics, QStringLiteral("failed to write lockfile '%1'").arg(result.lockFile), span);
     }
+    return result;
+}
+
+PackageDependencyChangeResult addPathPackageDependency(const QString& dir, const QString& dependencyDir)
+{
+    PackageDependencyChangeResult result;
+    QJsonObject manifestObject;
+    if (!readManifestObjectForUpdate(dir, manifestObject, result.manifestFile, result.rootDir, result.diagnostics))
+        return result;
+
+    auto rootPackage = packageManifestFromJson(manifestObject, result.rootDir, SourceSpan{result.manifestFile});
+    result.diagnostics.append(rootPackage.diagnostics);
+    if (!rootPackage.ok())
+        return result;
+
+    auto dependencyPackage = packageManifestFromDirectory(dependencyDir);
+    result.diagnostics.append(dependencyPackage.diagnostics);
+    if (!dependencyPackage.ok())
+        return result;
+
+    PackageDependency dependency;
+    dependency.name = dependencyPackage.package.name;
+    dependency.kind = QStringLiteral("path");
+    dependency.path = QDir(result.rootDir).relativeFilePath(dependencyPackage.package.rootDir);
+    dependency.version = dependencyPackage.package.version;
+    result.dependency = dependency;
+
+    QJsonArray dependencies;
+    const QJsonValue existingValue = manifestObject.value(QStringLiteral("dependencies"));
+    if (!existingValue.isUndefined()) {
+        if (!existingValue.isArray()) {
+            SourceSpan span;
+            span.file = result.manifestFile;
+            addPackageError(result.diagnostics, QStringLiteral("package manifest field 'dependencies' must be an array"), span);
+            return result;
+        }
+        dependencies = existingValue.toArray();
+    }
+
+    bool replaced = false;
+    for (qsizetype i = 0; i < dependencies.size(); ++i) {
+        const QJsonValue raw = dependencies.at(i);
+        if (!raw.isObject())
+            continue;
+        const QJsonObject object = raw.toObject();
+        if (object.value(QStringLiteral("name")).toString() != dependency.name)
+            continue;
+        if (object == dependencyToJson(dependency)) {
+            replaced = true;
+            break;
+        }
+        dependencies.replace(i, dependencyToJson(dependency));
+        result.changed = true;
+        replaced = true;
+        break;
+    }
+    if (!replaced) {
+        dependencies.push_back(dependencyToJson(dependency));
+        result.changed = true;
+    }
+
+    if (result.changed) {
+        manifestObject.insert(QStringLiteral("dependencies"), dependencies);
+        if (!writeManifestObject(result.manifestFile, manifestObject, result.diagnostics))
+            return result;
+    }
+
+    const auto lock = updatePackageLock(result.rootDir);
+    copyLockResultIntoChange(result, lock);
+    return result;
+}
+
+PackageDependencyChangeResult removePackageDependency(const QString& dir, const QString& dependencyName)
+{
+    PackageDependencyChangeResult result;
+    QJsonObject manifestObject;
+    if (!readManifestObjectForUpdate(dir, manifestObject, result.manifestFile, result.rootDir, result.diagnostics))
+        return result;
+
+    const QString name = dependencyName.trimmed();
+    if (name.isEmpty()) {
+        SourceSpan span;
+        span.file = result.manifestFile;
+        addPackageError(result.diagnostics, QStringLiteral("dependency name must not be empty"), span);
+        return result;
+    }
+
+    QJsonArray dependencies;
+    const QJsonValue existingValue = manifestObject.value(QStringLiteral("dependencies"));
+    if (!existingValue.isUndefined()) {
+        if (!existingValue.isArray()) {
+            SourceSpan span;
+            span.file = result.manifestFile;
+            addPackageError(result.diagnostics, QStringLiteral("package manifest field 'dependencies' must be an array"), span);
+            return result;
+        }
+        dependencies = existingValue.toArray();
+    }
+
+    QJsonArray kept;
+    bool removed = false;
+    for (const QJsonValue& raw : dependencies) {
+        if (raw.isObject() && raw.toObject().value(QStringLiteral("name")).toString() == name) {
+            const QJsonObject object = raw.toObject();
+            result.dependency.name = object.value(QStringLiteral("name")).toString();
+            result.dependency.kind = object.value(QStringLiteral("kind")).toString();
+            result.dependency.path = object.value(QStringLiteral("path")).toString();
+            result.dependency.version = object.value(QStringLiteral("version")).toString();
+            removed = true;
+            continue;
+        }
+        kept.push_back(raw);
+    }
+
+    if (!removed) {
+        SourceSpan span;
+        span.file = result.manifestFile;
+        addPackageError(result.diagnostics, QStringLiteral("dependency '%1' is not declared").arg(name), span);
+        return result;
+    }
+
+    result.changed = true;
+    if (kept.isEmpty())
+        manifestObject.remove(QStringLiteral("dependencies"));
+    else
+        manifestObject.insert(QStringLiteral("dependencies"), kept);
+    if (!writeManifestObject(result.manifestFile, manifestObject, result.diagnostics))
+        return result;
+
+    const auto lock = updatePackageLock(result.rootDir);
+    copyLockResultIntoChange(result, lock);
     return result;
 }
 

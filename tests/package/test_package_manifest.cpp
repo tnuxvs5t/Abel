@@ -202,6 +202,103 @@ private slots:
         QVERIFY(!lock.diagnostics.isEmpty());
         QVERIFY(!QFileInfo(QDir(root.absoluteFilePath(QStringLiteral("app"))).absoluteFilePath(abel::packageLockFileName())).exists());
     }
+
+    void addsPathDependencyAndUpdatesLockfile()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.0",
+                      "entry": "src/main.abel"
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel"
+                  })"));
+
+        auto changed = abel::addPathPackageDependency(root.absoluteFilePath(QStringLiteral("app")),
+                                                      root.absoluteFilePath(QStringLiteral("dep")));
+        for (const auto& d : changed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(changed.diagnostics.isEmpty());
+        QVERIFY(changed.changed);
+        QCOMPARE(changed.dependency.name, QStringLiteral("dep"));
+        QCOMPARE(changed.dependency.kind, QStringLiteral("path"));
+        QCOMPARE(changed.dependency.path, QStringLiteral("../dep"));
+        QCOMPARE(changed.lockedPackages, 1);
+        QVERIFY(QFileInfo(changed.lockFile).isFile());
+
+        auto parsed = abel::packageManifestFromDirectory(root.absoluteFilePath(QStringLiteral("app")));
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.package.dependencies.size(), 1);
+        QCOMPARE(parsed.package.dependencies.front().name, QStringLiteral("dep"));
+        QCOMPARE(parsed.package.dependencies.front().path, QStringLiteral("../dep"));
+    }
+
+    void removesDependencyAndUpdatesLockfile()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.0",
+                      "entry": "src/main.abel"
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep"}
+                      ]
+                  })"));
+
+        auto removed = abel::removePackageDependency(root.absoluteFilePath(QStringLiteral("app")),
+                                                     QStringLiteral("dep"));
+        for (const auto& d : removed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(removed.diagnostics.isEmpty());
+        QVERIFY(removed.changed);
+        QCOMPARE(removed.dependency.name, QStringLiteral("dep"));
+        QCOMPARE(removed.lockedPackages, 0);
+        QVERIFY(QFileInfo(removed.lockFile).isFile());
+
+        QFile manifestFile(root.absoluteFilePath(QStringLiteral("app/abel.package.json")));
+        QVERIFY(manifestFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QJsonDocument manifestDoc = QJsonDocument::fromJson(manifestFile.readAll());
+        QVERIFY(manifestDoc.isObject());
+        QVERIFY(!manifestDoc.object().contains(QStringLiteral("dependencies")));
+
+        QFile lockFile(removed.lockFile);
+        QVERIFY(lockFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QJsonDocument lockDoc = QJsonDocument::fromJson(lockFile.readAll());
+        QVERIFY(lockDoc.isObject());
+        QCOMPARE(lockDoc.object().value(QStringLiteral("packages")).toArray().size(), 0);
+    }
 };
 
 QTEST_MAIN(AbelPackageManifestTests)

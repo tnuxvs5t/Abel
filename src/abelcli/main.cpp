@@ -99,7 +99,7 @@ int main(int argc, char** argv)
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
     parser.addPositionalArgument(QStringLiteral("command"),
-                                 QStringLiteral("Command: init | update | check | run | package | resources | version"));
+                                 QStringLiteral("Command: init | add | remove | update | check | run | package | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
                                  QStringLiteral("Input file, resource subcommand, or entry."),
                                  QStringLiteral("[input]"));
@@ -122,6 +122,48 @@ int main(int argc, char** argv)
     }
 
     const QString command = args[0];
+    if (command == QStringLiteral("add")) {
+        if (args.size() < 3 || args.size() > 4 || args[1] != QStringLiteral("path")) {
+            err << "E0010: add expects: abel add path <dependency-dir> [project-dir]" << Qt::endl;
+            return 2;
+        }
+        const QString dependencyDir = args[2];
+        const QString projectDir = args.size() == 4 ? args[3] : QStringLiteral(".");
+        auto changed = abel::addPathPackageDependency(projectDir, dependencyDir);
+        for (const auto& d : changed.diagnostics)
+            printDiagnostic(d);
+        if (!changed.ok())
+            return 1;
+        out << (changed.changed ? "added " : "already present ")
+            << changed.dependency.name
+            << " path "
+            << changed.dependency.path
+            << Qt::endl;
+        out << "wrote " << changed.manifestFile << Qt::endl;
+        out << "wrote " << changed.lockFile << Qt::endl;
+        out << "locked " << changed.lockedPackages << " package(s)" << Qt::endl;
+        return 0;
+    }
+
+    if (command == QStringLiteral("remove")) {
+        if (args.size() < 2 || args.size() > 3) {
+            err << "E0011: remove expects: abel remove <dependency-name> [project-dir]" << Qt::endl;
+            return 2;
+        }
+        const QString dependencyName = args[1];
+        const QString projectDir = args.size() == 3 ? args[2] : QStringLiteral(".");
+        auto changed = abel::removePackageDependency(projectDir, dependencyName);
+        for (const auto& d : changed.diagnostics)
+            printDiagnostic(d);
+        if (!changed.ok())
+            return 1;
+        out << "removed " << dependencyName << Qt::endl;
+        out << "wrote " << changed.manifestFile << Qt::endl;
+        out << "wrote " << changed.lockFile << Qt::endl;
+        out << "locked " << changed.lockedPackages << " package(s)" << Qt::endl;
+        return 0;
+    }
+
     if (command == QStringLiteral("update")) {
         if (args.size() > 2) {
             err << "E0009: update expects: abel update [project-dir]" << Qt::endl;
