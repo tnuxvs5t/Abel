@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 9：C-style for 与 vector range-for 最小闭环已建立，进入 vector 方法补齐、struct/lambda、backend/resource 闭环。
+Stage 10：vector 方法补齐与 front/back lvalue 闭环已建立，进入 struct/lambda、backend/resource 闭环。
 ```
 
 ### 已完成
@@ -1997,6 +1997,9 @@ Stage 9：C-style for 与 vector range-for 最小闭环已建立，进入 vector
 49. AST/parser/typechecker/interpreter 增加 C-style `for(init; cond; step)` 最小闭环。
 50. AST/parser/typechecker/interpreter 增加 `for (x in vector)` range-for 最小闭环，循环变量按元素引用绑定，赋值可写回 vector 元素。
 51. 增加 parser/typechecker/interpreter tests，覆盖 C-style for、continue 后 step、range-for 写回、非法 for 条件、非法非 vector range-for。
+52. BuiltinRegistry 补齐 vector.clear/reserve/resize，并保留 arity 与非负 size 运行时诊断。
+53. TypeChecker 补齐 vector.clear/reserve/resize 的静态检查，并将 vector.front()/back() 标记为 lvalue，const vector 的 front/back 赋值会被拒绝。
+54. Interpreter 支持 vector.front()/back() 作为可赋值 location；新增 builtin/typechecker/interpreter tests 覆盖 resize/clear/default element、front/back 写回与非法 resize 参数。
 ```
 
 ### 最近验证
@@ -2079,6 +2082,16 @@ Stage 9：C-style for 与 vector range-for 最小闭环已建立，进入 vector
 - Stage 9 CLI run smoke 通过：
   /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
   输出 exit=0。
+- Stage 10 构建通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
+- Stage 10 在 4GB 虚拟内存上限下测试通过：
+  /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+- Stage 10 CLI check smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel check examples/smoke/hello.abel'
+  输出 ok。
+- Stage 10 CLI run smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
+  输出 exit=0。
 ```
 
 ### 未完成
@@ -2089,15 +2102,15 @@ Stage 9：C-style for 与 vector range-for 最小闭环已建立，进入 vector
 3. interpreter 尚未实现 struct/lambda/backend。
 4. const 指针、const 引用的完整静态语义尚未实现；当前只保留基础 const 变量写保护。
 5. BuiltinRegistry 尚未接入 scan；`to_str` 尚未支持用户自定义重载，只覆盖内建 stringify。
-6. vector 内建方法仍缺 clear/reserve/resize；front/back 当前解释器返回值而非可赋值 T&。
+6. struct 字段/方法、lambda/func type、backend/resource/plugin 仍是 v0 最大剩余块。
 ```
 
 ### 下一步
 
 ```text
-Stage 10：
-1. 补齐 vector clear/reserve/resize，并决定 front/back 是否升级为可赋值 location 或暂时记录为 v0 风险。
-2. 随后进入 struct/lambda 的 AST/parser/typechecker/interpreter 最小闭环。
+Stage 11：
+1. 进入 struct 的 AST/parser/typechecker/interpreter 最小闭环：字段、构造、方法、this、值复制。
+2. 随后进入 lambda/func type 的 AST/parser/typechecker/interpreter 最小闭环。
 3. 再进入 backend/resource/plugin 的 Qt 动态链接闭环。
 4. 保持每个小闭环 build + 4GB ctest + CLI smoke + commit。
 ```
@@ -2125,7 +2138,8 @@ de2fa03 interpreter: add Stage 3 tree runner
 3cde439 builtins: add registry for vector methods
 be0424a builtins: add any variadic string functions
 36cbb49 typechecker: add Stage 8 static checks
-待本次 Stage 9 control-flow 提交后追加 commit hash。
+5972478 control-flow: add for loop execution
+待本次 Stage 10 vector 方法提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。

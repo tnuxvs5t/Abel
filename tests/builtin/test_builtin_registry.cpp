@@ -15,6 +15,9 @@ private slots:
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("empty")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("push")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("pop")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("clear")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("reserve")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("resize")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("front")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("back")));
     }
@@ -51,6 +54,44 @@ private slots:
         auto length = registry.callMethod(std::move(len));
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(length.asInt(), 1);
+    }
+
+    void vectorResizeAndClearRunThroughRegistry()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+        auto vector = abel::AbelValue::makeVector(abel::makeType(abel::TypeKind::I32), {abel::AbelValue::makeInt(4)});
+        auto* loc = ctx.createStorage(vector);
+
+        abel::BuiltinMethodCall resize{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("resize"),
+            {abel::AbelValue::makeInt(3)},
+            {},
+            {},
+        };
+        auto resized = registry.callMethod(std::move(resize));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(resized.type().kind, abel::TypeKind::Void);
+        QCOMPARE(loc->read().asVector()->elements.size(), static_cast<size_t>(3));
+        QCOMPARE(loc->read().asVector()->elements[0].asInt(), 4);
+        QCOMPARE(loc->read().asVector()->elements[2].asInt(), 0);
+
+        abel::BuiltinMethodCall clear{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("clear"),
+            {},
+            {},
+            {},
+        };
+        auto cleared = registry.callMethod(std::move(clear));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(cleared.type().kind, abel::TypeKind::Void);
+        QCOMPARE(loc->read().asVector()->elements.size(), static_cast<size_t>(0));
     }
 
     void customFunctionCanBeRegistered()

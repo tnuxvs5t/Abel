@@ -231,6 +231,45 @@ private slots:
         QCOMPARE(result.exitCode, 10);
     }
 
+    void vectorResizeReserveClearWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {5};
+                xs.reserve(10);
+                xs.resize(3);
+                int before = xs.len() + xs[0] + xs[2];
+                xs.clear();
+                if (xs.empty()) {
+                    return before;
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 8);
+    }
+
+    void vectorFrontBackAreLvalues()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1, 2, 3};
+                xs.front() = 10;
+                xs.back() = xs.front() + 5;
+                return xs[0] + xs[2];
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 25);
+    }
+
     void vectorAssignmentCopies()
     {
         const QString src = QStringLiteral(R"(

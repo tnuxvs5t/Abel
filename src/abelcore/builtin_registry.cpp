@@ -2,6 +2,8 @@
 
 #include <QTextStream>
 
+#include <exception>
+
 namespace abel {
 
 namespace {
@@ -132,6 +134,51 @@ AbelValue vectorPop(BuiltinMethodCall& call)
     return value;
 }
 
+AbelValue vectorClear(BuiltinMethodCall& call)
+{
+    call.receiver.asVector()->elements.clear();
+    return AbelValue::makeVoid();
+}
+
+AbelValue vectorReserve(BuiltinMethodCall& call)
+{
+    AbelValue value = convertBuiltinArg(call, 0, makeType(TypeKind::I64));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    const qint64 count = value.asInt();
+    if (count < 0) {
+        call.ctx.error(QStringLiteral("E0409"), QStringLiteral("vector.reserve expects non-negative size"), call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+        return AbelValue::makeUnknown();
+    }
+    try {
+        call.receiver.asVector()->elements.reserve(static_cast<size_t>(count));
+    } catch (const std::exception& e) {
+        call.ctx.error(QStringLiteral("E0410"), QStringLiteral("vector.reserve failed: %1").arg(QString::fromLocal8Bit(e.what())), call.callSpan);
+        return AbelValue::makeUnknown();
+    }
+    return AbelValue::makeVoid();
+}
+
+AbelValue vectorResize(BuiltinMethodCall& call)
+{
+    AbelValue value = convertBuiltinArg(call, 0, makeType(TypeKind::I64));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    const qint64 count = value.asInt();
+    if (count < 0) {
+        call.ctx.error(QStringLiteral("E0411"), QStringLiteral("vector.resize expects non-negative size"), call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+        return AbelValue::makeUnknown();
+    }
+    auto vector = call.receiver.asVector();
+    try {
+        vector->elements.resize(static_cast<size_t>(count), defaultValueForType(vector->elementType));
+    } catch (const std::exception& e) {
+        call.ctx.error(QStringLiteral("E0412"), QStringLiteral("vector.resize failed: %1").arg(QString::fromLocal8Bit(e.what())), call.callSpan);
+        return AbelValue::makeUnknown();
+    }
+    return AbelValue::makeVoid();
+}
+
 AbelValue vectorFront(BuiltinMethodCall& call)
 {
     auto vector = call.receiver.asVector();
@@ -162,6 +209,9 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerMethod({TypeKind::Vector, QStringLiteral("empty"), 0, 0, false, vectorEmpty, QStringLiteral("vector empty test")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("push"), 1, 1, true, vectorPush, QStringLiteral("vector push")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("pop"), 0, 0, true, vectorPop, QStringLiteral("vector pop")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("clear"), 0, 0, true, vectorClear, QStringLiteral("vector clear")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("reserve"), 1, 1, true, vectorReserve, QStringLiteral("vector reserve")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("resize"), 1, 1, true, vectorResize, QStringLiteral("vector resize")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("front"), 0, 0, false, vectorFront, QStringLiteral("vector front")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("back"), 0, 0, false, vectorBack, QStringLiteral("vector back")});
 

@@ -483,6 +483,30 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
         }
         return m_ctx->createVectorElementLocation(vector.get(), static_cast<size_t>(idx));
     }
+    if (auto* e = dynamic_cast<const CallExprNode*>(&expr)) {
+        auto* field = dynamic_cast<FieldAccessExprNode*>(e->callee.get());
+        if (field && (field->field == QStringLiteral("front") || field->field == QStringLiteral("back"))) {
+            if (!e->args.empty()) {
+                error(QStringLiteral("E0562"), QStringLiteral("vector.%1 expects no arguments").arg(field->field), e->span);
+                return nullptr;
+            }
+            AbelLocation* baseLoc = evalLocation(*field->base);
+            if (!baseLoc)
+                return nullptr;
+            AbelValue base = baseLoc->read();
+            if (base.type().kind != TypeKind::Vector || !base.type().pointee) {
+                error(QStringLiteral("E0563"), QStringLiteral("vector.%1 requires vector receiver").arg(field->field), field->span);
+                return nullptr;
+            }
+            auto vector = base.asVector();
+            if (vector->elements.empty()) {
+                error(QStringLiteral("E0564"), QStringLiteral("cannot read %1 of empty vector").arg(field->field), field->span);
+                return nullptr;
+            }
+            const size_t index = field->field == QStringLiteral("front") ? 0 : vector->elements.size() - 1;
+            return m_ctx->createVectorElementLocation(vector.get(), index);
+        }
+    }
     error(QStringLiteral("E0538"), QStringLiteral("expression is not an lvalue"), expr.span);
     return nullptr;
 }

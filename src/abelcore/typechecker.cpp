@@ -411,14 +411,38 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
     }
     if (callee.field == QStringLiteral("push")) {
         if (args.size() != 1) return errorExpr(callee.span, QStringLiteral("vector.push expects one argument"));
+        if (receiver.category != ValueCategory::LValue || !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.push requires mutable vector lvalue"));
         ExprType arg = checkExpr(*args[0]);
         if (!isAssignable(element, arg.type))
             error(args[0]->span, QStringLiteral("cannot push %1 into vector<%2>").arg(arg.type.displayName(), element.displayName()));
         return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
     }
-    if (callee.field == QStringLiteral("pop") || callee.field == QStringLiteral("front") || callee.field == QStringLiteral("back")) {
-        if (!args.empty()) return errorExpr(callee.span, QStringLiteral("vector.%1 expects no arguments").arg(callee.field));
-        return {element, ValueCategory::PRValue, false};
+    if (callee.field == QStringLiteral("pop") || callee.field == QStringLiteral("clear")) {
+        if (!args.empty())
+            return errorExpr(callee.span, QStringLiteral("vector.%1 expects no arguments").arg(callee.field));
+        if (receiver.category != ValueCategory::LValue || !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.%1 requires mutable vector lvalue").arg(callee.field));
+        return callee.field == QStringLiteral("pop")
+            ? ExprType{element, ValueCategory::PRValue, false}
+            : ExprType{makeType(TypeKind::Void), ValueCategory::PRValue, false};
+    }
+    if (callee.field == QStringLiteral("reserve") || callee.field == QStringLiteral("resize")) {
+        if (args.size() != 1)
+            return errorExpr(callee.span, QStringLiteral("vector.%1 expects one argument").arg(callee.field));
+        if (receiver.category != ValueCategory::LValue || !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.%1 requires mutable vector lvalue").arg(callee.field));
+        ExprType count = checkExpr(*args[0]);
+        if (!count.type.isInteger())
+            error(args[0]->span, QStringLiteral("vector.%1 size must be integer").arg(callee.field));
+        return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+    }
+    if (callee.field == QStringLiteral("front") || callee.field == QStringLiteral("back")) {
+        if (!args.empty())
+            return errorExpr(callee.span, QStringLiteral("vector.%1 expects no arguments").arg(callee.field));
+        if (receiver.category != ValueCategory::LValue)
+            return errorExpr(callee.span, QStringLiteral("vector.%1 requires vector lvalue").arg(callee.field));
+        return {element, ValueCategory::LValue, receiver.isMutable};
     }
     return errorExpr(callee.span, QStringLiteral("unsupported builtin method '%1'").arg(callee.field));
 }

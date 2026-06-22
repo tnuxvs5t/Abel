@@ -125,6 +125,37 @@ private slots:
         auto result = checkSource(QStringLiteral("fn int main() { int x = 0; for (a in x) { } return 0; }"));
         QVERIFY(!result.diagnostics.isEmpty());
     }
+
+    void acceptsVectorResizeClearAndFrontBackLvalues()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                xs.reserve(8);
+                xs.resize(3);
+                xs.front() = 4;
+                xs.back() = xs.front() + 5;
+                xs.clear();
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsVectorResizeWithNonIntegerSize()
+    {
+        auto result = checkSource(QStringLiteral("fn int main() { vector<int> xs = {1}; xs.resize(\"bad\"); return 0; }"));
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
+
+    void rejectsAssigningConstVectorFront()
+    {
+        auto result = checkSource(QStringLiteral("fn int main() { const vector<int> xs = {1}; xs.front() = 2; return 0; }"));
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
 };
 
 QTEST_MAIN(AbelTypeCheckerTests)
