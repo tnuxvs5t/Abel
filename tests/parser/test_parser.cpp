@@ -124,6 +124,31 @@ private slots:
         QVERIFY(parsed.diagnostics.isEmpty());
         QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(2));
     }
+
+    void parsesFuncTypeAndLambda()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 1;
+                int y = 2;
+                func int() f = lambda [x, &y] int() {
+                    y = y + 1;
+                    return x + y;
+                };
+                return f();
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
+    }
 };
 
 QTEST_MAIN(AbelParserTests)

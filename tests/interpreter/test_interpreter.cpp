@@ -437,6 +437,64 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 13);
     }
+
+    void lambdaValueCaptureCopies()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 1;
+                func int() f = lambda [=] int() {
+                    return x;
+                };
+                x = 9;
+                return f();
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 1);
+    }
+
+    void lambdaReferenceCaptureWritesBack()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 1;
+                func void() g = lambda [&] void() {
+                    x = x + 9;
+                };
+                g();
+                return x;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 10);
+    }
+
+    void lambdaMixedCapturesWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 1;
+                int y = 2;
+                func int() h = lambda [x, &y] int() {
+                    y = y + 1;
+                    return x + y;
+                };
+                return h();
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 4);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

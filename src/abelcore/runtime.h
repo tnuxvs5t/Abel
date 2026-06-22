@@ -34,6 +34,11 @@ struct VariableSlot {
     bool isReference = false;
 };
 
+struct RuntimeFrame {
+    QHash<QString, VariableSlot> variables;
+    bool boundary = false;
+};
+
 struct AbelStorage {
     AbelValue value;
 };
@@ -53,7 +58,7 @@ class AbelRuntimeContext {
 public:
     AbelRuntimeContext();
 
-    void pushFrame();
+    void pushFrame(bool boundary = false);
     void popFrame();
 
     AbelLocation* createStorage(const AbelValue& value);
@@ -63,6 +68,7 @@ public:
     bool defineValueVariable(const QString& name, const AbelValue& value, bool isConst, const SourceSpan& span);
     VariableSlot* lookupVariable(const QString& name);
     const VariableSlot* lookupVariable(const QString& name) const;
+    QHash<QString, VariableSlot> visibleVariables() const;
     bool assignVariable(const QString& name, const AbelValue& value, const SourceSpan& span);
 
     void error(const QString& code, const QString& message, const SourceSpan& span);
@@ -71,7 +77,7 @@ public:
     QList<Diagnostic> takeDiagnostics() { return m_diagnostics; }
 
 private:
-    QList<QHash<QString, VariableSlot>> m_frames;
+    QList<RuntimeFrame> m_frames;
     std::vector<std::unique_ptr<AbelStorage>> m_storage;
     std::vector<std::unique_ptr<AbelLocation>> m_locations;
     QList<Diagnostic> m_diagnostics;

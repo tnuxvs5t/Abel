@@ -79,6 +79,11 @@ AbelValue AbelValue::makeStruct(const QString& typeName, const std::vector<QStri
     return AbelValue(makeStructType(typeName), object);
 }
 
+AbelValue AbelValue::makeFunction(const AbelType& type, FunctionPtr function)
+{
+    return AbelValue(type, std::move(function));
+}
+
 AbelValue AbelValue::makeUnknown()
 {
     return AbelValue(makeType(TypeKind::Unknown), std::monostate{});
@@ -131,6 +136,11 @@ AbelValue::StructPtr AbelValue::asStruct() const
     return std::get<StructPtr>(m_payload);
 }
 
+AbelValue::FunctionPtr AbelValue::asFunction() const
+{
+    return std::get<FunctionPtr>(m_payload);
+}
+
 QString AbelValue::debugString() const
 {
     switch (m_type.kind) {
@@ -150,6 +160,8 @@ QString AbelValue::debugString() const
         return QStringLiteral("<vector len=%1>").arg(asVector()->elements.size());
     case TypeKind::Struct:
         return QStringLiteral("<struct %1>").arg(asStruct()->typeName);
+    case TypeKind::Function:
+        return QStringLiteral("<function>");
     case TypeKind::Unknown: return QStringLiteral("<unknown>");
     }
     return QStringLiteral("<unknown>");
@@ -177,6 +189,8 @@ AbelValue defaultValueForType(const AbelType& type)
         return AbelValue::makeAny(AbelValue::makeVoid());
     case TypeKind::Struct:
         return AbelValue::makeUnknown();
+    case TypeKind::Function:
+        return AbelValue::makeUnknown();
     case TypeKind::Unknown: return AbelValue::makeUnknown();
     }
     return AbelValue::makeUnknown();
@@ -199,6 +213,8 @@ AbelValue convertValue(const AbelValue& value, const AbelType& target)
             fields.insert(name, convertValue(copied->fields.value(name), copied->fields.value(name).type()));
         return AbelValue::makeStruct(copied->typeName, copied->fieldOrder, std::move(fields));
     }
+    if (target.kind == TypeKind::Function && value.type().kind == TypeKind::Function && target == value.type())
+        return value;
     if (value.type().kind == target.kind)
         return value;
     if (target.kind == TypeKind::I32 && value.type().isInteger())

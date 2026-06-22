@@ -16,13 +16,16 @@ struct AbelLocation;
 struct AbelVectorValue;
 struct AbelAnyValue;
 struct AbelStructValue;
+struct AbelFunctionValue;
+struct LambdaExprNode;
 
 class AbelValue {
 public:
     using VectorPtr = std::shared_ptr<AbelVectorValue>;
     using AnyPtr = std::shared_ptr<AbelAnyValue>;
     using StructPtr = std::shared_ptr<AbelStructValue>;
-    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*, VectorPtr, AnyPtr, StructPtr>;
+    using FunctionPtr = std::shared_ptr<AbelFunctionValue>;
+    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*, VectorPtr, AnyPtr, StructPtr, FunctionPtr>;
 
     AbelValue() = default;
 
@@ -38,6 +41,7 @@ public:
     static AbelValue makeVector(const AbelType& elementType, std::vector<AbelValue> elements);
     static AbelValue makeAny(const AbelValue& value);
     static AbelValue makeStruct(const QString& typeName, const std::vector<QString>& fieldOrder, QHash<QString, AbelValue> fields);
+    static AbelValue makeFunction(const AbelType& type, FunctionPtr function);
     static AbelValue makeUnknown();
 
     const AbelType& type() const { return m_type; }
@@ -52,6 +56,7 @@ public:
     VectorPtr asVector() const;
     AnyPtr asAny() const;
     StructPtr asStruct() const;
+    FunctionPtr asFunction() const;
 
     QString debugString() const;
 
@@ -75,6 +80,13 @@ struct AbelStructValue {
     QString typeName;
     std::vector<QString> fieldOrder;
     QHash<QString, AbelValue> fields;
+};
+
+struct AbelFunctionValue {
+    const LambdaExprNode* lambda = nullptr;
+    QHash<QString, AbelValue> valueCaptures;
+    QHash<QString, AbelLocation*> refCaptures;
+    QHash<QString, bool> refConstness;
 };
 
 AbelValue defaultValueForType(const AbelType& type);

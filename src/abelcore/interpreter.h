@@ -34,6 +34,7 @@ private:
     bool collectStructs(const ProgramNode& program, AbelRuntimeContext& ctx);
     ExecResult callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args);
     ExecResult callFunctionExpr(const FunctionDeclNode& fn, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    AbelValue callFunctionValue(const AbelValue& fnValue, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExecResult callStructFunction(const FunctionDeclNode& fn, AbelLocation* self, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExecResult execBlock(const BlockStmtNode& block);
     ExecResult execStmt(const StmtNode& stmt);
@@ -45,6 +46,7 @@ private:
     AbelValue evalBinary(const BinaryExprNode& expr);
     AbelValue evalUnary(const UnaryExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);
+    AbelValue evalLambda(const LambdaExprNode& expr);
     AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     AbelValue evalStructConstructor(const QString& name, const StructRuntimeInfo& info, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue evalStructMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);

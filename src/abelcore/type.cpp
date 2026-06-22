@@ -12,6 +12,15 @@ bool AbelType::operator==(const AbelType& other) const
         return *pointee == *other.pointee;
     if (kind == TypeKind::Struct)
         return spelling == other.spelling;
+    if (kind == TypeKind::Function) {
+        if (!pointee || !other.pointee || *pointee != *other.pointee || params.size() != other.params.size())
+            return false;
+        for (size_t i = 0; i < params.size(); ++i) {
+            if (params[i] != other.params[i])
+                return false;
+        }
+        return true;
+    }
     return true;
 }
 
@@ -66,6 +75,18 @@ QString AbelType::displayName() const
     case TypeKind::Vector:
         return pointee ? QStringLiteral("vector<") + pointee->displayName() + QStringLiteral(">") : QStringLiteral("vector<?>");
     case TypeKind::Struct: return spelling.isEmpty() ? QStringLiteral("<struct>") : spelling;
+    case TypeKind::Function: {
+        QString out = QStringLiteral("func ");
+        out += pointee ? pointee->displayName() : QStringLiteral("<unknown>");
+        out += QStringLiteral("(");
+        for (size_t i = 0; i < params.size(); ++i) {
+            if (i > 0)
+                out += QStringLiteral(", ");
+            out += params[i].displayName();
+        }
+        out += QStringLiteral(")");
+        return out;
+    }
     case TypeKind::Unknown: return QStringLiteral("<unknown>");
     }
     return QStringLiteral("<unknown>");
@@ -111,6 +132,15 @@ AbelType makeStructType(const QString& name)
     return t;
 }
 
+AbelType makeFunctionType(const AbelType& returnType, std::vector<AbelType> params)
+{
+    AbelType t;
+    t.kind = TypeKind::Function;
+    t.pointee = std::make_shared<AbelType>(returnType);
+    t.params = std::move(params);
+    return t;
+}
+
 AbelType typeFromName(const QString& name)
 {
     if (name == QStringLiteral("void"))
@@ -134,7 +164,16 @@ AbelType typeFromName(const QString& name)
 
 AbelType typeFromAst(const TypeNode& node)
 {
-    AbelType base = node.elementType ? makeVectorType(typeFromAst(*node.elementType)) : typeFromName(node.name);
+    AbelType base = typeFromName(node.name);
+    if (node.name == QStringLiteral("vector") && node.elementType) {
+        base = makeVectorType(typeFromAst(*node.elementType));
+    } else if (node.name == QStringLiteral("func") && node.elementType) {
+        std::vector<AbelType> params;
+        params.reserve(node.functionParamTypes.size());
+        for (const auto& param : node.functionParamTypes)
+            params.push_back(typeFromAst(*param));
+        base = makeFunctionType(typeFromAst(*node.elementType), std::move(params));
+    }
     for (int i = 0; i < node.pointerDepth; ++i)
         base = makePointerType(base);
     if (node.isReference)
@@ -151,10 +190,10 @@ bool canAssignValue(const AbelType& target, const AbelType& source)
     if (target.kind == TypeKind::Any)
         return true;
     if (target.kind == source.kind)
-        return (target.kind != TypeKind::Pointer && target.kind != TypeKind::Vector)
+        return (target.kind != TypeKind::Pointer && target.kind != TypeKind::Vector && target.kind != TypeKind::Function)
             || !target.pointee
             || !source.pointee
-            || *target.pointee == *source.pointee;
+            || target == source;
     if (target.isInteger() && source.isInteger())
         return true;
     if (target.kind == TypeKind::F64 && source.isNumeric())

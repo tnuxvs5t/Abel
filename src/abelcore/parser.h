@@ -55,6 +55,7 @@ private:
     std::unique_ptr<ExprNode> parseUnary();
     std::unique_ptr<ExprNode> parsePostfix();
     std::unique_ptr<ExprNode> parsePrimary();
+    std::unique_ptr<ExprNode> parseLambda();
 
     bool looksLikeType() const;
     int precedence(TokenKind kind) const;

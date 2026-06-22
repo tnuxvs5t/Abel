@@ -53,9 +53,11 @@ AbelRuntimeContext::AbelRuntimeContext()
     pushFrame();
 }
 
-void AbelRuntimeContext::pushFrame()
+void AbelRuntimeContext::pushFrame(bool boundary)
 {
-    m_frames.push_back({});
+    RuntimeFrame frame;
+    frame.boundary = boundary;
+    m_frames.push_back(std::move(frame));
 }
 
 void AbelRuntimeContext::popFrame()
@@ -105,7 +107,7 @@ bool AbelRuntimeContext::defineVariable(const QString& name,
 {
     if (m_frames.isEmpty())
         pushFrame();
-    auto& frame = m_frames.back();
+    auto& frame = m_frames.back().variables;
     if (frame.contains(name)) {
         error(QStringLiteral("E0501"), QStringLiteral("variable '%1' is already defined in this scope").arg(name), span);
         return false;
@@ -122,9 +124,11 @@ bool AbelRuntimeContext::defineValueVariable(const QString& name, const AbelValu
 VariableSlot* AbelRuntimeContext::lookupVariable(const QString& name)
 {
     for (auto it = m_frames.rbegin(); it != m_frames.rend(); ++it) {
-        auto found = it->find(name);
-        if (found != it->end())
+        auto found = it->variables.find(name);
+        if (found != it->variables.end())
             return &found.value();
+        if (it->boundary)
+            break;
     }
     return nullptr;
 }
@@ -132,11 +136,30 @@ VariableSlot* AbelRuntimeContext::lookupVariable(const QString& name)
 const VariableSlot* AbelRuntimeContext::lookupVariable(const QString& name) const
 {
     for (auto it = m_frames.rbegin(); it != m_frames.rend(); ++it) {
-        auto found = it->constFind(name);
-        if (found != it->constEnd())
+        auto found = it->variables.constFind(name);
+        if (found != it->variables.constEnd())
             return &found.value();
+        if (it->boundary)
+            break;
     }
     return nullptr;
+}
+
+QHash<QString, VariableSlot> AbelRuntimeContext::visibleVariables() const
+{
+    QHash<QString, VariableSlot> out;
+    qsizetype start = 0;
+    for (qsizetype i = m_frames.size() - 1; i >= 0; --i) {
+        if (m_frames[i].boundary) {
+            start = i;
+            break;
+        }
+    }
+    for (qsizetype i = start; i < m_frames.size(); ++i) {
+        for (auto it = m_frames[i].variables.constBegin(); it != m_frames[i].variables.constEnd(); ++it)
+            out.insert(it.key(), it.value());
+    }
+    return out;
 }
 
 bool AbelRuntimeContext::assignVariable(const QString& name, const AbelValue& value, const SourceSpan& span)

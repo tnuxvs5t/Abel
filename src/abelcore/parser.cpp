@@ -197,6 +197,16 @@ std::unique_ptr<TypeNode> Parser::parseType()
         t->name = QStringLiteral("vector");
         t->elementType = parseType();
         consume(TokenKind::Greater, QStringLiteral("expected '>' after vector element type"));
+    } else if (match(TokenKind::KwFunc)) {
+        t->name = QStringLiteral("func");
+        t->elementType = parseType();
+        consume(TokenKind::LParen, QStringLiteral("expected '(' after func return type"));
+        if (!check(TokenKind::RParen)) {
+            do {
+                t->functionParamTypes.push_back(parseType());
+            } while (match(TokenKind::Comma));
+        }
+        consume(TokenKind::RParen, QStringLiteral("expected ')' after func parameter types"));
     } else if (match(TokenKind::KwAny)) {
         t->name = QStringLiteral("any");
     } else {
@@ -338,7 +348,7 @@ std::unique_ptr<StmtNode> Parser::parseForInit()
 
 bool Parser::looksLikeType() const
 {
-    if (check(TokenKind::KwConst) || check(TokenKind::KwVector) || check(TokenKind::KwAny))
+    if (check(TokenKind::KwConst) || check(TokenKind::KwVector) || check(TokenKind::KwAny) || check(TokenKind::KwFunc))
         return true;
     if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::Identifier)
         return true;
@@ -497,6 +507,8 @@ std::unique_ptr<ExprNode> Parser::parsePrimary()
     }
     if (match(TokenKind::KwThis))
         return std::make_unique<ThisExprNode>();
+    if (check(TokenKind::KwLambda))
+        return parseLambda();
     if (match(TokenKind::Identifier)) {
         auto name = std::make_unique<NameExprNode>();
         name->name = previous().text;
@@ -522,6 +534,45 @@ std::unique_ptr<ExprNode> Parser::parsePrimary()
     dummy->kind = LiteralExprNode::Kind::Int;
     dummy->text = QStringLiteral("0");
     return dummy;
+}
+
+std::unique_ptr<ExprNode> Parser::parseLambda()
+{
+    consume(TokenKind::KwLambda, QStringLiteral("expected lambda"));
+    auto lambda = std::make_unique<LambdaExprNode>();
+    consume(TokenKind::LBracket, QStringLiteral("expected '[' after lambda"));
+    QStringList captures;
+    if (!check(TokenKind::RBracket)) {
+        do {
+            QString capture;
+            if (match(TokenKind::Equal)) {
+                capture = QStringLiteral("=");
+            } else if (match(TokenKind::Amp)) {
+                if (check(TokenKind::Identifier))
+                    capture = QStringLiteral("&") + consume(TokenKind::Identifier, QStringLiteral("expected capture name")).text;
+                else
+                    capture = QStringLiteral("&");
+            } else {
+                capture = consume(TokenKind::Identifier, QStringLiteral("expected capture")).text;
+            }
+            captures.push_back(capture);
+        } while (match(TokenKind::Comma));
+    }
+    consume(TokenKind::RBracket, QStringLiteral("expected ']' after lambda capture list"));
+    lambda->captureText = captures.join(QStringLiteral(","));
+    lambda->returnType = parseType();
+    consume(TokenKind::LParen, QStringLiteral("expected '(' after lambda return type"));
+    if (!check(TokenKind::RParen)) {
+        do {
+            auto paramType = parseType();
+            QString paramName = consume(TokenKind::Identifier, QStringLiteral("expected lambda parameter name")).text;
+            lambda->paramTypes.push_back(std::move(paramType));
+            lambda->paramNames.push_back(paramName);
+        } while (match(TokenKind::Comma));
+    }
+    consume(TokenKind::RParen, QStringLiteral("expected ')' after lambda parameters"));
+    lambda->ownedBody = parseBlock();
+    return lambda;
 }
 
 } // namespace abel

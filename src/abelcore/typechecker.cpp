@@ -1,5 +1,9 @@
 #include "abelcore/typechecker.h"
 
+#include <QSet>
+
+#include <optional>
+
 namespace abel {
 
 TypeCheckResult TypeChecker::check(const ProgramNode& program)
@@ -345,6 +349,7 @@ ExprType TypeChecker::checkExpr(const ExprNode& expr)
     if (auto* e = dynamic_cast<const BinaryExprNode*>(&expr)) return checkBinary(*e);
     if (auto* e = dynamic_cast<const AssignExprNode*>(&expr)) return checkAssignment(*e);
     if (auto* e = dynamic_cast<const CallExprNode*>(&expr)) return checkCall(*e);
+    if (auto* e = dynamic_cast<const LambdaExprNode*>(&expr)) return checkLambda(*e);
     if (auto* e = dynamic_cast<const FieldAccessExprNode*>(&expr)) return checkFieldAccess(*e);
     if (auto* e = dynamic_cast<const IndexExprNode*>(&expr)) return checkIndex(*e);
     if (dynamic_cast<const ThisExprNode*>(&expr)) {
@@ -474,7 +479,14 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
 
     auto* name = dynamic_cast<NameExprNode*>(expr.callee.get());
     if (!name)
-        return errorExpr(expr.span, QStringLiteral("only direct function and builtin method calls are supported"));
+        return checkFunctionValueCall(checkExpr(*expr.callee).type, expr.args, expr.span);
+
+    if (const VariableInfo* variable = lookupVariable(name->name)) {
+        const AbelType calleeType = valueTypeOfVariable(variable->type);
+        if (calleeType.kind != TypeKind::Function)
+            return errorExpr(expr.span, QStringLiteral("variable '%1' is not a function value").arg(name->name));
+        return checkFunctionValueCall(calleeType, expr.args, expr.span);
+    }
 
     if (const StructInfo* info = m_structs.contains(name->name) ? &m_structs[name->name] : nullptr) {
         const size_t argc = expr.args.size();
@@ -538,6 +550,117 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     return errorExpr(expr.span, QStringLiteral("unknown function '%1'").arg(name->name));
+}
+
+ExprType TypeChecker::checkFunctionValueCall(const AbelType& functionType,
+                                             const std::vector<std::unique_ptr<ExprNode>>& args,
+                                             const SourceSpan& span)
+{
+    if (functionType.kind != TypeKind::Function || !functionType.pointee)
+        return errorExpr(span, QStringLiteral("callee is not a function value"));
+    if (args.size() != functionType.params.size())
+        return errorExpr(span, QStringLiteral("function value called with wrong argument count"));
+    for (size_t i = 0; i < args.size(); ++i) {
+        const AbelType& paramType = functionType.params[i];
+        ExprType arg = checkExpr(*args[i]);
+        if (paramType.isReference()) {
+            if (arg.category != ValueCategory::LValue)
+                error(args[i]->span, QStringLiteral("reference function parameter requires lvalue"));
+            else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
+                error(args[i]->span,
+                      QStringLiteral("cannot bind %1 to %2 lvalue").arg(paramType.displayName(), arg.type.displayName()));
+        } else if (!isAssignable(paramType, arg.type)) {
+            error(args[i]->span,
+                  QStringLiteral("cannot pass %1 to function parameter %2")
+                      .arg(arg.type.displayName(), paramType.displayName()));
+        }
+    }
+    return {*functionType.pointee, ValueCategory::PRValue, false};
+}
+
+ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
+{
+    AbelType returnType = typeFromAst(*expr.returnType);
+    if (!isSupportedType(returnType))
+        error(expr.returnType->span, QStringLiteral("unsupported lambda return type '%1'").arg(expr.returnType->displayName()));
+    std::vector<AbelType> params;
+    params.reserve(expr.paramTypes.size());
+    for (const auto& type : expr.paramTypes) {
+        AbelType paramType = typeFromAst(*type);
+        if (!isSupportedType(paramType))
+            error(type->span, QStringLiteral("unsupported lambda parameter type '%1'").arg(type->displayName()));
+        params.push_back(paramType);
+    }
+
+    QHash<QString, VariableInfo> visible;
+    for (const auto& scope : m_scopes) {
+        for (auto it = scope.constBegin(); it != scope.constEnd(); ++it)
+            visible.insert(it.key(), it.value());
+    }
+
+    enum class CaptureMode {
+        Value,
+        Reference,
+    };
+    std::optional<CaptureMode> defaultMode;
+    QHash<QString, CaptureMode> explicitCaptures;
+    const QStringList captureList = expr.captureText.split(QStringLiteral(","), Qt::SkipEmptyParts);
+    for (const QString& raw : captureList) {
+        const QString capture = raw.trimmed();
+        if (capture == QStringLiteral("=")) {
+            defaultMode = CaptureMode::Value;
+        } else if (capture == QStringLiteral("&")) {
+            defaultMode = CaptureMode::Reference;
+        } else if (capture.startsWith(QStringLiteral("&"))) {
+            explicitCaptures.insert(capture.mid(1), CaptureMode::Reference);
+        } else {
+            explicitCaptures.insert(capture, CaptureMode::Value);
+        }
+    }
+
+    QHash<QString, VariableInfo> captures;
+    QSet<QString> capturedNames;
+    auto captureOne = [&](const QString& name, CaptureMode mode) {
+        if (capturedNames.contains(name))
+            return;
+        auto found = visible.constFind(name);
+        if (found == visible.constEnd()) {
+            error(expr.span, QStringLiteral("unknown lambda capture '%1'").arg(name));
+            return;
+        }
+        capturedNames.insert(name);
+        captures.insert(name, VariableInfo{valueTypeOfVariable(found.value().type), mode == CaptureMode::Value || found.value().isConst});
+    };
+
+    if (defaultMode.has_value()) {
+        for (auto it = visible.constBegin(); it != visible.constEnd(); ++it) {
+            if (!explicitCaptures.contains(it.key()))
+                captureOne(it.key(), *defaultMode);
+        }
+    }
+    for (auto it = explicitCaptures.constBegin(); it != explicitCaptures.constEnd(); ++it)
+        captureOne(it.key(), it.value());
+
+    const AbelType previousReturn = m_currentReturnType;
+    const auto previousScopes = m_scopes;
+    const int previousLoopDepth = m_loopDepth;
+    m_currentReturnType = returnType;
+    m_loopDepth = 0;
+    m_scopes.clear();
+    pushScope();
+    for (auto it = captures.constBegin(); it != captures.constEnd(); ++it)
+        defineVariable(it.key(), it.value().type, it.value().isConst, expr.span);
+    pushScope();
+    for (size_t i = 0; i < params.size(); ++i)
+        defineVariable(expr.paramNames[static_cast<qsizetype>(i)], params[i], false, expr.span);
+    checkBlock(*expr.ownedBody, false);
+    popScope();
+    popScope();
+    m_scopes = previousScopes;
+    m_loopDepth = previousLoopDepth;
+    m_currentReturnType = previousReturn;
+
+    return {makeFunctionType(returnType, std::move(params)), ValueCategory::PRValue, false};
 }
 
 ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args)
@@ -676,6 +799,15 @@ bool TypeChecker::isSupportedType(const AbelType& type) const
         return false;
     if (type.kind == TypeKind::Struct)
         return m_structs.contains(type.spelling);
+    if (type.kind == TypeKind::Function) {
+        if (!type.pointee || !isSupportedType(*type.pointee))
+            return false;
+        for (const auto& param : type.params) {
+            if (!isSupportedType(param))
+                return false;
+        }
+        return true;
+    }
     if ((type.kind == TypeKind::Pointer || type.kind == TypeKind::Reference || type.kind == TypeKind::Vector) && type.pointee)
         return isSupportedType(*type.pointee);
     return true;

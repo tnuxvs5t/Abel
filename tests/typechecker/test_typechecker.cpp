@@ -202,6 +202,71 @@ private slots:
         auto result = checkSource(src);
         QVERIFY(!result.diagnostics.isEmpty());
     }
+
+    void acceptsFuncTypeAndLambdaCaptures()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 1;
+                int y = 2;
+                func int() h = lambda [x, &y] int() {
+                    y = y + 1;
+                    return x + y;
+                };
+                return h();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsUncapturedLambdaVariable()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 1;
+                func int() f = lambda [] int() {
+                    return x;
+                };
+                return f();
+            }
+        )");
+        auto result = checkSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
+
+    void rejectsFunctionValueWrongArgument()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                func int(int) f = lambda [] int(int x) {
+                    return x;
+                };
+                return f("bad");
+            }
+        )");
+        auto result = checkSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
+
+    void rejectsBreakInsideLambdaEvenWhenCreatedInLoop()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                while (true) {
+                    func void() f = lambda [] void() {
+                        break;
+                    };
+                    return 0;
+                }
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
 };
 
 QTEST_MAIN(AbelTypeCheckerTests)

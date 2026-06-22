@@ -73,6 +73,8 @@ private:
     ExprType checkBinary(const BinaryExprNode& expr);
     ExprType checkAssignment(const AssignExprNode& expr);
     ExprType checkCall(const CallExprNode& expr);
+    ExprType checkFunctionValueCall(const AbelType& functionType, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    ExprType checkLambda(const LambdaExprNode& expr);
     ExprType checkFieldAccess(const FieldAccessExprNode& expr);
     ExprType checkBuiltinMethodCall(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     ExprType checkIndex(const IndexExprNode& expr);

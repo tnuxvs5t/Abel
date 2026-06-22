@@ -1,5 +1,7 @@
 #include "abelcore/interpreter.h"
 
+#include <QSet>
+
 #include <cmath>
 
 namespace abel {
@@ -118,29 +120,57 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
-    m_ctx->pushFrame();
+    struct PreparedArg {
+        AbelValue value;
+        AbelLocation* location = nullptr;
+        bool byReference = false;
+    };
+    std::vector<PreparedArg> prepared(fixedCount);
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& p = *fn.params[i];
+        const AbelType target = typeFromAst(*p.type);
+        if (target.isReference()) {
+            AbelLocation* loc = evalLocation(*args[i]);
+            if (!loc)
+                continue;
+            AbelValue current = loc->read();
+            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+                error(QStringLiteral("E0566"),
+                      QStringLiteral("cannot bind method parameter '%1' of type %2 to %3 lvalue")
+                          .arg(p.name, target.displayName(), current.type().displayName()),
+                      p.span);
+                continue;
+            }
+            prepared[i].location = loc;
+            prepared[i].byReference = true;
+        } else {
+            prepared[i].value = convertOrError(evalExpr(*args[i]), target, p.span);
+        }
+    }
+    std::vector<AbelValue> packed;
+    if (variadic) {
+        packed.reserve(args.size() - fixedCount);
+        for (size_t i = fixedCount; i < args.size(); ++i)
+            packed.push_back(AbelValue::makeAny(evalExpr(*args[i])));
+    }
+    if (m_ctx->hasError()) {
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    m_ctx->pushFrame(true);
     m_ctx->defineVariable(QStringLiteral("this"), self, fn.isConstMethod, false, span);
     auto object = selfValue.asStruct();
     for (const auto& fieldName : object->fieldOrder)
         m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(object.get(), fieldName), fn.isConstMethod, false, span);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
-        const AbelType target = typeFromAst(*p.type);
-        if (target.isReference()) {
-            AbelLocation* loc = evalLocation(*args[i]);
-            if (loc)
-                m_ctx->defineVariable(p.name, loc, false, true, p.span);
-        } else {
-            AbelValue converted = convertOrError(evalExpr(*args[i]), target, p.span);
-            m_ctx->defineValueVariable(p.name, converted, false, p.span);
-        }
+        if (prepared[i].byReference)
+            m_ctx->defineVariable(p.name, prepared[i].location, false, true, p.span);
+        else
+            m_ctx->defineValueVariable(p.name, prepared[i].value, false, p.span);
     }
     if (variadic) {
         const ParameterNode& p = *fn.params.back();
-        std::vector<AbelValue> packed;
-        packed.reserve(args.size() - fixedCount);
-        for (size_t i = fixedCount; i < args.size(); ++i)
-            packed.push_back(AbelValue::makeAny(evalExpr(*args[i])));
         m_ctx->defineValueVariable(p.name, AbelValue::makeVector(makeType(TypeKind::Any), std::move(packed)), false, p.span);
     }
     if (m_ctx->hasError()) {
@@ -175,7 +205,7 @@ ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vect
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
-    m_ctx->pushFrame();
+    m_ctx->pushFrame(true);
     for (size_t i = 0; i < args.size(); ++i) {
         const ParameterNode& p = *fn.params[i];
         const AbelType target = typeFromAst(*p.type);
@@ -225,7 +255,12 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
-    m_ctx->pushFrame();
+    struct PreparedArg {
+        AbelValue value;
+        AbelLocation* location = nullptr;
+        bool byReference = false;
+    };
+    std::vector<PreparedArg> prepared(fixedCount);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         const AbelType target = typeFromAst(*p.type);
@@ -241,23 +276,38 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
                       p.span);
                 continue;
             }
-            m_ctx->defineVariable(p.name, loc, false, true, p.span);
+            prepared[i].location = loc;
+            prepared[i].byReference = true;
         } else {
-            AbelValue converted = convertOrError(evalExpr(*args[i]), target, p.span);
-            m_ctx->defineValueVariable(p.name, converted, false, p.span);
+            prepared[i].value = convertOrError(evalExpr(*args[i]), target, p.span);
         }
     }
+    std::vector<AbelValue> packed;
     if (variadic) {
         const ParameterNode& p = *fn.params.back();
         if (typeFromAst(*p.type).kind != TypeKind::Any) {
             error(QStringLiteral("E0560"), QStringLiteral("only any... variadic parameters are supported"), p.span);
         } else {
-            std::vector<AbelValue> packed;
             packed.reserve(args.size() - fixedCount);
             for (size_t i = fixedCount; i < args.size(); ++i)
                 packed.push_back(AbelValue::makeAny(evalExpr(*args[i])));
-            m_ctx->defineValueVariable(p.name, AbelValue::makeVector(makeType(TypeKind::Any), std::move(packed)), false, p.span);
         }
+    }
+    if (m_ctx->hasError()) {
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    m_ctx->pushFrame(true);
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& p = *fn.params[i];
+        if (prepared[i].byReference)
+            m_ctx->defineVariable(p.name, prepared[i].location, false, true, p.span);
+        else
+            m_ctx->defineValueVariable(p.name, prepared[i].value, false, p.span);
+    }
+    if (variadic) {
+        const ParameterNode& p = *fn.params.back();
+        m_ctx->defineValueVariable(p.name, AbelValue::makeVector(makeType(TypeKind::Any), std::move(packed)), false, p.span);
     }
     if (m_ctx->hasError()) {
         m_ctx->popFrame();
@@ -278,6 +328,84 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeVoid());
     error(QStringLiteral("E0543"), QStringLiteral("function '%1' ended without return").arg(fn.name), fn.span);
     return ExecResult::returned(AbelValue::makeUnknown());
+}
+
+AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
+                                         const std::vector<std::unique_ptr<ExprNode>>& args,
+                                         const SourceSpan& span)
+{
+    if (fnValue.type().kind != TypeKind::Function || !fnValue.type().pointee) {
+        error(QStringLiteral("E0580"), QStringLiteral("callee is not a function value"), span);
+        return AbelValue::makeUnknown();
+    }
+    auto function = fnValue.asFunction();
+    if (!function || !function->lambda || !function->lambda->ownedBody) {
+        error(QStringLiteral("E0581"), QStringLiteral("invalid function value"), span);
+        return AbelValue::makeUnknown();
+    }
+    if (args.size() != fnValue.type().params.size()) {
+        error(QStringLiteral("E0582"), QStringLiteral("function value called with wrong argument count"), span);
+        return AbelValue::makeUnknown();
+    }
+
+    std::vector<AbelValue> values(args.size());
+    std::vector<AbelLocation*> locations(args.size(), nullptr);
+    std::vector<bool> byReference(args.size(), false);
+    for (size_t i = 0; i < args.size(); ++i) {
+        const AbelType& target = fnValue.type().params[i];
+        if (target.isReference()) {
+            byReference[i] = true;
+            AbelLocation* loc = evalLocation(*args[i]);
+            if (!loc)
+                continue;
+            AbelValue current = loc->read();
+            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+                error(QStringLiteral("E0583"),
+                      QStringLiteral("cannot bind function parameter %1 to %2 lvalue")
+                          .arg(target.displayName(), current.type().displayName()),
+                      args[i]->span);
+                continue;
+            }
+            locations[i] = loc;
+        } else {
+            values[i] = convertOrError(evalExpr(*args[i]), target, args[i]->span);
+        }
+    }
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
+
+    const LambdaExprNode& lambda = *function->lambda;
+    m_ctx->pushFrame(true);
+    for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
+        m_ctx->defineValueVariable(it.key(), it.value(), true, lambda.span);
+    for (auto it = function->refCaptures.constBegin(); it != function->refCaptures.constEnd(); ++it)
+        m_ctx->defineVariable(it.key(), it.value(), function->refConstness.value(it.key(), false), true, lambda.span);
+    for (size_t i = 0; i < args.size(); ++i) {
+        const QString& name = lambda.paramNames[static_cast<qsizetype>(i)];
+        if (byReference[i])
+            m_ctx->defineVariable(name, locations[i], false, true, lambda.span);
+        else
+            m_ctx->defineValueVariable(name, values[i], false, lambda.span);
+    }
+    if (m_ctx->hasError()) {
+        m_ctx->popFrame();
+        return AbelValue::makeUnknown();
+    }
+
+    ExecResult flow = execBlock(*lambda.ownedBody);
+    m_ctx->popFrame();
+
+    const AbelType& returnType = *fnValue.type().pointee;
+    if (flow.kind == FlowKind::Return)
+        return convertOrError(flow.value, returnType, lambda.span);
+    if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
+        error(QStringLiteral("E0584"), QStringLiteral("break/continue cannot leave lambda"), lambda.span);
+        return AbelValue::makeUnknown();
+    }
+    if (returnType.kind == TypeKind::Void)
+        return AbelValue::makeVoid();
+    error(QStringLiteral("E0585"), QStringLiteral("lambda ended without return"), lambda.span);
+    return AbelValue::makeUnknown();
 }
 
 ExecResult Interpreter::execBlock(const BlockStmtNode& block)
@@ -528,6 +656,8 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
         return evalAssignment(*e);
     if (auto* e = dynamic_cast<const CallExprNode*>(&expr))
         return evalCall(*e);
+    if (auto* e = dynamic_cast<const LambdaExprNode*>(&expr))
+        return evalLambda(*e);
     if (auto* e = dynamic_cast<const IndexExprNode*>(&expr)) {
         AbelLocation* loc = evalLocation(*e);
         return loc ? loc->read() : AbelValue::makeUnknown();
@@ -823,7 +953,17 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
 
     auto* name = dynamic_cast<NameExprNode*>(expr.callee.get());
     if (!name) {
-        error(QStringLiteral("E0524"), QStringLiteral("only direct function calls are executable in Stage 3"), expr.span);
+        AbelValue callee = evalExpr(*expr.callee);
+        if (callee.type().kind == TypeKind::Function)
+            return callFunctionValue(callee, expr.args, expr.span);
+        error(QStringLiteral("E0524"), QStringLiteral("callee is not a function value"), expr.span);
+        return AbelValue::makeUnknown();
+    }
+    if (const VariableSlot* slot = m_ctx->lookupVariable(name->name)) {
+        AbelValue callee = slot->location ? slot->location->read() : AbelValue::makeUnknown();
+        if (callee.type().kind == TypeKind::Function)
+            return callFunctionValue(callee, expr.args, expr.span);
+        error(QStringLiteral("E0586"), QStringLiteral("variable '%1' is not a function value").arg(name->name), expr.span);
         return AbelValue::makeUnknown();
     }
     const FunctionDeclNode* fn = m_functions.value(name->name, nullptr);
@@ -844,6 +984,72 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         return AbelValue::makeUnknown();
     }
     return callFunctionExpr(*fn, expr.args, expr.span).value;
+}
+
+AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)
+{
+    AbelType returnType = typeFromAst(*expr.returnType);
+    std::vector<AbelType> params;
+    params.reserve(expr.paramTypes.size());
+    for (const auto& param : expr.paramTypes)
+        params.push_back(typeFromAst(*param));
+
+    auto function = std::make_shared<AbelFunctionValue>();
+    function->lambda = &expr;
+
+    enum class CaptureMode {
+        None,
+        Value,
+        Reference,
+    };
+    CaptureMode defaultMode = CaptureMode::None;
+    QHash<QString, CaptureMode> explicitCaptures;
+    const QStringList captures = expr.captureText.split(QStringLiteral(","), Qt::SkipEmptyParts);
+    for (const QString& raw : captures) {
+        const QString capture = raw.trimmed();
+        if (capture == QStringLiteral("=")) {
+            defaultMode = CaptureMode::Value;
+        } else if (capture == QStringLiteral("&")) {
+            defaultMode = CaptureMode::Reference;
+        } else if (capture.startsWith(QStringLiteral("&"))) {
+            explicitCaptures.insert(capture.mid(1), CaptureMode::Reference);
+        } else {
+            explicitCaptures.insert(capture, CaptureMode::Value);
+        }
+    }
+
+    auto visible = m_ctx->visibleVariables();
+    QSet<QString> capturedNames;
+    auto captureOne = [&](const QString& name, CaptureMode mode) {
+        if (capturedNames.contains(name))
+            return;
+        const VariableSlot slot = visible.value(name, VariableSlot{});
+        if (!slot.location) {
+            error(QStringLiteral("E0587"), QStringLiteral("unknown capture '%1'").arg(name), expr.span);
+            return;
+        }
+        capturedNames.insert(name);
+        if (mode == CaptureMode::Reference) {
+            function->refCaptures.insert(name, slot.location);
+            function->refConstness.insert(name, slot.isConst);
+        } else if (mode == CaptureMode::Value) {
+            AbelValue value = slot.location->read();
+            function->valueCaptures.insert(name, convertValue(value, value.type()));
+        }
+    };
+
+    if (defaultMode != CaptureMode::None) {
+        for (auto it = visible.constBegin(); it != visible.constEnd(); ++it) {
+            if (!explicitCaptures.contains(it.key()))
+                captureOne(it.key(), defaultMode);
+        }
+    }
+    for (auto it = explicitCaptures.constBegin(); it != explicitCaptures.constEnd(); ++it)
+        captureOne(it.key(), it.value());
+
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
+    return AbelValue::makeFunction(makeFunctionType(returnType, std::move(params)), std::move(function));
 }
 
 AbelValue Interpreter::evalStructConstructor(const QString& name,
@@ -881,15 +1087,23 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
         return AbelValue::makeUnknown();
     }
 
-    m_ctx->pushFrame();
+    std::vector<AbelValue> prepared;
+    prepared.reserve(args.size());
+    for (size_t i = 0; i < args.size(); ++i) {
+        const ParameterNode& p = *info.constructor->params[i];
+        prepared.push_back(convertOrError(evalExpr(*args[i]), typeFromAst(*p.type), args[i]->span));
+    }
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
+
+    m_ctx->pushFrame(true);
     m_ctx->defineVariable(QStringLiteral("this"), self, false, false, span);
     auto structValue = self->read().asStruct();
     for (const auto& fieldName : structValue->fieldOrder)
         m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(structValue.get(), fieldName), false, false, span);
     for (size_t i = 0; i < args.size(); ++i) {
         const ParameterNode& p = *info.constructor->params[i];
-        AbelValue converted = convertOrError(evalExpr(*args[i]), typeFromAst(*p.type), p.span);
-        m_ctx->defineValueVariable(p.name, converted, false, p.span);
+        m_ctx->defineValueVariable(p.name, prepared[i], false, p.span);
     }
     ExecResult flow = execBlock(*info.constructor->body);
     m_ctx->popFrame();

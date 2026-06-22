@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 11：struct 字段/构造/方法/this/值复制最小闭环已建立，进入 lambda/func type 与 backend/resource 闭环。
+Stage 12：func type / lambda capture / function value call 最小闭环已建立，进入 backend/resource/plugin 的 Qt 动态链接闭环。
 ```
 
 ### 已完成
@@ -2005,6 +2005,14 @@ Stage 11：struct 字段/构造/方法/this/值复制最小闭环已建立，进
 57. TypeChecker 增加 struct 收集、字段/构造/方法检查、字段访问、方法调用、构造调用、this 作用域；v0 仍禁止引用字段。
 58. Interpreter 增加 struct 构造、字段访问/写回、方法调用、构造体内字段裸名、this 变量、const 方法基础只读框架。
 59. 增加 parser/typechecker/interpreter tests，覆盖 Counter 示例、未知字段诊断、struct 赋值复制。
+60. Type/AST/parser 增加 `func R(A, B)` 函数值类型与 `lambda [...] R(...) { ... }` 表达式解析。
+61. Runtime 增加函数值 AbelValue 表示，闭包保存 value captures 与 reference captures。
+62. Runtime frame 增加函数边界标记与 `visibleVariables()`，用于 lambda 默认捕获且避免函数体越界访问调用者局部变量。
+63. TypeChecker 增加 function value call 检查、lambda 参数/返回检查、显式/默认 capture 检查，并隔离 lambda 体内未捕获外部变量。
+64. TypeChecker 修正 lambda 体控制流边界：lambda 内 `break/continue` 不能继承创建处外层 loop 许可。
+65. Interpreter 增加 lambda 创建、按值捕获复制、按引用捕获写回、混合捕获、函数值变量调用和非直接 callee 调用。
+66. Interpreter 修正函数/方法/构造调用的实参求值顺序：实参在调用者作用域先求值，再进入被调函数/方法/构造体边界帧。
+67. 增加 parser/typechecker/interpreter tests，覆盖 func type、lambda value/reference/mixed capture、未捕获变量拒绝、函数值实参类型错误、lambda 内非法 break。
 ```
 
 ### 最近验证
@@ -2107,14 +2115,24 @@ Stage 11：struct 字段/构造/方法/this/值复制最小闭环已建立，进
 - Stage 11 CLI run smoke 通过：
   /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
   输出 exit=0。
+- Stage 12 构建通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
+- Stage 12 在 4GB 虚拟内存上限下测试通过：
+  /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+- Stage 12 CLI check smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel check examples/smoke/hello.abel'
+  输出 ok。
+- Stage 12 CLI run smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
+  输出 exit=0。
 ```
 
 ### 未完成
 
 ```text
 1. 尚无 backend plugin 示例、BackendRegistry、ResourceNode JSON 加载闭环。
-2. parser 仍是最小闭环，尚未覆盖 lambda/func type。
-3. interpreter 尚未实现 lambda/backend。
+2. 尚未实现 backend block 的静态签名表、运行时 BackendRegistry 分发、ResourceNode JSON 校验与 Qt plugin loader 闭环。
+3. 尚无 Qt backend plugin interface/base/binder/example plugin。
 4. const 指针、const 引用的完整静态语义尚未实现；当前只保留基础 const 变量写保护。
 5. BuiltinRegistry 尚未接入 scan；`to_str` 尚未支持用户自定义重载，只覆盖内建 stringify。
 6. struct 当前是最小闭环：尚未覆盖 private/public、复杂 const receiver、引用返回生命周期、指针字段高级场景。
@@ -2123,11 +2141,12 @@ Stage 11：struct 字段/构造/方法/this/值复制最小闭环已建立，进
 ### 下一步
 
 ```text
-Stage 12：
-1. 进入 lambda/func type 的 AST/parser/typechecker/interpreter 最小闭环：func 类型、lambda capture、调用。
-2. 随后进入 backend/resource/plugin 的 Qt 动态链接闭环。
-3. 补 scan 与用户自定义 to_str 的范围决策。
-4. 保持每个小闭环 build + 4GB ctest + CLI smoke + commit。
+Stage 13：
+1. 建立 backend block 的 parser/typechecker/runtime 符号闭环：`Backend::fn(args)` 先能静态查签名，运行时能诊断未绑定 backend。
+2. 实现 BackendRegistry 与 ResourceNode JSON 读取/校验骨架。
+3. 建立 Qt plugin interface/base/binder/example plugin 最小动态链接闭环。
+4. 补 scan 与用户自定义 to_str 的范围决策。
+5. 保持每个小闭环 build + 4GB ctest + CLI smoke + commit。
 ```
 
 ### 风险与未决
@@ -2155,7 +2174,8 @@ be0424a builtins: add any variadic string functions
 36cbb49 typechecker: add Stage 8 static checks
 5972478 control-flow: add for loop execution
 58d89f7 builtins: complete vector methods
-待本次 Stage 11 struct 提交后追加 commit hash。
+dab7040 struct: add fields constructors and methods
+待本次 Stage 12 lambda 提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。

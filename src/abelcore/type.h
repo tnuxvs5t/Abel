@@ -3,6 +3,7 @@
 #include <QString>
 
 #include <memory>
+#include <vector>
 
 namespace abel {
 
@@ -22,6 +23,7 @@ enum class TypeKind {
     Nullptr,
     Vector,
     Struct,
+    Function,
     Unknown,
 };
 
@@ -29,6 +31,7 @@ struct AbelType {
     TypeKind kind = TypeKind::Unknown;
     QString spelling;
     std::shared_ptr<AbelType> pointee;
+    std::vector<AbelType> params;
 
     bool operator==(const AbelType& other) const;
     bool operator!=(const AbelType& other) const { return !(*this == other); }
@@ -46,6 +49,7 @@ AbelType makePointerType(const AbelType& pointee);
 AbelType makeReferenceType(const AbelType& referred);
 AbelType makeVectorType(const AbelType& element);
 AbelType makeStructType(const QString& name);
+AbelType makeFunctionType(const AbelType& returnType, std::vector<AbelType> params);
 AbelType typeFromName(const QString& name);
 AbelType typeFromAst(const TypeNode& node);
 bool canAssignValue(const AbelType& target, const AbelType& source);

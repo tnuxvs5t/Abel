@@ -8,9 +8,20 @@ QString TypeNode::displayName() const
     if (isConst)
         out += QStringLiteral("const ");
     if (elementType)
-        out += QStringLiteral("vector<") + elementType->displayName() + QStringLiteral(">");
+        out += name == QStringLiteral("func")
+            ? QStringLiteral("func ") + elementType->displayName()
+            : QStringLiteral("vector<") + elementType->displayName() + QStringLiteral(">");
     else
         out += name;
+    if (name == QStringLiteral("func")) {
+        out += QStringLiteral("(");
+        for (qsizetype i = 0; i < static_cast<qsizetype>(functionParamTypes.size()); ++i) {
+            if (i > 0)
+                out += QStringLiteral(", ");
+            out += functionParamTypes[static_cast<size_t>(i)]->displayName();
+        }
+        out += QStringLiteral(")");
+    }
     for (int i = 0; i < pointerDepth; ++i)
         out += QStringLiteral("*");
     if (isReference)

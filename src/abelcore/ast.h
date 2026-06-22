@@ -20,7 +20,8 @@ struct TypeNode : AstNode {
     bool isConst = false;
     int pointerDepth = 0;
     bool isReference = false;
-    std::unique_ptr<TypeNode> elementType; // vector<T>
+    std::unique_ptr<TypeNode> elementType; // vector<T> element or func return type
+    std::vector<std::unique_ptr<TypeNode>> functionParamTypes;
 
     QString displayName() const;
 };
@@ -86,8 +87,7 @@ struct LambdaExprNode final : ExprNode {
     QString captureText;
     std::unique_ptr<TypeNode> returnType;
     QList<QString> paramNames;
-    QList<std::unique_ptr<TypeNode>> paramTypes;
-    struct BlockStmtNode* body = nullptr; // owned by ownedBody
+    std::vector<std::unique_ptr<TypeNode>> paramTypes;
     std::unique_ptr<struct BlockStmtNode> ownedBody;
 };
 
