@@ -105,6 +105,7 @@ struct PackageCachedResource {
     QString packageRoot;
     QString sourcePath;
     QString cachedPath;
+    QString metadataPath;
     ResourceNode node;
 };
 

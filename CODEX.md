@@ -22,7 +22,7 @@
 
 不要默认修改 Abel 编译器/解释器源码。
 不要把用户项目扩成大型框架。
-不要幻想 Abel 已经有 registry、semver solver、远程 download cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、lockfile、package graph consumption、backend artifact 项目缓存、CMake backend artifact 自动构建第一片、add/remove/update/build 做成早期闭环。
+不要幻想 Abel 已经有 registry、semver solver、远程 download cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、lockfile、package graph consumption、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、add/remove/update/build 做成早期闭环。
 
 当前 Abel 的正确定位：
 
@@ -37,7 +37,7 @@ C/C++ 值模型
 + 本地 path dependency + abel.lock.json
 + package graph 消费依赖 backendArtifacts
 + backendArtifacts[].build 的 CMake 自动构建第一片
-+ .abel/cache/backend 项目级 backend artifact 缓存
++ .abel/cache/backend 项目级 backend artifact 缓存与 .abel-cache.json sidecar
 + abel add/remove/update/build
 + abel check / abel run
 ```
@@ -193,7 +193,7 @@ $ABEL_BIN run .
 - `fn int main()` 的返回值会成为进程退出码；
 - 普通成功建议 `return 0;`；
 - 如果要观察计算结果，优先用 `println(...)` 输出，不要只依赖退出码；
-- 当前项目入口、本地 path dependency、lockfile、backend artifact 项目缓存与 CMake backend artifact 自动构建只是早期包管理闭环；不要假设已有成熟模块系统、registry、semver solver、远程下载缓存或版本化缓存失效。
+- 当前项目入口、本地 path dependency、lockfile、backend artifact 项目缓存、sidecar 失效检测与 CMake backend artifact 自动构建只是早期包管理闭环；不要假设已有成熟模块系统、registry、semver solver、远程下载缓存或完整 ABI/版本化缓存失效。
 
 ---
 
@@ -915,7 +915,7 @@ $ABEL_BIN run .
 .abel/cache/backend/<package>/<backendId>/<plugin-file>
 ```
 
-之后 `$ABEL_BIN run .` 优先加载这个缓存；缓存不存在时才回退到 manifest 里的源 artifact path。
+之后 `$ABEL_BIN run .` 会检查缓存旁边的 `<plugin>.abel-cache.json` sidecar。只有缓存 `.so` 存在，且 sidecar 仍匹配源 artifact 的路径、大小、mtime、ResourceNode 字段与 symbols，才优先加载缓存；缓存不存在、sidecar 缺失或失效时，回退到 manifest 里的源 artifact path。重新运行 `$ABEL_BIN build .` 会刷新缓存和 sidecar。
 
 `backendArtifacts[].build` 最小形状：
 
@@ -953,7 +953,7 @@ backend 排错顺序：
 1. Abel 源码是否 check 通过。
 2. build/backend/plugins/libmath_backend.so 是否存在。
 3. $ABEL_BIN build . 是否成功配置/构建 backend CMake。
-4. $ABEL_BIN build . 是否成功写入 .abel/cache/backend/...。
+4. $ABEL_BIN build . 是否成功写入 .abel/cache/backend/... 和对应 .abel-cache.json。
 5. resource JSON path 或 backendArtifacts path 是否指向构建后的真实 .so。
 5. iid 是否是 org.abel.IAbelBackend/1.0。
 6. backendId 是否是 MathSystem。

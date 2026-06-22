@@ -8,11 +8,13 @@ Current implementation scope:
 - C/C++-style value model with storage, lvalues/prvalues, pointers, references, structs, and vector values;
 - `any`, `any...`, lambda/function values, control flow, and core builtins such as `build_string`, `print`, and vector methods;
 - backend blocks, resource-node JSON, `QPluginLoader` loading, and Qt/C++ plugin dispatch through `libabelcore.so`;
-- v1 package skeleton with `abel init [project-dir]`, `abel.package.json`, `abel add/remove/update/build`, local path dependencies, `abel.lock.json`, package graph consumption, CMake backend artifact auto-build metadata, and project-local backend artifact cache under `.abel/cache/backend`;
+- v1 package skeleton with `abel init [project-dir]`, `abel.package.json`, `abel add/remove/update/build`, local path dependencies, `abel.lock.json`, package graph consumption, CMake backend artifact auto-build metadata, and project-local backend artifact cache under `.abel/cache/backend` with `.abel-cache.json` sidecar validation;
 - installable Abel SDK first slice: headers, `libabelcore.so`, `abel` CLI, `AbelConfig.cmake`, `AbelTargets.cmake`, external backend fixture coverage for `find_package(Abel REQUIRED)`, and a backend binder matrix for common scalar/vector types plus `AbelRuntimeContext&` diagnostics;
 - CLI commands: `abel init`, `abel add`, `abel remove`, `abel update`, `abel build`, `abel check`, `abel run`, `abel package check`, `abel resources check`, and `abel run --resource`.
 
-Abel still does **not** implement split/JIT, a large VM, registry downloads, semantic-version solving, versioned cache invalidation, a stable cross-Qt/cross-compiler ABI, a manifest/hash audit system, or a context exporter. Backend plugin auto-build currently exists only as a first CMake-based `backendArtifacts[].build` slice.
+Abel still does **not** implement split/JIT, a large VM, registry downloads, semantic-version solving, full versioned/ABI cache invalidation, a stable cross-Qt/cross-compiler ABI, a manifest/hash audit system, or a context exporter. Backend plugin auto-build currently exists only as a first CMake-based `backendArtifacts[].build` slice.
+
+`abel build <project-dir>` copies root/dependency backend artifacts into `.abel/cache/backend/...` and writes a neighboring `<plugin>.abel-cache.json` sidecar. `abel run <project-dir>` only prefers the cached plugin when that sidecar still matches the current source artifact path, size, mtime, ResourceNode fields, and symbol list; if metadata is missing or stale, it falls back to the source artifact path until `abel build` refreshes the cache.
 
 ## Build
 

@@ -1164,11 +1164,11 @@ $ABEL remove some_dep .
 .abel/cache/backend/<package>/<backendId>/<plugin-file>
 ```
 
-它还不是完整 native/backend artifact 生态；目前自动构建只支持 CMake build spec，没有 ABI hash、semver 或远程 registry 级缓存失效策略。当前缓存策略是：`abel build` 每次先构建需要构建的 backend，再覆盖复制到项目缓存。
+它还不是完整 native/backend artifact 生态；目前自动构建只支持 CMake build spec，没有 ABI hash、semver 或远程 registry 级缓存失效策略。当前缓存策略是：`abel build` 每次先构建需要构建的 backend，再覆盖复制到项目缓存，并在同目录写入 `<plugin>.abel-cache.json` 元数据 sidecar。
 
-`abel run <project-dir>` 会读取 package graph；如果依赖包在 `backendArtifacts` 声明了 Qt plugin，根项目只要通过 `abel add path` 依赖它，运行时也会自动加载这个依赖 backend。若已经运行过 `abel build`，`run` 优先加载 `.abel/cache/backend/...` 下的缓存 artifact；若缓存不存在，则回退到依赖包声明的源 artifact 路径。lockfile 若已经过期，`abel check/run` 会提示先运行 `abel update` 或 `abel build`，避免悄悄使用旧依赖图。
+`abel run <project-dir>` 会读取 package graph；如果依赖包在 `backendArtifacts` 声明了 Qt plugin，根项目只要通过 `abel add path` 依赖它，运行时也会自动加载这个依赖 backend。若已经运行过 `abel build`，`run` 只会在缓存 `.so` 存在且 sidecar 元数据仍匹配当前源 artifact 的路径、大小、mtime、ResourceNode 字段与 symbols 时，优先加载 `.abel/cache/backend/...` 下的缓存 artifact；若缓存不存在、元数据缺失或已经失效，则回退到依赖包声明的源 artifact 路径，直到重新运行 `abel build` 刷新缓存。lockfile 若已经过期，`abel check/run` 会提示先运行 `abel update` 或 `abel build`，避免悄悄使用旧依赖图。
 
-注意：这仍只是 v1 包管理引擎的早期闭环。registry、semver solver、download cache、安装版 SDK 成熟化、ABI 校验与版本化缓存失效仍是后续 v1 工作。
+注意：这仍只是 v1 包管理引擎的早期闭环。registry、semver solver、download cache、安装版 SDK 成熟化、ABI 校验与完整版本化缓存失效仍是后续 v1 工作。
 
 若项目需要 C++ backend，当前可以在根包或依赖包描述里写 `backendArtifacts`。如果 plugin 已经存在，`abel build` 会直接复制；如果写了 `build` 字段，`abel build` 会先调用 CMake 构建 plugin。运行时 `abel run <project-dir>` 自动加载 plugin，不用在普通运行命令里手动传 `--resource`：
 
@@ -1198,7 +1198,7 @@ $ABEL remove some_dep .
 }
 ```
 
-`path` 相对声明它的 package 根目录解析，并且应该指向 CMake 构建完成后的 `.so`。`build.source` 与 `build.buildDir` 也相对 package 根目录解析。`abel build` 会先构建，再把 `path` 指向的产物复制到根项目 `.abel/cache/backend/...`；`abel run` 优先加载缓存。这仍是过渡形态；v1 complete 的目标是由包管理引擎生成和维护 backend artifact/resource 信息。
+`path` 相对声明它的 package 根目录解析，并且应该指向 CMake 构建完成后的 `.so`。`build.source` 与 `build.buildDir` 也相对 package 根目录解析。`abel build` 会先构建，再把 `path` 指向的产物复制到根项目 `.abel/cache/backend/...`，并写 `<plugin>.abel-cache.json`；`abel run` 在 sidecar 匹配时优先加载缓存，否则回退源 artifact。这仍是过渡形态；v1 complete 的目标是由包管理引擎生成和维护 backend artifact/resource 信息。
 
 示例 `src/main.abel`：
 

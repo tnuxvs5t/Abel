@@ -141,6 +141,130 @@ QString backendArtifactCachedPath(const QString& rootDir, const PackageResolvedR
                                      + fileName);
 }
 
+QString backendArtifactCacheMetadataPath(const QString& cachedPath)
+{
+    return cachedPath + QStringLiteral(".abel-cache.json");
+}
+
+QString canonicalOrAbsoluteFilePath(const QFileInfo& info)
+{
+    const QString canonical = info.canonicalFilePath();
+    return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
+}
+
+QString fileSizeStamp(const QFileInfo& info)
+{
+    return QString::number(info.size());
+}
+
+QString fileMTimeStamp(const QFileInfo& info)
+{
+    return QString::number(info.lastModified().toMSecsSinceEpoch());
+}
+
+QJsonArray symbolsToJson(const QStringList& symbols)
+{
+    QJsonArray out;
+    for (const QString& symbol : symbols)
+        out.push_back(symbol);
+    return out;
+}
+
+bool symbolsMatchJson(const QJsonValue& value, const QStringList& expected)
+{
+    if (!value.isArray())
+        return false;
+    const QJsonArray array = value.toArray();
+    if (array.size() != expected.size())
+        return false;
+    for (qsizetype i = 0; i < array.size(); ++i) {
+        if (!array.at(i).isString() || array.at(i).toString() != expected.at(i))
+            return false;
+    }
+    return true;
+}
+
+QJsonObject backendArtifactCacheMetadata(const PackageResolvedResource& resource,
+                                         const QString& sourcePath,
+                                         const QFileInfo& sourceInfo)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("formatVersion"), 1);
+    object.insert(QStringLiteral("packageName"), resource.packageName);
+    object.insert(QStringLiteral("backendId"), resource.node.backendId);
+    object.insert(QStringLiteral("sourcePath"), canonicalOrAbsoluteFilePath(sourceInfo));
+    object.insert(QStringLiteral("sourceSize"), fileSizeStamp(sourceInfo));
+    object.insert(QStringLiteral("sourceMTimeMs"), fileMTimeStamp(sourceInfo));
+    object.insert(QStringLiteral("kind"), resource.node.kind);
+    object.insert(QStringLiteral("iid"), resource.node.iid);
+    object.insert(QStringLiteral("qtVersion"), resource.node.qtVersion);
+    object.insert(QStringLiteral("kit"), resource.node.kit);
+    object.insert(QStringLiteral("symbols"), symbolsToJson(resource.node.symbols));
+    object.insert(QStringLiteral("declaredPath"), resource.node.path);
+    object.insert(QStringLiteral("sourcePathInput"), sourcePath);
+    return object;
+}
+
+bool writeBackendArtifactCacheMetadata(const QString& metadataPath,
+                                       const PackageResolvedResource& resource,
+                                       const QString& sourcePath,
+                                       const QFileInfo& sourceInfo,
+                                       QList<Diagnostic>& diagnostics)
+{
+    QFile file(metadataPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        SourceSpan span;
+        span.file = metadataPath;
+        addPackageError(diagnostics,
+                        QStringLiteral("cannot write backend artifact cache metadata '%1'").arg(metadataPath),
+                        span);
+        return false;
+    }
+    const QByteArray bytes = QJsonDocument(backendArtifactCacheMetadata(resource, sourcePath, sourceInfo))
+                                 .toJson(QJsonDocument::Indented);
+    if (file.write(bytes) != bytes.size()) {
+        SourceSpan span;
+        span.file = metadataPath;
+        addPackageError(diagnostics,
+                        QStringLiteral("failed to write backend artifact cache metadata '%1'").arg(metadataPath),
+                        span);
+        return false;
+    }
+    return true;
+}
+
+bool backendArtifactCacheMetadataMatches(const QString& metadataPath,
+                                         const PackageResolvedResource& resource,
+                                         const QString& sourcePath)
+{
+    const QFileInfo sourceInfo(sourcePath);
+    if (!sourceInfo.isFile())
+        return false;
+
+    QFile file(metadataPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return false;
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject())
+        return false;
+
+    const QJsonObject object = doc.object();
+    return object.value(QStringLiteral("formatVersion")).toInt() == 1
+        && object.value(QStringLiteral("packageName")).toString() == resource.packageName
+        && object.value(QStringLiteral("backendId")).toString() == resource.node.backendId
+        && object.value(QStringLiteral("sourcePath")).toString() == canonicalOrAbsoluteFilePath(sourceInfo)
+        && object.value(QStringLiteral("sourceSize")).toString() == fileSizeStamp(sourceInfo)
+        && object.value(QStringLiteral("sourceMTimeMs")).toString() == fileMTimeStamp(sourceInfo)
+        && object.value(QStringLiteral("kind")).toString() == resource.node.kind
+        && object.value(QStringLiteral("iid")).toString() == resource.node.iid
+        && object.value(QStringLiteral("qtVersion")).toString() == resource.node.qtVersion
+        && object.value(QStringLiteral("kit")).toString() == resource.node.kit
+        && symbolsMatchJson(object.value(QStringLiteral("symbols")), resource.node.symbols)
+        && object.value(QStringLiteral("declaredPath")).toString() == resource.node.path
+        && object.value(QStringLiteral("sourcePathInput")).toString() == sourcePath;
+}
+
 QStringList parseStringList(const QJsonObject& object,
                             const QString& key,
                             QList<Diagnostic>& diagnostics,
@@ -967,12 +1091,8 @@ PackageBackendCacheResult updatePackageBackendCache(const PackageGraphResult& gr
             continue;
         }
 
-        const QString canonicalSource = sourceInfo.canonicalFilePath().isEmpty()
-            ? sourceInfo.absoluteFilePath()
-            : sourceInfo.canonicalFilePath();
-        const QString canonicalCache = cachedInfo.canonicalFilePath().isEmpty()
-            ? cachedInfo.absoluteFilePath()
-            : cachedInfo.canonicalFilePath();
+        const QString canonicalSource = canonicalOrAbsoluteFilePath(sourceInfo);
+        const QString canonicalCache = canonicalOrAbsoluteFilePath(cachedInfo);
 
         if (canonicalSource != canonicalCache) {
             if (QFileInfo::exists(cachedPath) && !QFile::remove(cachedPath)) {
@@ -993,12 +1113,16 @@ PackageBackendCacheResult updatePackageBackendCache(const PackageGraphResult& gr
                 continue;
             }
         }
+        const QString metadataPath = backendArtifactCacheMetadataPath(cachedPath);
+        if (!writeBackendArtifactCacheMetadata(metadataPath, resource, sourcePath, sourceInfo, result.diagnostics))
+            continue;
 
         PackageCachedResource cached;
         cached.packageName = resource.packageName;
         cached.packageRoot = resource.packageRoot;
         cached.sourcePath = sourcePath;
         cached.cachedPath = cachedPath;
+        cached.metadataPath = metadataPath;
         cached.node = resource.node;
         cached.node.path = cachedPath;
         cached.node.state = ResourceNodeState::Unloaded;
@@ -1021,7 +1145,10 @@ QList<PackageResolvedResource> cachedPackageBackendArtifacts(const PackageGraphR
     for (const PackageResolvedResource& resource : graph.backendArtifacts) {
         PackageResolvedResource resolved = resource;
         const QString cachedPath = backendArtifactCachedPath(graph.root.rootDir, resource);
-        if (QFileInfo(cachedPath).isFile()) {
+        const QString metadataPath = backendArtifactCacheMetadataPath(cachedPath);
+        const QString sourcePath = backendArtifactSourcePath(resource);
+        if (QFileInfo(cachedPath).isFile()
+            && backendArtifactCacheMetadataMatches(metadataPath, resource, sourcePath)) {
             resolved.packageRoot = graph.root.rootDir;
             resolved.node.path = cachedPath;
             resolved.node.state = ResourceNodeState::Unloaded;
