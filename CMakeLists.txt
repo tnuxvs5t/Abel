@@ -34,6 +34,10 @@ add_library(abelcore SHARED
     src/abelcore/value.cpp
     src/abelcore/runtime.h
     src/abelcore/runtime.cpp
+    src/abelcore/backend_registry.h
+    src/abelcore/backend_registry.cpp
+    src/abelcore/resource_node.h
+    src/abelcore/resource_node.cpp
     src/abelcore/builtin_registry.h
     src/abelcore/builtin_registry.cpp
     src/abelcore/typechecker.h
@@ -133,3 +137,16 @@ target_link_libraries(abel_typechecker_tests
 )
 
 add_test(NAME abel_typechecker_tests COMMAND abel_typechecker_tests)
+
+add_executable(abel_backend_resource_tests
+    tests/backend/test_backend_resource.cpp
+)
+
+target_link_libraries(abel_backend_resource_tests
+    PRIVATE
+        abelcore
+        Qt6::Core
+        Qt6::Test
+)
+
+add_test(NAME abel_backend_resource_tests COMMAND abel_backend_resource_tests)

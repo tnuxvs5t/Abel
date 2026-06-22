@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 13a：backend block 静态签名表与未绑定 backend 运行时诊断最小闭环已建立，进入 BackendRegistry / ResourceNode JSON 骨架。
+Stage 13b：BackendRegistry 与 ResourceNode JSON 骨架已完成，进入 Qt backend plugin interface/base/binder/example plugin 动态链接闭环。
 ```
 
 ### 已完成
@@ -2017,6 +2017,13 @@ Stage 13a：backend block 静态签名表与未绑定 backend 运行时诊断最
 69. TypeChecker 增加 `Backend::fn(args)` 静态签名检查，覆盖参数个数、参数类型、引用参数 lvalue 要求、返回类型。
 70. Interpreter 增加 backend block 运行时表，`Backend::fn(args)` 可定位 backend/function；当前未绑定插件时返回结构化 E0607 诊断。
 71. 增加 typechecker/interpreter tests，覆盖 backend 静态调用通过、错误参数拒绝、未知 backend function 拒绝、未绑定 backend 运行时诊断。
+72. 实现 BackendRegistry 最小核心：backend function descriptor 注册、完整/短 symbol 规范化、find/has、bind runtime callback、call 分发。
+73. BackendRegistry 增加结构化 backend/resource 诊断：未绑定 backend / 未绑定 runtime 使用 E0607，缺失 symbol 使用 E0608，非法注册/绑定使用 E0610，重复注册使用 E0611。
+74. Interpreter 收集 backend block 时同步注册 BackendRegistry descriptor；运行 `Backend::fn(args)` 时先按签名求值/转换实参，引用参数保留 AbelLocation，再委托 BackendRegistry 分发。
+75. 实现 ResourceNode JSON 解析与校验骨架：id/kind/path/iid/backendId/qtVersion/kit/symbols/state/lastError；校验 qt_plugin、IAbelBackend IID、symbol 归属 backend。
+76. CLI 增加 `abel resources check <resource.json>`，合法资源输出 ok，非法资源输出 E0612 诊断。
+77. 新增 `plugins/examples/math_backend/resource.json` 示例资源节点。
+78. 新增 backend/resource QTest，覆盖 registry 注册/绑定/诊断、非法外部 symbol、ResourceNode 合法/非法 JSON。
 ```
 
 ### 最近验证
@@ -2139,14 +2146,30 @@ Stage 13a：backend block 静态签名表与未绑定 backend 运行时诊断最
 - Stage 13a CLI run smoke 通过：
   /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
   输出 exit=0。
+- Stage 13b diff whitespace 检查通过：
+  git diff --check
+- Stage 13b 构建通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
+- Stage 13b 在 4GB 虚拟内存上限下测试通过：
+  /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+  输出 6/6 tests passed。
+- Stage 13b CLI check smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel check examples/smoke/hello.abel'
+  输出 ok。
+- Stage 13b CLI run smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
+  输出 exit=0。
+- Stage 13b ResourceNode CLI smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel resources check plugins/examples/math_backend/resource.json'
+  输出 ok。
 ```
 
 ### 未完成
 
 ```text
-1. 尚无 backend plugin 示例、BackendRegistry、ResourceNode JSON 加载闭环。
-2. backend block 已有静态签名表与未绑定诊断，但尚未实现运行时 BackendRegistry 分发、ResourceNode JSON 校验与 Qt plugin loader 闭环。
-3. 尚无 Qt backend plugin interface/base/binder/example plugin。
+1. BackendRegistry 与 ResourceNode JSON 校验已建立，但尚未实现 QPluginLoader 动态加载与 IAbelBackend QObject 绑定。
+2. BackendRegistry 目前只支持 descriptor + runtime callback；尚未持有/调用 Qt plugin 实例。
+3. 尚无 Qt backend plugin interface/base/binder/example plugin 编译目标。
 4. const 指针、const 引用的完整静态语义尚未实现；当前只保留基础 const 变量写保护。
 5. BuiltinRegistry 尚未接入 scan；`to_str` 尚未支持用户自定义重载，只覆盖内建 stringify。
 6. struct 当前是最小闭环：尚未覆盖 private/public、复杂 const receiver、引用返回生命周期、指针字段高级场景。
@@ -2155,13 +2178,14 @@ Stage 13a：backend block 静态签名表与未绑定 backend 运行时诊断最
 ### 下一步
 
 ```text
-Stage 13b：
-1. 实现 BackendRegistry 的最小接口：注册 backend、查找 backend function、未绑定/缺失 symbol 诊断。
-2. 实现 ResourceNode JSON 读取与字段校验骨架：id/kind/path/iid/backendId/qtVersion/kit/symbols/state/lastError。
-3. 增加 `abel resources check <resource.json>` 或等价测试入口的范围决策。
-4. 随后建立 Qt plugin interface/base/binder/example plugin 最小动态链接闭环。
-5. 补 scan 与用户自定义 to_str 的范围决策。
-6. 保持每个小闭环 build + 4GB ctest + CLI smoke + commit。
+Stage 13c：
+1. 增加 `backend_interface.h`：IAbelBackend、AbelBackendFunction、IID `org.abel.IAbelBackend/1.0`、Q_DECLARE_INTERFACE。
+2. 增加 `backend_plugin_base.h` / `backend_binder.h` 最小开发者友好层，先覆盖 int/bool/double/str/vector<int>&/AbelValue 的绑定路径。
+3. 建立 `plugins/examples/math_backend` Qt plugin 编译目标，链接同一个 `libabelcore.so`。
+4. ResourceNode loader 接入 QPluginLoader：校验 IID/backendId/symbol，并把 plugin 函数绑定到 BackendRegistry。
+5. 增加 backend 动态加载测试或 CLI smoke，使 `MathSystem::fast_add(1, 2)` 在绑定资源后返回 3。
+6. 随后补 scan 与用户自定义 to_str 的范围决策。
+7. 保持每个小闭环 build + 4GB ctest + CLI smoke + commit。
 ```
 
 ### 风险与未决
@@ -2191,7 +2215,8 @@ be0424a builtins: add any variadic string functions
 58d89f7 builtins: complete vector methods
 dab7040 struct: add fields constructors and methods
 dee8b16 lambda: add function values and captures
-待本次 Stage 13a backend-static 提交后追加 commit hash。
+2cde7e4 backend: typecheck static calls
+待本次 Stage 13b backend-registry/resource-node 提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。

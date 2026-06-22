@@ -13,6 +13,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program)
     m_functions.clear();
     m_structs.clear();
     m_backends.clear();
+    m_backendRegistry = BackendRegistry();
 
     InterpreterResult result;
     if (!collectStructs(program, ctx)) {
@@ -126,6 +127,17 @@ bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext
                 continue;
             }
             info.functions.insert(fn->name, fn.get());
+            std::vector<AbelType> params;
+            params.reserve(fn->params.size());
+            for (const auto& param : fn->params)
+                params.push_back(typeFromAst(*param->type));
+            m_backendRegistry.registerFunction({
+                backend->name,
+                fn->name,
+                typeFromAst(*fn->returnType),
+                std::move(params),
+                !fn->params.empty() && fn->params.back()->variadic,
+            });
         }
         m_backends.insert(backend->name, info);
     }
@@ -1049,10 +1061,51 @@ AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
         return AbelValue::makeUnknown();
     }
 
-    error(QStringLiteral("E0607"),
-          QStringLiteral("backend '%1' is not bound; cannot call '%1::%2'").arg(backendName->name, callee.member),
-          span);
-    return AbelValue::makeUnknown();
+    std::vector<AbelValue> values;
+    std::vector<AbelLocation*> locations;
+    values.reserve(args.size());
+    locations.reserve(args.size());
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& param = *fn->params[i];
+        const AbelType target = typeFromAst(*param.type);
+        if (target.isReference()) {
+            AbelLocation* loc = evalLocation(*args[i]);
+            if (!loc) {
+                values.push_back(AbelValue::makeUnknown());
+                locations.push_back(nullptr);
+                continue;
+            }
+            AbelValue current = loc->read();
+            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+                error(QStringLiteral("E0609"),
+                      QStringLiteral("cannot bind backend parameter '%1' of type %2 to %3 lvalue")
+                          .arg(param.name, target.displayName(), current.type().displayName()),
+                      param.span);
+                values.push_back(AbelValue::makeUnknown());
+                locations.push_back(nullptr);
+                continue;
+            }
+            values.push_back(convertOrError(current, *target.pointee, param.span));
+            locations.push_back(loc);
+        } else {
+            values.push_back(convertOrError(evalExpr(*args[i]), target, param.span));
+            locations.push_back(nullptr);
+        }
+    }
+    if (variadic) {
+        for (size_t i = fixedCount; i < args.size(); ++i) {
+            values.push_back(AbelValue::makeAny(evalExpr(*args[i])));
+            locations.push_back(nullptr);
+        }
+    }
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
+
+    QList<Diagnostic> diagnostics;
+    AbelValue result = m_backendRegistry.call({backendName->name, callee.member, std::move(values), span, std::move(locations)}, diagnostics);
+    for (const auto& diagnostic : diagnostics)
+        m_ctx->error(diagnostic.code, diagnostic.message, diagnostic.primary);
+    return result;
 }
 
 AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)

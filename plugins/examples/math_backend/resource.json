@@ -1,0 +1,15 @@
+{
+  "id": "math.backend",
+  "kind": "qt_plugin",
+  "path": "plugins/libmath_backend.so",
+  "iid": "org.abel.IAbelBackend/1.0",
+  "backendId": "MathSystem",
+  "qtVersion": "6.11.1",
+  "kit": "gcc_64",
+  "symbols": [
+    "MathSystem.fast_add",
+    "MathSystem.sort"
+  ],
+  "state": "unloaded",
+  "lastError": ""
+}

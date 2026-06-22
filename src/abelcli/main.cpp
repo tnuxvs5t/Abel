@@ -2,6 +2,7 @@
 #include "abelcore/interpreter.h"
 #include "abelcore/lexer.h"
 #include "abelcore/parser.h"
+#include "abelcore/resource_node.h"
 #include "abelcore/typechecker.h"
 
 #include <QCommandLineParser>
@@ -34,9 +35,9 @@ int main(int argc, char** argv)
                                        QStringLiteral("Print the locked Qt/C++ toolchain summary."));
     parser.addOption(toolchainOption);
     parser.addPositionalArgument(QStringLiteral("command"),
-                                 QStringLiteral("Command: check | run | version"));
+                                 QStringLiteral("Command: check | run | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
-                                 QStringLiteral("Input file or entry."),
+                                 QStringLiteral("Input file, resource subcommand, or entry."),
                                  QStringLiteral("[input]"));
 
     parser.process(app);
@@ -57,6 +58,26 @@ int main(int argc, char** argv)
     }
 
     const QString command = args[0];
+    if (command == QStringLiteral("resources")) {
+        if (args.size() != 3 || args[1] != QStringLiteral("check")) {
+            err << "E0005: resources expects: abel resources check <resource.json>" << Qt::endl;
+            return 2;
+        }
+        QFile file(args[2]);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            err << "E0004: cannot open '" << args[2] << "'" << Qt::endl;
+            return 2;
+        }
+        const QString source = QString::fromUtf8(file.readAll());
+        auto parsed = abel::resourceNodeFromJsonText(source, args[2]);
+        for (const auto& d : parsed.diagnostics)
+            printDiagnostic(d);
+        if (!parsed.diagnostics.isEmpty())
+            return 1;
+        out << "ok" << Qt::endl;
+        return 0;
+    }
+
     if (command == QStringLiteral("check") || command == QStringLiteral("run")) {
         if (args.size() < 2) {
             err << "E0003: " << command << " expects an input file" << Qt::endl;

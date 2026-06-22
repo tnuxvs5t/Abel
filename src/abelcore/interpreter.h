@@ -1,6 +1,7 @@
 #pragma once
 
 #include "abelcore/ast.h"
+#include "abelcore/backend_registry.h"
 #include "abelcore/builtin_registry.h"
 #include "abelcore/runtime.h"
 
@@ -33,6 +34,7 @@ private:
     QHash<QString, const FunctionDeclNode*> m_functions;
     QHash<QString, StructRuntimeInfo> m_structs;
     QHash<QString, BackendRuntimeInfo> m_backends;
+    BackendRegistry m_backendRegistry;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
     AbelRuntimeContext* m_ctx = nullptr;
 
