@@ -3,6 +3,7 @@
 #include "abelcore/runtime.h"
 
 #include <functional>
+#include <optional>
 #include <vector>
 
 namespace abel {
@@ -13,6 +14,7 @@ struct BuiltinFunctionCall {
     std::vector<AbelValue> args;
     std::vector<SourceSpan> argSpans;
     SourceSpan callSpan;
+    std::function<std::optional<QString>(const AbelValue&, const SourceSpan&)> stringify;
 };
 
 struct BuiltinMethodCall {

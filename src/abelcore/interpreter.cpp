@@ -1221,6 +1221,7 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
 
     if (m_builtins.hasFunction(targetName)) {
         BuiltinFunctionCall call{*m_ctx, targetName, {}, {}, expr.span};
+        attachStringifier(call);
         call.args.reserve(args.size() + 1);
         call.argSpans.reserve(args.size() + 1);
         call.args.push_back(evalExpr(*expr.lhs));
@@ -1311,6 +1312,7 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
             return evalStructConstructor(name->name, m_structs.value(name->name), expr.args, expr.span);
         if (m_builtins.hasFunction(name->name)) {
             BuiltinFunctionCall call{*m_ctx, name->name, {}, {}, expr.span};
+            attachStringifier(call);
             call.args.reserve(expr.args.size());
             call.argSpans.reserve(expr.args.size());
             for (const auto& arg : expr.args) {
@@ -1592,6 +1594,39 @@ AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
     AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.span);
     lhs->write(rhs);
     return rhs;
+}
+
+std::optional<QString> Interpreter::stringifyValue(const AbelValue& value, const SourceSpan& span)
+{
+    if (value.type().kind != TypeKind::Struct)
+        return std::nullopt;
+
+    const FunctionDeclNode* fn = m_functions.value(QStringLiteral("to_str"), nullptr);
+    if (!fn || fn->params.size() != 1 || fn->params.front()->variadic)
+        return std::nullopt;
+
+    const AbelType returnType = typeFromAst(*fn->returnType);
+    if (returnType.kind != TypeKind::Str)
+        return std::nullopt;
+
+    const AbelType paramType = typeFromAst(*fn->params.front()->type);
+    if (!canAssignValue(paramType, value.type()))
+        return std::nullopt;
+
+    ExecResult result = callFunction(*fn, {value});
+    if (m_ctx->hasError())
+        return std::nullopt;
+    AbelValue text = convertOrError(result.value, makeType(TypeKind::Str), span);
+    if (m_ctx->hasError())
+        return std::nullopt;
+    return text.asString();
+}
+
+void Interpreter::attachStringifier(BuiltinFunctionCall& call)
+{
+    call.stringify = [this](const AbelValue& value, const SourceSpan& span) {
+        return stringifyValue(value, span);
+    };
 }
 
 bool Interpreter::requireBool(const AbelValue& value, const SourceSpan& span, bool& out)

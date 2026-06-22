@@ -112,6 +112,8 @@ private:
 
     bool isSupportedType(const AbelType& type) const;
     bool isAssignable(const AbelType& target, const AbelType& source) const;
+    bool isStringifiable(const AbelType& type) const;
+    bool hasUserToStrFor(const AbelType& type) const;
     AbelType valueTypeOfVariable(const AbelType& type) const;
     ExprType errorExpr(const SourceSpan& span, const QString& message);
     void error(const SourceSpan& span, const QString& message, const QString& code = QStringLiteral("E0301"));

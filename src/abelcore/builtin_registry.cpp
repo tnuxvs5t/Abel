@@ -31,8 +31,16 @@ AbelValue convertBuiltinArg(BuiltinMethodCall& call, int index, const AbelType& 
     return convertValue(value, target);
 }
 
-QString stringifyBuiltinValue(const AbelValue& value)
+std::optional<QString> stringifyValue(BuiltinFunctionCall& call, const AbelValue& value, const SourceSpan& span)
 {
+    if (call.stringify) {
+        auto custom = call.stringify(value, span);
+        if (custom.has_value())
+            return custom;
+        if (call.ctx.hasError())
+            return std::nullopt;
+    }
+
     switch (value.type().kind) {
     case TypeKind::Void:
         return QString();
@@ -48,7 +56,7 @@ QString stringifyBuiltinValue(const AbelValue& value)
     case TypeKind::Str:
         return value.asString();
     case TypeKind::Any:
-        return stringifyBuiltinValue(value.asAny()->value);
+        return stringifyValue(call, value.asAny()->value, span);
     case TypeKind::Nullptr:
         return QStringLiteral("nullptr");
     case TypeKind::Pointer:
@@ -59,36 +67,60 @@ QString stringifyBuiltinValue(const AbelValue& value)
         for (size_t i = 0; i < vector->elements.size(); ++i) {
             if (i > 0)
                 out += QStringLiteral(", ");
-            out += stringifyBuiltinValue(vector->elements[i]);
+            auto element = stringifyValue(call, vector->elements[i], span);
+            if (!element.has_value())
+                return std::nullopt;
+            out += *element;
         }
         out += QStringLiteral("]");
         return out;
     }
     case TypeKind::Reference:
     case TypeKind::Unknown:
-        return value.debugString();
+    case TypeKind::Struct:
+    case TypeKind::Function:
+        call.ctx.error(QStringLiteral("E0415"),
+                       QStringLiteral("cannot stringify %1").arg(value.type().displayName()),
+                       span);
+        return std::nullopt;
     }
-    return value.debugString();
+    call.ctx.error(QStringLiteral("E0415"),
+                   QStringLiteral("cannot stringify %1").arg(value.type().displayName()),
+                   span);
+    return std::nullopt;
 }
 
 AbelValue builtinToStr(BuiltinFunctionCall& call)
 {
-    return AbelValue::makeString(stringifyBuiltinValue(call.args[0]));
+    auto text = stringifyValue(call, call.args[0], call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+    if (!text.has_value())
+        return AbelValue::makeUnknown();
+    return AbelValue::makeString(*text);
 }
 
 AbelValue builtinBuildString(BuiltinFunctionCall& call)
 {
     QString out;
-    for (const auto& arg : call.args)
-        out += stringifyBuiltinValue(arg);
+    for (size_t i = 0; i < call.args.size(); ++i) {
+        const SourceSpan span = i < call.argSpans.size() ? call.argSpans[i] : call.callSpan;
+        auto text = stringifyValue(call, call.args[i], span);
+        if (!text.has_value())
+            return AbelValue::makeUnknown();
+        out += *text;
+    }
     return AbelValue::makeString(out);
 }
 
 AbelValue builtinPrint(BuiltinFunctionCall& call)
 {
     QTextStream out(stdout);
-    for (const auto& arg : call.args)
-        out << stringifyBuiltinValue(arg);
+    for (size_t i = 0; i < call.args.size(); ++i) {
+        const SourceSpan span = i < call.argSpans.size() ? call.argSpans[i] : call.callSpan;
+        auto text = stringifyValue(call, call.args[i], span);
+        if (!text.has_value())
+            return AbelValue::makeUnknown();
+        out << *text;
+    }
     out.flush();
     return AbelValue::makeVoid();
 }
@@ -96,8 +128,13 @@ AbelValue builtinPrint(BuiltinFunctionCall& call)
 AbelValue builtinPrintln(BuiltinFunctionCall& call)
 {
     QTextStream out(stdout);
-    for (const auto& arg : call.args)
-        out << stringifyBuiltinValue(arg);
+    for (size_t i = 0; i < call.args.size(); ++i) {
+        const SourceSpan span = i < call.argSpans.size() ? call.argSpans[i] : call.callSpan;
+        auto text = stringifyValue(call, call.args[i], span);
+        if (!text.has_value())
+            return AbelValue::makeUnknown();
+        out << *text;
+    }
     out << Qt::endl;
     return AbelValue::makeVoid();
 }

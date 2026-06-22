@@ -391,6 +391,34 @@ private slots:
         QCOMPARE(result.exitCode, 25);
     }
 
+    void buildStringUsesUserToStr()
+    {
+        const QString src = QStringLiteral(R"ABEL(
+            struct Student {
+                str name;
+                int age;
+            }
+
+            fn str to_str(Student s) {
+                return build_string(s.name, "(", s.age, ")");
+            }
+
+            fn int main() {
+                Student s = Student("Aya", 16);
+                str text = build_string("student=", s);
+                if (text == "student=Aya(16)") {
+                    return 16;
+                }
+                return 0;
+            }
+        )ABEL");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 16);
+    }
+
     void badAnyCastReportsRuntimeError()
     {
         const QString src = QStringLiteral(R"(

@@ -7,6 +7,8 @@
 
 #include <QHash>
 
+#include <optional>
+
 namespace abel {
 
 struct InterpreterResult {
@@ -73,6 +75,8 @@ private:
     AbelValue evalStructConstructor(const QString& name, const StructRuntimeInfo& info, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue evalStructMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue evalAssignment(const AssignExprNode& expr);
+    std::optional<QString> stringifyValue(const AbelValue& value, const SourceSpan& span);
+    void attachStringifier(BuiltinFunctionCall& call);
 
     bool requireBool(const AbelValue& value, const SourceSpan& span, bool& out);
     bool requireInteger(const AbelValue& value, const SourceSpan& span, qint64& out);

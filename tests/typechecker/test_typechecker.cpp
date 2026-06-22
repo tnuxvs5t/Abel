@@ -107,6 +107,47 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsUserToStrForBuildString()
+    {
+        const QString src = QStringLiteral(R"ABEL(
+            struct Student {
+                str name;
+                int age;
+            }
+
+            fn str to_str(Student s) {
+                return build_string(s.name, "(", s.age, ")");
+            }
+
+            fn int main() {
+                Student s = Student("Aya", 16);
+                str text = build_string("student=", s);
+                return 0;
+            }
+        )ABEL");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsStructBuildStringWithoutToStr()
+    {
+        const QString src = QStringLiteral(R"ABEL(
+            struct Student {
+                str name;
+            }
+
+            fn int main() {
+                Student s = Student("Aya");
+                str text = build_string(s);
+                return 0;
+            }
+        )ABEL");
+        auto result = checkSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
+
     void rejectsCastFromNonAny()
     {
         auto result = checkSource(QStringLiteral("fn int main() { int x = cast<int>(1); return x; }"));

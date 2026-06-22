@@ -548,6 +548,8 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
         if (name == QStringLiteral("to_str")) {
             if (argc != 1)
                 return errorExpr(span, QStringLiteral("to_str expects one argument"));
+            if (!isStringifiable(lhs.type))
+                return errorExpr(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("str_to_chars")) {
@@ -565,12 +567,26 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
                 return errorExpr(span, QStringLiteral("chars_to_str expects vector<char>, got %1").arg(lhs.type.displayName()));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
-        for (const auto& arg : args)
-            checkExpr(*arg);
-        if (name == QStringLiteral("build_string"))
+        if (name == QStringLiteral("build_string")) {
+            if (!isStringifiable(lhs.type))
+                error(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
+            for (const auto& argExpr : args) {
+                ExprType arg = checkExpr(*argExpr);
+                if (!isStringifiable(arg.type))
+                    error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
-        if (name == QStringLiteral("print") || name == QStringLiteral("println"))
+        }
+        if (name == QStringLiteral("print") || name == QStringLiteral("println")) {
+            if (!isStringifiable(lhs.type))
+                error(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
+            for (const auto& argExpr : args) {
+                ExprType arg = checkExpr(*argExpr);
+                if (!isStringifiable(arg.type))
+                    error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
     }
 
     return errorExpr(nameSpan, QStringLiteral("unknown pipe target '%1'").arg(name));
@@ -754,7 +770,9 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
         if (name->name == QStringLiteral("to_str")) {
             if (argc != 1)
                 return errorExpr(expr.span, QStringLiteral("to_str expects one argument"));
-            checkExpr(*expr.args[0]);
+            ExprType arg = checkExpr(*expr.args[0]);
+            if (!isStringifiable(arg.type))
+                return errorExpr(expr.args[0]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name->name == QStringLiteral("str_to_chars")) {
@@ -774,12 +792,22 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                 return errorExpr(expr.args[0]->span, QStringLiteral("chars_to_str expects vector<char>, got %1").arg(arg.type.displayName()));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
-        for (const auto& arg : expr.args)
-            checkExpr(*arg);
-        if (name->name == QStringLiteral("build_string"))
+        if (name->name == QStringLiteral("build_string")) {
+            for (const auto& argExpr : expr.args) {
+                ExprType arg = checkExpr(*argExpr);
+                if (!isStringifiable(arg.type))
+                    error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
-        if (name->name == QStringLiteral("print") || name->name == QStringLiteral("println"))
+        }
+        if (name->name == QStringLiteral("print") || name->name == QStringLiteral("println")) {
+            for (const auto& argExpr : expr.args) {
+                ExprType arg = checkExpr(*argExpr);
+                if (!isStringifiable(arg.type))
+                    error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
     }
 
     return errorExpr(expr.span, QStringLiteral("unknown function '%1'").arg(name->name));
@@ -1090,6 +1118,47 @@ bool TypeChecker::isSupportedType(const AbelType& type) const
 bool TypeChecker::isAssignable(const AbelType& target, const AbelType& source) const
 {
     return canAssignValue(target, source);
+}
+
+bool TypeChecker::isStringifiable(const AbelType& type) const
+{
+    switch (type.kind) {
+    case TypeKind::Void:
+    case TypeKind::Bool:
+    case TypeKind::I32:
+    case TypeKind::I64:
+    case TypeKind::F64:
+    case TypeKind::Char:
+    case TypeKind::Str:
+    case TypeKind::Any:
+    case TypeKind::Pointer:
+    case TypeKind::Nullptr:
+        return true;
+    case TypeKind::Vector:
+        return type.pointee && isStringifiable(*type.pointee);
+    case TypeKind::Reference:
+        return type.pointee && isStringifiable(*type.pointee);
+    case TypeKind::Struct:
+        return hasUserToStrFor(type);
+    case TypeKind::Function:
+    case TypeKind::Unknown:
+        return false;
+    }
+    return false;
+}
+
+bool TypeChecker::hasUserToStrFor(const AbelType& type) const
+{
+    if (type.kind != TypeKind::Struct)
+        return false;
+    const FunctionDeclNode* fn = m_functions.value(QStringLiteral("to_str"), nullptr);
+    if (!fn || fn->params.size() != 1 || fn->params.front()->variadic)
+        return false;
+    const AbelType returnType = typeFromAst(*fn->returnType);
+    if (returnType.kind != TypeKind::Str)
+        return false;
+    const AbelType paramType = typeFromAst(*fn->params.front()->type);
+    return isAssignable(paramType, type);
 }
 
 AbelType TypeChecker::valueTypeOfVariable(const AbelType& type) const
