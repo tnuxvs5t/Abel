@@ -2006,5 +2006,10 @@ Stage 1：
 ### 最近提交
 
 ```text
-待本次文档替换提交后更新。
+ca49a01 docs: replace Abel design with agent manual
+
+说明：
+- 本区记录已经完成且可回滚的实质提交。
+- 不要求在同一个提交中记录自身 hash；那会形成自指 hash 循环。
+- 后续 Agent 完成实质提交后，应在下一次 AGENTS.md 更新中追加上一实质提交 hash。
 ```
