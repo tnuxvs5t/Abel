@@ -9,9 +9,11 @@
 
 namespace abel {
 
+struct AbelLocation;
+
 class AbelValue {
 public:
-    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar>;
+    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*>;
 
     AbelValue() = default;
 
@@ -21,6 +23,9 @@ public:
     static AbelValue makeDouble(double value);
     static AbelValue makeString(const QString& value);
     static AbelValue makeChar(QChar value);
+    static AbelValue makePointer(const AbelType& pointee, AbelLocation* location);
+    static AbelValue makeNullPointer(const AbelType& pointee);
+    static AbelValue makeNullptr();
     static AbelValue makeUnknown();
 
     const AbelType& type() const { return m_type; }
@@ -31,6 +36,7 @@ public:
     double asDouble() const;
     QString asString() const;
     QChar asChar() const;
+    AbelLocation* asPointer() const;
 
     QString debugString() const;
 

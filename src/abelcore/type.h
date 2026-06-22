@@ -2,6 +2,8 @@
 
 #include <QString>
 
+#include <memory>
+
 namespace abel {
 
 struct TypeNode;
@@ -15,23 +17,31 @@ enum class TypeKind {
     Char,
     Str,
     Any,
+    Pointer,
+    Reference,
+    Nullptr,
     Unknown,
 };
 
 struct AbelType {
     TypeKind kind = TypeKind::Unknown;
     QString spelling;
+    std::shared_ptr<AbelType> pointee;
 
-    bool operator==(const AbelType& other) const { return kind == other.kind; }
+    bool operator==(const AbelType& other) const;
     bool operator!=(const AbelType& other) const { return !(*this == other); }
     bool isInteger() const;
     bool isNumeric() const;
     bool isBool() const;
     bool isVoid() const;
+    bool isPointer() const;
+    bool isReference() const;
     QString displayName() const;
 };
 
 AbelType makeType(TypeKind kind, const QString& spelling = QString());
+AbelType makePointerType(const AbelType& pointee);
+AbelType makeReferenceType(const AbelType& referred);
 AbelType typeFromName(const QString& name);
 AbelType typeFromAst(const TypeNode& node);
 bool canAssignValue(const AbelType& target, const AbelType& source);

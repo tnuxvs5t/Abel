@@ -23,10 +23,12 @@ private:
 
     bool collectFunctions(const ProgramNode& program, AbelRuntimeContext& ctx);
     ExecResult callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args);
+    ExecResult callFunctionExpr(const FunctionDeclNode& fn, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExecResult execBlock(const BlockStmtNode& block);
     ExecResult execStmt(const StmtNode& stmt);
     ExecResult execVarDecl(const VarDeclStmtNode& stmt);
     AbelValue evalExpr(const ExprNode& expr);
+    AbelLocation* evalLocation(const ExprNode& expr);
     AbelValue evalBinary(const BinaryExprNode& expr);
     AbelValue evalUnary(const UnaryExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);

@@ -111,6 +111,92 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 11);
     }
+
+    void referenceWritesBack()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 0;
+                int& r = x;
+                r = 5;
+                return x;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 5);
+    }
+
+    void pointerDereferenceWritesBack()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 1;
+                int* p = &x;
+                *p = *p + 9;
+                return x;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 10);
+    }
+
+    void referenceParameterWritesBack()
+    {
+        const QString src = QStringLiteral(R"(
+            fn void inc(int& x) {
+                x = x + 1;
+            }
+
+            fn int main() {
+                int v = 4;
+                inc(v);
+                return v;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 5);
+    }
+
+    void comparesNullptr()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int* p = nullptr;
+                if (p == nullptr) {
+                    return 3;
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 3);
+    }
+
+    void rejectsUninitializedReference()
+    {
+        auto result = runSource(QStringLiteral("fn int main() { int& r; return 0; }"));
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 1);
+    }
+
+    void rejectsReferenceToPrvalue()
+    {
+        auto result = runSource(QStringLiteral("fn int main() { int& r = 1; return 0; }"));
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 1);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

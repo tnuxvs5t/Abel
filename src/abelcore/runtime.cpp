@@ -2,6 +2,17 @@
 
 namespace abel {
 
+AbelValue AbelLocation::read() const
+{
+    return storage ? storage->value : AbelValue::makeUnknown();
+}
+
+void AbelLocation::write(const AbelValue& value)
+{
+    if (storage)
+        storage->value = value;
+}
+
 ExecResult ExecResult::normal()
 {
     return {};
@@ -45,7 +56,24 @@ void AbelRuntimeContext::popFrame()
         m_frames.pop_back();
 }
 
-bool AbelRuntimeContext::defineVariable(const QString& name, const AbelValue& value, bool isConst, const SourceSpan& span)
+AbelLocation* AbelRuntimeContext::createStorage(const AbelValue& value)
+{
+    auto storage = std::make_unique<AbelStorage>();
+    storage->value = value;
+    AbelStorage* raw = storage.get();
+    m_storage.push_back(std::move(storage));
+    auto location = std::make_unique<AbelLocation>();
+    location->storage = raw;
+    AbelLocation* loc = location.get();
+    m_locations.push_back(std::move(location));
+    return loc;
+}
+
+bool AbelRuntimeContext::defineVariable(const QString& name,
+                                        AbelLocation* location,
+                                        bool isConst,
+                                        bool isReference,
+                                        const SourceSpan& span)
 {
     if (m_frames.isEmpty())
         pushFrame();
@@ -54,8 +82,13 @@ bool AbelRuntimeContext::defineVariable(const QString& name, const AbelValue& va
         error(QStringLiteral("E0501"), QStringLiteral("variable '%1' is already defined in this scope").arg(name), span);
         return false;
     }
-    frame.insert(name, VariableSlot{value, isConst});
+    frame.insert(name, VariableSlot{location, isConst, isReference});
     return true;
+}
+
+bool AbelRuntimeContext::defineValueVariable(const QString& name, const AbelValue& value, bool isConst, const SourceSpan& span)
+{
+    return defineVariable(name, createStorage(value), isConst, false, span);
 }
 
 VariableSlot* AbelRuntimeContext::lookupVariable(const QString& name)
@@ -89,7 +122,8 @@ bool AbelRuntimeContext::assignVariable(const QString& name, const AbelValue& va
         error(QStringLiteral("E0503"), QStringLiteral("cannot assign to const variable '%1'").arg(name), span);
         return false;
     }
-    slot->value = value;
+    if (slot->location)
+        slot->location->write(value);
     return true;
 }
 

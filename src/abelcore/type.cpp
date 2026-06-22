@@ -4,6 +4,15 @@
 
 namespace abel {
 
+bool AbelType::operator==(const AbelType& other) const
+{
+    if (kind != other.kind)
+        return false;
+    if ((kind == TypeKind::Pointer || kind == TypeKind::Reference) && pointee && other.pointee)
+        return *pointee == *other.pointee;
+    return true;
+}
+
 bool AbelType::isInteger() const
 {
     return kind == TypeKind::I32 || kind == TypeKind::I64;
@@ -24,6 +33,16 @@ bool AbelType::isVoid() const
     return kind == TypeKind::Void;
 }
 
+bool AbelType::isPointer() const
+{
+    return kind == TypeKind::Pointer;
+}
+
+bool AbelType::isReference() const
+{
+    return kind == TypeKind::Reference;
+}
+
 QString AbelType::displayName() const
 {
     if (!spelling.isEmpty())
@@ -37,6 +56,11 @@ QString AbelType::displayName() const
     case TypeKind::Char: return QStringLiteral("char");
     case TypeKind::Str: return QStringLiteral("str");
     case TypeKind::Any: return QStringLiteral("any");
+    case TypeKind::Pointer:
+        return pointee ? pointee->displayName() + QStringLiteral("*") : QStringLiteral("<unknown>*");
+    case TypeKind::Reference:
+        return pointee ? pointee->displayName() + QStringLiteral("&") : QStringLiteral("<unknown>&");
+    case TypeKind::Nullptr: return QStringLiteral("nullptr");
     case TypeKind::Unknown: return QStringLiteral("<unknown>");
     }
     return QStringLiteral("<unknown>");
@@ -47,6 +71,22 @@ AbelType makeType(TypeKind kind, const QString& spelling)
     AbelType t;
     t.kind = kind;
     t.spelling = spelling;
+    return t;
+}
+
+AbelType makePointerType(const AbelType& pointee)
+{
+    AbelType t;
+    t.kind = TypeKind::Pointer;
+    t.pointee = std::make_shared<AbelType>(pointee);
+    return t;
+}
+
+AbelType makeReferenceType(const AbelType& referred)
+{
+    AbelType t;
+    t.kind = TypeKind::Reference;
+    t.pointee = std::make_shared<AbelType>(referred);
     return t;
 }
 
@@ -73,17 +113,26 @@ AbelType typeFromName(const QString& name)
 
 AbelType typeFromAst(const TypeNode& node)
 {
-    if (node.elementType || node.pointerDepth > 0 || node.isReference)
+    if (node.elementType)
         return makeType(TypeKind::Unknown, node.displayName());
-    return typeFromName(node.name);
+    AbelType base = typeFromName(node.name);
+    for (int i = 0; i < node.pointerDepth; ++i)
+        base = makePointerType(base);
+    if (node.isReference)
+        base = makeReferenceType(base);
+    return base;
 }
 
 bool canAssignValue(const AbelType& target, const AbelType& source)
 {
+    if (target.isReference())
+        return target.pointee && canAssignValue(*target.pointee, source);
+    if (target.isPointer() && source.kind == TypeKind::Nullptr)
+        return true;
     if (target.kind == TypeKind::Any)
         return true;
     if (target.kind == source.kind)
-        return true;
+        return target.kind != TypeKind::Pointer || !target.pointee || !source.pointee || *target.pointee == *source.pointee;
     if (target.isInteger() && source.isInteger())
         return true;
     if (target.kind == TypeKind::F64 && source.isNumeric())

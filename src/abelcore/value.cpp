@@ -40,6 +40,21 @@ AbelValue AbelValue::makeChar(QChar value)
     return AbelValue(makeType(TypeKind::Char), value);
 }
 
+AbelValue AbelValue::makePointer(const AbelType& pointee, AbelLocation* location)
+{
+    return AbelValue(makePointerType(pointee), location);
+}
+
+AbelValue AbelValue::makeNullPointer(const AbelType& pointee)
+{
+    return AbelValue(makePointerType(pointee), static_cast<AbelLocation*>(nullptr));
+}
+
+AbelValue AbelValue::makeNullptr()
+{
+    return AbelValue(makeType(TypeKind::Nullptr), static_cast<AbelLocation*>(nullptr));
+}
+
 AbelValue AbelValue::makeUnknown()
 {
     return AbelValue(makeType(TypeKind::Unknown), std::monostate{});
@@ -72,6 +87,11 @@ QChar AbelValue::asChar() const
     return std::get<QChar>(m_payload);
 }
 
+AbelLocation* AbelValue::asPointer() const
+{
+    return std::get<AbelLocation*>(m_payload);
+}
+
 QString AbelValue::debugString() const
 {
     switch (m_type.kind) {
@@ -83,6 +103,10 @@ QString AbelValue::debugString() const
     case TypeKind::Char: return QString(asChar());
     case TypeKind::Str: return asString();
     case TypeKind::Any: return QStringLiteral("<any>");
+    case TypeKind::Pointer:
+        return asPointer() ? QStringLiteral("<ptr>") : QStringLiteral("nullptr");
+    case TypeKind::Reference: return QStringLiteral("<ref>");
+    case TypeKind::Nullptr: return QStringLiteral("nullptr");
     case TypeKind::Unknown: return QStringLiteral("<unknown>");
     }
     return QStringLiteral("<unknown>");
@@ -98,6 +122,12 @@ AbelValue defaultValueForType(const AbelType& type)
     case TypeKind::F64: return AbelValue::makeDouble(0.0);
     case TypeKind::Char: return AbelValue::makeChar(QChar());
     case TypeKind::Str: return AbelValue::makeString(QString());
+    case TypeKind::Pointer:
+        return type.pointee ? AbelValue::makeNullPointer(*type.pointee) : AbelValue::makeUnknown();
+    case TypeKind::Reference:
+        return AbelValue::makeUnknown();
+    case TypeKind::Nullptr:
+        return AbelValue::makeNullptr();
     case TypeKind::Any:
     case TypeKind::Unknown: return AbelValue::makeUnknown();
     }
@@ -114,6 +144,10 @@ AbelValue convertValue(const AbelValue& value, const AbelType& target)
         return AbelValue::makeInt(value.asInt(), TypeKind::I64);
     if (target.kind == TypeKind::F64 && value.type().isNumeric())
         return AbelValue::makeDouble(value.asDouble());
+    if (target.kind == TypeKind::Pointer && value.type().kind == TypeKind::Nullptr && target.pointee)
+        return AbelValue::makeNullPointer(*target.pointee);
+    if (target.kind == TypeKind::Pointer && value.type().kind == TypeKind::Pointer)
+        return value;
     if (target.kind == TypeKind::Any)
         return value;
     return AbelValue::makeUnknown();

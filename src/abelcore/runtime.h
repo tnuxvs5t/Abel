@@ -6,6 +6,9 @@
 #include <QHash>
 #include <QList>
 
+#include <memory>
+#include <vector>
+
 namespace abel {
 
 enum class FlowKind {
@@ -26,8 +29,20 @@ struct ExecResult {
 };
 
 struct VariableSlot {
-    AbelValue value;
+    AbelLocation* location = nullptr;
     bool isConst = false;
+    bool isReference = false;
+};
+
+struct AbelStorage {
+    AbelValue value;
+};
+
+struct AbelLocation {
+    AbelStorage* storage = nullptr;
+
+    AbelValue read() const;
+    void write(const AbelValue& value);
 };
 
 class AbelRuntimeContext {
@@ -37,7 +52,9 @@ public:
     void pushFrame();
     void popFrame();
 
-    bool defineVariable(const QString& name, const AbelValue& value, bool isConst, const SourceSpan& span);
+    AbelLocation* createStorage(const AbelValue& value);
+    bool defineVariable(const QString& name, AbelLocation* location, bool isConst, bool isReference, const SourceSpan& span);
+    bool defineValueVariable(const QString& name, const AbelValue& value, bool isConst, const SourceSpan& span);
     VariableSlot* lookupVariable(const QString& name);
     const VariableSlot* lookupVariable(const QString& name) const;
     bool assignVariable(const QString& name, const AbelValue& value, const SourceSpan& span);
@@ -49,6 +66,8 @@ public:
 
 private:
     QList<QHash<QString, VariableSlot>> m_frames;
+    std::vector<std::unique_ptr<AbelStorage>> m_storage;
+    std::vector<std::unique_ptr<AbelLocation>> m_locations;
     QList<Diagnostic> m_diagnostics;
 };
 

@@ -87,7 +87,11 @@ ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vect
         const ParameterNode& p = *fn.params[i];
         const AbelType target = typeFromAst(*p.type);
         AbelValue converted = convertOrError(args[i], target, p.span);
-        m_ctx->defineVariable(p.name, converted, false, p.span);
+        m_ctx->defineValueVariable(p.name, converted, false, p.span);
+    }
+    if (m_ctx->hasError()) {
+        m_ctx->popFrame();
+        return ExecResult::returned(AbelValue::makeUnknown());
     }
 
     ExecResult flow = execBlock(*fn.body);
@@ -105,6 +109,67 @@ ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vect
     if (returnType.kind == TypeKind::Void)
         return ExecResult::returned(AbelValue::makeVoid());
     error(QStringLiteral("E0509"), QStringLiteral("function '%1' ended without return").arg(fn.name), fn.span);
+    return ExecResult::returned(AbelValue::makeUnknown());
+}
+
+ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
+                                         const std::vector<std::unique_ptr<ExprNode>>& args,
+                                         const SourceSpan& span)
+{
+    if (fn.debt || !fn.body) {
+        error(QStringLiteral("E0539"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+    if (args.size() != fn.params.size()) {
+        error(QStringLiteral("E0540"),
+              QStringLiteral("function '%1' expects %2 argument(s), got %3")
+                  .arg(fn.name)
+                  .arg(fn.params.size())
+                  .arg(args.size()),
+              span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    m_ctx->pushFrame();
+    for (size_t i = 0; i < args.size(); ++i) {
+        const ParameterNode& p = *fn.params[i];
+        const AbelType target = typeFromAst(*p.type);
+        if (target.isReference()) {
+            AbelLocation* loc = evalLocation(*args[i]);
+            if (!loc)
+                continue;
+            AbelValue current = loc->read();
+            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+                error(QStringLiteral("E0541"),
+                      QStringLiteral("cannot bind parameter '%1' of type %2 to %3 lvalue")
+                          .arg(p.name, target.displayName(), current.type().displayName()),
+                      p.span);
+                continue;
+            }
+            m_ctx->defineVariable(p.name, loc, false, true, p.span);
+        } else {
+            AbelValue converted = convertOrError(evalExpr(*args[i]), target, p.span);
+            m_ctx->defineValueVariable(p.name, converted, false, p.span);
+        }
+    }
+    if (m_ctx->hasError()) {
+        m_ctx->popFrame();
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    ExecResult flow = execBlock(*fn.body);
+    m_ctx->popFrame();
+
+    const AbelType returnType = typeFromAst(*fn.returnType);
+    if (flow.kind == FlowKind::Return)
+        return ExecResult::returned(convertOrError(flow.value, returnType, fn.span));
+    if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
+        error(QStringLiteral("E0542"), QStringLiteral("break/continue cannot leave function '%1'").arg(fn.name), fn.span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+    if (returnType.kind == TypeKind::Void)
+        return ExecResult::returned(AbelValue::makeVoid());
+    error(QStringLiteral("E0543"), QStringLiteral("function '%1' ended without return").arg(fn.name), fn.span);
     return ExecResult::returned(AbelValue::makeUnknown());
 }
 
@@ -201,12 +266,32 @@ ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
     const AbelType type = typeFromAst(*stmt.type);
     if (type.kind == TypeKind::Unknown) {
         error(QStringLiteral("E0511"),
-              QStringLiteral("type '%1' is not supported by the Stage 3 interpreter").arg(stmt.type->displayName()),
+              QStringLiteral("type '%1' is not supported by the current interpreter").arg(stmt.type->displayName()),
               stmt.span);
         return ExecResult::normal();
     }
+    if (type.isReference()) {
+        if (!stmt.init) {
+            error(QStringLiteral("E0533"), QStringLiteral("reference variable '%1' must be initialized").arg(stmt.name), stmt.span);
+            return ExecResult::normal();
+        }
+        AbelLocation* loc = evalLocation(*stmt.init);
+        if (!loc)
+            return ExecResult::normal();
+        const AbelType& referred = *type.pointee;
+        AbelValue current = loc->read();
+        if (!canAssignValue(referred, current.type())) {
+            error(QStringLiteral("E0534"),
+                  QStringLiteral("cannot bind %1& to %2 lvalue")
+                      .arg(referred.displayName(), current.type().displayName()),
+                  stmt.span);
+            return ExecResult::normal();
+        }
+        m_ctx->defineVariable(stmt.name, loc, stmt.isConst || stmt.type->isConst, true, stmt.span);
+        return ExecResult::normal();
+    }
     AbelValue value = stmt.init ? convertOrError(evalExpr(*stmt.init), type, stmt.span) : defaultValueForType(type);
-    m_ctx->defineVariable(stmt.name, value, stmt.isConst || stmt.type->isConst, stmt.span);
+    m_ctx->defineValueVariable(stmt.name, value, stmt.isConst || stmt.type->isConst, stmt.span);
     return ExecResult::normal();
 }
 
@@ -220,8 +305,7 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
         case LiteralExprNode::Kind::Char: return AbelValue::makeChar(e->text.isEmpty() ? QChar() : e->text[0]);
         case LiteralExprNode::Kind::Bool: return AbelValue::makeBool(e->text == QStringLiteral("true"));
         case LiteralExprNode::Kind::Nullptr:
-            error(QStringLiteral("E0512"), QStringLiteral("nullptr is not supported until pointer runtime lands"), e->span);
-            return AbelValue::makeUnknown();
+            return AbelValue::makeNullptr();
         }
     }
     if (auto* e = dynamic_cast<const NameExprNode*>(&expr)) {
@@ -230,7 +314,7 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
             error(QStringLiteral("E0513"), QStringLiteral("unknown variable '%1'").arg(e->name), e->span);
             return AbelValue::makeUnknown();
         }
-        return slot->value;
+        return slot->location ? slot->location->read() : AbelValue::makeUnknown();
     }
     if (auto* e = dynamic_cast<const UnaryExprNode*>(&expr))
         return evalUnary(*e);
@@ -247,6 +331,33 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
 
     error(QStringLiteral("E0515"), QStringLiteral("expression is not implemented in the Stage 3 interpreter"), expr.span);
     return AbelValue::makeUnknown();
+}
+
+AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
+{
+    if (auto* e = dynamic_cast<const NameExprNode*>(&expr)) {
+        VariableSlot* slot = m_ctx->lookupVariable(e->name);
+        if (!slot || !slot->location) {
+            error(QStringLiteral("E0535"), QStringLiteral("unknown variable '%1'").arg(e->name), e->span);
+            return nullptr;
+        }
+        return slot->location;
+    }
+    if (auto* e = dynamic_cast<const UnaryExprNode*>(&expr); e && e->op == QStringLiteral("*")) {
+        AbelValue ptr = evalExpr(*e->expr);
+        if (!ptr.type().isPointer()) {
+            error(QStringLiteral("E0536"), QStringLiteral("cannot dereference non-pointer value"), e->span);
+            return nullptr;
+        }
+        AbelLocation* loc = ptr.asPointer();
+        if (!loc) {
+            error(QStringLiteral("E0537"), QStringLiteral("cannot dereference nullptr"), e->span);
+            return nullptr;
+        }
+        return loc;
+    }
+    error(QStringLiteral("E0538"), QStringLiteral("expression is not an lvalue"), expr.span);
+    return nullptr;
 }
 
 AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
@@ -283,9 +394,22 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
         case TypeKind::F64: eq = lhs.asDouble() == rhs.asDouble(); break;
         case TypeKind::Char: eq = lhs.asChar() == rhs.asChar(); break;
         case TypeKind::Str: eq = lhs.asString() == rhs.asString(); break;
+        case TypeKind::Pointer: eq = lhs.asPointer() == rhs.asPointer(); break;
+        case TypeKind::Nullptr: eq = true; break;
         default: break;
         }
         return AbelValue::makeBool(op == QStringLiteral("==") ? eq : !eq);
+    }
+
+    if (op == QStringLiteral("==") || op == QStringLiteral("!=")) {
+        const bool pointerNull =
+            (lhs.type().kind == TypeKind::Pointer && rhs.type().kind == TypeKind::Nullptr)
+            || (lhs.type().kind == TypeKind::Nullptr && rhs.type().kind == TypeKind::Pointer);
+        if (pointerNull) {
+            AbelLocation* ptr = lhs.type().kind == TypeKind::Pointer ? lhs.asPointer() : rhs.asPointer();
+            const bool eq = ptr == nullptr;
+            return AbelValue::makeBool(op == QStringLiteral("==") ? eq : !eq);
+        }
     }
 
     if (!lhs.type().isNumeric() || !rhs.type().isNumeric()) {
@@ -362,6 +486,17 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
 
 AbelValue Interpreter::evalUnary(const UnaryExprNode& expr)
 {
+    if (expr.op == QStringLiteral("&")) {
+        AbelLocation* loc = evalLocation(*expr.expr);
+        if (!loc)
+            return AbelValue::makeUnknown();
+        AbelValue current = loc->read();
+        return AbelValue::makePointer(current.type(), loc);
+    }
+    if (expr.op == QStringLiteral("*")) {
+        AbelLocation* loc = evalLocation(expr);
+        return loc ? loc->read() : AbelValue::makeUnknown();
+    }
     AbelValue value = evalExpr(*expr.expr);
     if (expr.op == QStringLiteral("!")) {
         bool b = false;
@@ -385,9 +520,7 @@ AbelValue Interpreter::evalUnary(const UnaryExprNode& expr)
             return AbelValue::makeDouble(-value.asDouble());
         return AbelValue::makeInt(-value.asInt(), value.type().kind);
     }
-    error(QStringLiteral("E0523"),
-          QStringLiteral("unary operator '%1' is parsed but not executable in Stage 3").arg(expr.op),
-          expr.span);
+    error(QStringLiteral("E0523"), QStringLiteral("unary operator '%1' is not executable here").arg(expr.op), expr.span);
     return AbelValue::makeUnknown();
 }
 
@@ -403,27 +536,32 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         error(QStringLiteral("E0525"), QStringLiteral("unknown function '%1'").arg(name->name), expr.span);
         return AbelValue::makeUnknown();
     }
-    std::vector<AbelValue> args;
-    args.reserve(expr.args.size());
-    for (const auto& arg : expr.args)
-        args.push_back(evalExpr(*arg));
-    return callFunction(*fn, args).value;
+    return callFunctionExpr(*fn, expr.args, expr.span).value;
 }
 
 AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
 {
     auto* name = dynamic_cast<NameExprNode*>(expr.lhs.get());
-    if (!name) {
-        error(QStringLiteral("E0526"), QStringLiteral("only variable assignment is executable in Stage 3"), expr.span);
+    if (name) {
+        VariableSlot* slot = m_ctx->lookupVariable(name->name);
+        if (!slot) {
+            error(QStringLiteral("E0527"), QStringLiteral("unknown variable '%1'").arg(name->name), expr.span);
+            return AbelValue::makeUnknown();
+        }
+        AbelValue current = slot->location ? slot->location->read() : AbelValue::makeUnknown();
+        AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.span);
+        m_ctx->assignVariable(name->name, rhs, expr.span);
+        return rhs;
+    }
+
+    AbelLocation* lhs = evalLocation(*expr.lhs);
+    if (!lhs) {
+        error(QStringLiteral("E0526"), QStringLiteral("left side of assignment is not an lvalue"), expr.span);
         return AbelValue::makeUnknown();
     }
-    VariableSlot* slot = m_ctx->lookupVariable(name->name);
-    if (!slot) {
-        error(QStringLiteral("E0527"), QStringLiteral("unknown variable '%1'").arg(name->name), expr.span);
-        return AbelValue::makeUnknown();
-    }
-    AbelValue rhs = convertOrError(evalExpr(*expr.rhs), slot->value.type(), expr.span);
-    m_ctx->assignVariable(name->name, rhs, expr.span);
+    AbelValue current = lhs->read();
+    AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.span);
+    lhs->write(rhs);
     return rhs;
 }
 
