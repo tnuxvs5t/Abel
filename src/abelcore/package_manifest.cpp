@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
+#include <QProcess>
 #include <QSet>
 #include <QTextStream>
 #include <QtGlobal>
@@ -94,6 +95,15 @@ QString absolutePathFrom(const QString& rootDir, const QString& path)
     return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
 }
 
+QString truncatedProcessText(QString text)
+{
+    constexpr qsizetype maxChars = 4000;
+    text = text.trimmed();
+    if (text.size() <= maxChars)
+        return text;
+    return text.left(maxChars) + QStringLiteral("\n<truncated>");
+}
+
 QString sanitizeCacheSegment(QString value)
 {
     value = value.trimmed();
@@ -129,6 +139,173 @@ QString backendArtifactCachedPath(const QString& rootDir, const PackageResolvedR
     return cacheDir.absoluteFilePath(packagePart + QStringLiteral("/")
                                      + backendPart + QStringLiteral("/")
                                      + fileName);
+}
+
+QStringList parseStringList(const QJsonObject& object,
+                            const QString& key,
+                            QList<Diagnostic>& diagnostics,
+                            const SourceSpan& span)
+{
+    QStringList out;
+    const QJsonValue value = object.value(key);
+    if (value.isUndefined())
+        return out;
+    if (!value.isArray()) {
+        addPackageError(diagnostics, QStringLiteral("field '%1' must be an array of strings").arg(key), span);
+        return out;
+    }
+    for (const QJsonValue& raw : value.toArray()) {
+        if (!raw.isString()) {
+            addPackageError(diagnostics, QStringLiteral("field '%1' must contain only strings").arg(key), span);
+            continue;
+        }
+        out.push_back(raw.toString());
+    }
+    return out;
+}
+
+PackageBackendBuildSpec parseBackendBuildSpec(const QJsonValue& value,
+                                              QList<Diagnostic>& diagnostics,
+                                              const SourceSpan& span)
+{
+    PackageBackendBuildSpec build;
+    if (value.isUndefined())
+        return build;
+    build.enabled = true;
+    if (!value.isObject()) {
+        addPackageError(diagnostics, QStringLiteral("backend artifact field 'build' must be an object"), span);
+        return build;
+    }
+
+    const QJsonObject object = value.toObject();
+    build.system = optionalString(object, QStringLiteral("system"), QStringLiteral("cmake"));
+    if (build.system != QStringLiteral("cmake")) {
+        addPackageError(diagnostics,
+                        QStringLiteral("backend artifact build system '%1' is not supported yet; only 'cmake' is supported")
+                            .arg(build.system),
+                        span);
+        return build;
+    }
+    build.cmake = optionalString(object, QStringLiteral("cmake"), QString());
+    build.source = requiredString(object, QStringLiteral("source"), diagnostics, span);
+    build.buildDir = requiredString(object, QStringLiteral("buildDir"), diagnostics, span);
+    build.generator = optionalString(object, QStringLiteral("generator"), QString());
+    build.target = optionalString(object, QStringLiteral("target"), QString());
+    build.configureArgs = parseStringList(object, QStringLiteral("configureArgs"), diagnostics, span);
+    build.buildArgs = parseStringList(object, QStringLiteral("buildArgs"), diagnostics, span);
+    return build;
+}
+
+QString cmakeExecutable(const PackageBackendBuildSpec& build)
+{
+    if (!build.cmake.trimmed().isEmpty())
+        return build.cmake.trimmed();
+    const QString env = qEnvironmentVariable("CMAKE");
+    if (!env.trimmed().isEmpty())
+        return env.trimmed();
+    return QStringLiteral("cmake");
+}
+
+bool runPackageProcess(const QString& program,
+                       const QStringList& args,
+                       const QString& workingDir,
+                       const QString& label,
+                       const SourceSpan& span,
+                       QList<Diagnostic>& diagnostics)
+{
+    QProcess process;
+    process.setProgram(program);
+    process.setArguments(args);
+    if (!workingDir.isEmpty())
+        process.setWorkingDirectory(workingDir);
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+    if (!process.waitForStarted()) {
+        addPackageError(diagnostics,
+                        QStringLiteral("%1 failed to start '%2': %3")
+                            .arg(label, program, process.errorString()),
+                        span);
+        return false;
+    }
+    if (!process.waitForFinished(300000)) {
+        process.kill();
+        process.waitForFinished();
+        addPackageError(diagnostics,
+                        QStringLiteral("%1 timed out while running '%2'").arg(label, program),
+                        span);
+        return false;
+    }
+    const QString output = QString::fromUtf8(process.readAllStandardOutput());
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        addPackageError(diagnostics,
+                        QStringLiteral("%1 failed with exit code %2 while running '%3 %4'%5%6")
+                            .arg(label)
+                            .arg(process.exitCode())
+                            .arg(program,
+                                 args.join(QLatin1Char(' ')),
+                                 output.trimmed().isEmpty() ? QString() : QStringLiteral(":\n"),
+                                 truncatedProcessText(output)),
+                        span);
+        return false;
+    }
+    return true;
+}
+
+bool buildBackendArtifact(const PackageResolvedResource& resource,
+                          QList<Diagnostic>& diagnostics)
+{
+    if (!resource.build.enabled)
+        return true;
+
+    SourceSpan span;
+    span.file = QDir(resource.packageRoot).absoluteFilePath(packageManifestFileName());
+    const QString sourceDir = absolutePathFrom(resource.packageRoot, resource.build.source);
+    const QString buildDir = absolutePathFrom(resource.packageRoot, resource.build.buildDir);
+    if (!QFileInfo(sourceDir).isDir()) {
+        addPackageError(diagnostics,
+                        QStringLiteral("backend artifact build source directory '%1' from package '%2' does not exist")
+                            .arg(resource.build.source, resource.packageName),
+                        span);
+        return false;
+    }
+    if (!QDir().mkpath(buildDir)) {
+        addPackageError(diagnostics,
+                        QStringLiteral("cannot create backend artifact build directory '%1'").arg(buildDir),
+                        span);
+        return false;
+    }
+
+    QStringList configureArgs;
+    configureArgs << QStringLiteral("-S") << sourceDir
+                  << QStringLiteral("-B") << buildDir;
+    if (!resource.build.generator.isEmpty())
+        configureArgs << QStringLiteral("-G") << resource.build.generator;
+    configureArgs << resource.build.configureArgs;
+
+    const QString cmake = cmakeExecutable(resource.build);
+    if (!runPackageProcess(cmake,
+                           configureArgs,
+                           resource.packageRoot,
+                           QStringLiteral("configure backend artifact '%1' from package '%2'")
+                               .arg(resource.node.backendId, resource.packageName),
+                           span,
+                           diagnostics)) {
+        return false;
+    }
+
+    QStringList buildArgs;
+    buildArgs << QStringLiteral("--build") << buildDir;
+    if (!resource.build.target.isEmpty())
+        buildArgs << QStringLiteral("--target") << resource.build.target;
+    buildArgs << resource.build.buildArgs;
+
+    return runPackageProcess(cmake,
+                             buildArgs,
+                             resource.packageRoot,
+                             QStringLiteral("build backend artifact '%1' from package '%2'")
+                                 .arg(resource.node.backendId, resource.packageName),
+                             span,
+                             diagnostics);
 }
 
 PackageDependency parseDependency(const QJsonObject& object,
@@ -182,6 +359,7 @@ QStringList parseSymbols(const QJsonObject& object,
 }
 
 ResourceNode parseBackendArtifact(const QJsonObject& object,
+                                  PackageBackendBuildSpec* build,
                                   QList<Diagnostic>& diagnostics,
                                   const SourceSpan& span)
 {
@@ -199,6 +377,8 @@ ResourceNode parseBackendArtifact(const QJsonObject& object,
     node.kit = optionalString(object, QStringLiteral("kit"), QStringLiteral("gcc_64"));
     node.symbols = parseSymbols(object, node.backendId, diagnostics, span);
     node.state = ResourceNodeState::Unloaded;
+    if (build)
+        *build = parseBackendBuildSpec(object.value(QStringLiteral("build")), diagnostics, span);
 
     if (node.kind != QStringLiteral("qt_plugin"))
         addPackageError(diagnostics, QStringLiteral("backend artifact kind must be 'qt_plugin'"), span);
@@ -329,11 +509,13 @@ PackageLockEntry lockEntryFromJson(const QJsonObject& object,
 
 void appendPackageArtifacts(const PackageManifest& package, PackageGraphResult& graph)
 {
-    for (const ResourceNode& node : package.backendArtifacts) {
+    for (qsizetype i = 0; i < package.backendArtifacts.size(); ++i) {
         PackageResolvedResource resource;
         resource.packageName = package.name;
         resource.packageRoot = package.rootDir;
-        resource.node = node;
+        resource.node = package.backendArtifacts[i];
+        if (i < package.backendArtifactBuilds.size())
+            resource.build = package.backendArtifactBuilds[i];
         graph.backendArtifacts.push_back(resource);
     }
 }
@@ -758,6 +940,9 @@ PackageBackendCacheResult updatePackageBackendCache(const PackageGraphResult& gr
     }
 
     for (const PackageResolvedResource& resource : graph.backendArtifacts) {
+        if (!buildBackendArtifact(resource, result.diagnostics))
+            continue;
+
         const QString sourcePath = backendArtifactSourcePath(resource);
         const QFileInfo sourceInfo(sourcePath);
         SourceSpan span;
@@ -998,7 +1183,9 @@ PackageManifestParseResult packageManifestFromJson(const QJsonObject& object,
                     addPackageError(result.diagnostics, QStringLiteral("backend artifact must be an object"), span);
                     continue;
                 }
-                result.package.backendArtifacts.push_back(parseBackendArtifact(artifact.toObject(), result.diagnostics, span));
+                PackageBackendBuildSpec build;
+                result.package.backendArtifacts.push_back(parseBackendArtifact(artifact.toObject(), &build, result.diagnostics, span));
+                result.package.backendArtifactBuilds.push_back(build);
             }
         }
     }

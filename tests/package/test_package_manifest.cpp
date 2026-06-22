@@ -431,6 +431,93 @@ private slots:
         QCOMPARE(runResources.front().node.path, expectedCachedPath);
     }
 
+    void backendCacheBuildsCmakeArtifactsBeforeCopy()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("dep/backend")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/backend/CMakeLists.txt")),
+                  QStringLiteral(R"(
+cmake_minimum_required(VERSION 3.30)
+project(DepBackendFixture LANGUAGES CXX)
+add_library(dep_backend MODULE dep_backend.cpp)
+set_target_properties(dep_backend PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+    PREFIX "lib"
+)
+)"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/backend/dep_backend.cpp")),
+                  QStringLiteral(R"(
+extern "C" int dep_backend_answer() {
+    return 42;
+}
+)"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.0",
+                      "entry": "src/main.abel",
+                      "backendArtifacts": [
+                          {
+                              "backendId": "DepSystem",
+                              "path": "build/backend/plugins/libdep_backend.so",
+                              "symbols": ["ping"],
+                              "build": {
+                                  "system": "cmake",
+                                  "cmake": ")")
+                      + QStringLiteral(ABEL_TEST_CMAKE_EXECUTABLE).replace(QStringLiteral("\\"), QStringLiteral("\\\\"))
+                      + QStringLiteral(R"(",
+                                  "source": "backend",
+                                  "buildDir": "build/backend",
+                                  "generator": "Ninja"
+                              }
+                          }
+                      ]
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep"}
+                      ]
+                  })"));
+
+        const QString appRoot = root.absoluteFilePath(QStringLiteral("app"));
+        auto graph = abel::updatePackageGraph(appRoot);
+        for (const auto& d : graph.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(graph.diagnostics.isEmpty());
+        QCOMPARE(graph.backendArtifacts.size(), 1);
+        QVERIFY(graph.backendArtifacts.front().build.enabled);
+        QCOMPARE(graph.backendArtifacts.front().build.system, QStringLiteral("cmake"));
+
+        const QString sourceArtifact = root.absoluteFilePath(QStringLiteral("dep/build/backend/plugins/libdep_backend.so"));
+        QVERIFY(!QFileInfo(sourceArtifact).exists());
+
+        auto cache = abel::updatePackageBackendCache(graph);
+        for (const auto& d : cache.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(cache.diagnostics.isEmpty());
+        QCOMPARE(cache.resources.size(), 1);
+        QVERIFY(QFileInfo(sourceArtifact).isFile());
+
+        const QString expectedCachedPath = QDir(appRoot).absoluteFilePath(
+            QStringLiteral(".abel/cache/backend/dep/DepSystem/libdep_backend.so"));
+        QCOMPARE(cache.resources.front().sourcePath, sourceArtifact);
+        QCOMPARE(cache.resources.front().cachedPath, expectedCachedPath);
+        QVERIFY(QFileInfo(expectedCachedPath).isFile());
+    }
+
     void backendCacheDiagnosesMissingArtifacts()
     {
         QTemporaryDir dir;

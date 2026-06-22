@@ -16,6 +16,18 @@ struct PackageDependency {
     QString version;
 };
 
+struct PackageBackendBuildSpec {
+    bool enabled = false;
+    QString system = QStringLiteral("cmake");
+    QString cmake;
+    QString source;
+    QString buildDir;
+    QString generator;
+    QString target;
+    QStringList configureArgs;
+    QStringList buildArgs;
+};
+
 struct PackageManifest {
     QString name;
     QString version;
@@ -23,6 +35,7 @@ struct PackageManifest {
     QString rootDir;
     QString filePath;
     QList<ResourceNode> backendArtifacts;
+    QList<PackageBackendBuildSpec> backendArtifactBuilds;
     QList<PackageDependency> dependencies;
 
     QString entryFilePath() const;
@@ -84,6 +97,7 @@ struct PackageResolvedResource {
     QString packageName;
     QString packageRoot;
     ResourceNode node;
+    PackageBackendBuildSpec build;
 };
 
 struct PackageCachedResource {

@@ -234,6 +234,10 @@ target_link_libraries(abel_package_manifest_tests
         Qt6::Core
         Qt6::Test
 )
+target_compile_definitions(abel_package_manifest_tests
+    PRIVATE
+        ABEL_TEST_CMAKE_EXECUTABLE="${CMAKE_COMMAND}"
+)
 
 add_test(NAME abel_package_manifest_tests COMMAND abel_package_manifest_tests)
 
