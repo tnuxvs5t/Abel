@@ -289,6 +289,73 @@ private slots:
         QCOMPARE(result.exitCode, 8);
     }
 
+    void vectorStructResizeDefaultConstructsElements()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Point {
+                int x;
+                int y;
+            }
+
+            fn int main() {
+                vector<Point> xs;
+                xs.resize(2);
+                xs[0].x = 5;
+                xs[1].y = 7;
+                return xs[0].x + xs[0].y + xs[1].x + xs[1].y;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 12);
+    }
+
+    void vectorStructResizeRunsZeroArgInit()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Counter {
+                int value;
+
+                init() {
+                    value = 3;
+                }
+            }
+
+            fn int main() {
+                vector<Counter> xs;
+                xs.resize(2);
+                Counter c;
+                return xs[0].value + xs[1].value + c.value;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 9);
+    }
+
+    void explicitFieldConstructorStillWorksWithoutDefaultConstruction()
+    {
+        const QString src = QStringLiteral(R"(
+            struct NeedsValue {
+                int x;
+            }
+
+            fn int main() {
+                NeedsValue v = NeedsValue(4);
+                return v.x;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 4);
+    }
+
     void vectorFrontBackAreLvalues()
     {
         const QString src = QStringLiteral(R"(

@@ -346,6 +346,8 @@ void TypeChecker::checkVarDecl(const VarDeclStmtNode& stmt)
                 error(stmt.init->span,
                       QStringLiteral("cannot initialize %1 with %2").arg(type.displayName(), init.type.displayName()));
         }
+    } else if (!isDefaultConstructible(type)) {
+        error(stmt.span, QStringLiteral("type %1 is not default-constructible").arg(type.displayName()));
     }
     defineVariable(stmt.name, type, stmt.isConst || stmt.type->isConst, stmt.span);
 }
@@ -724,13 +726,18 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     if (const StructInfo* info = m_structs.contains(name->name) ? &m_structs[name->name] : nullptr) {
         const size_t argc = expr.args.size();
         if (!info->constructor) {
-            if (argc != info->fields.size())
-                return errorExpr(expr.span, QStringLiteral("constructor '%1' expects %2 argument(s)").arg(name->name).arg(info->fields.size()));
-            for (size_t i = 0; i < argc; ++i) {
-                const QString& fieldName = info->decl->fields[i]->name;
-                ExprType arg = checkExpr(*expr.args[i]);
-                if (!isAssignable(info->fields.value(fieldName).type, arg.type))
-                    error(expr.args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
+            if (argc == 0) {
+                if (!isDefaultConstructible(makeStructType(name->name)))
+                    return errorExpr(expr.span, QStringLiteral("constructor '%1' is not default-constructible").arg(name->name));
+            } else {
+                if (argc != info->fields.size())
+                    return errorExpr(expr.span, QStringLiteral("constructor '%1' expects 0 or %2 argument(s)").arg(name->name).arg(info->fields.size()));
+                for (size_t i = 0; i < argc; ++i) {
+                    const QString& fieldName = info->decl->fields[i]->name;
+                    ExprType arg = checkExpr(*expr.args[i]);
+                    if (!isAssignable(info->fields.value(fieldName).type, arg.type))
+                        error(expr.args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
+                }
             }
         } else {
             if (argc != info->constructor->params.size())
@@ -1013,6 +1020,8 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
         ExprType count = checkExpr(*args[0]);
         if (!isAssignable(makeType(TypeKind::I64), count.type))
             error(args[0]->span, QStringLiteral("vector.%1 size must be integer").arg(callee.field));
+        if (callee.field == QStringLiteral("resize") && !isDefaultConstructible(element))
+            error(callee.span, QStringLiteral("vector.resize requires default-constructible element type %1").arg(element.displayName()));
         return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
     }
     if (callee.field == QStringLiteral("front") || callee.field == QStringLiteral("back")) {
@@ -1121,6 +1130,54 @@ bool TypeChecker::isSupportedType(const AbelType& type) const
 bool TypeChecker::isAssignable(const AbelType& target, const AbelType& source) const
 {
     return canAssignValue(target, source);
+}
+
+bool TypeChecker::isDefaultConstructible(const AbelType& type) const
+{
+    QSet<QString> visiting;
+    return isDefaultConstructible(type, visiting);
+}
+
+bool TypeChecker::isDefaultConstructible(const AbelType& type, QSet<QString>& visiting) const
+{
+    switch (type.kind) {
+    case TypeKind::Void:
+    case TypeKind::Bool:
+    case TypeKind::I32:
+    case TypeKind::I64:
+    case TypeKind::F64:
+    case TypeKind::Char:
+    case TypeKind::Str:
+    case TypeKind::Any:
+    case TypeKind::Nullptr:
+    case TypeKind::Pointer:
+    case TypeKind::Vector:
+        return true;
+    case TypeKind::Reference:
+    case TypeKind::Function:
+    case TypeKind::Unknown:
+        return false;
+    case TypeKind::Struct: {
+        const StructInfo info = m_structs.value(type.spelling);
+        if (!info.decl)
+            return false;
+        if (visiting.contains(type.spelling))
+            return false;
+        if (info.constructor)
+            return info.constructor->params.empty();
+
+        visiting.insert(type.spelling);
+        for (const auto& field : info.decl->fields) {
+            if (!isDefaultConstructible(typeFromAst(*field->type), visiting)) {
+                visiting.remove(type.spelling);
+                return false;
+            }
+        }
+        visiting.remove(type.spelling);
+        return true;
+    }
+    }
+    return false;
 }
 
 bool TypeChecker::isStringifiable(const AbelType& type) const

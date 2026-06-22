@@ -6,6 +6,7 @@
 #include "abelcore/runtime.h"
 
 #include <QHash>
+#include <QSet>
 
 #include <optional>
 
@@ -75,6 +76,8 @@ private:
     AbelValue evalStructConstructor(const QString& name, const StructRuntimeInfo& info, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue evalStructMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue evalAssignment(const AssignExprNode& expr);
+    AbelValue defaultConstructValue(const AbelType& type, const SourceSpan& span);
+    AbelValue defaultConstructValue(const AbelType& type, const SourceSpan& span, QSet<QString>& visiting);
     std::optional<QString> stringifyValue(const AbelValue& value, const SourceSpan& span);
     void attachStringifier(BuiltinFunctionCall& call);
 

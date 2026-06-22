@@ -245,7 +245,26 @@ AbelValue vectorResize(BuiltinMethodCall& call)
     }
     auto vector = call.receiver.asVector();
     try {
-        vector->elements.resize(static_cast<size_t>(count), defaultValueForType(vector->elementType));
+        const size_t target = static_cast<size_t>(count);
+        if (target <= vector->elements.size()) {
+            vector->elements.resize(target);
+            return AbelValue::makeVoid();
+        }
+        vector->elements.reserve(target);
+        while (vector->elements.size() < target) {
+            AbelValue element = call.defaultValue
+                ? call.defaultValue(vector->elementType, call.callSpan)
+                : defaultValueForType(vector->elementType);
+            if (call.ctx.hasError())
+                return AbelValue::makeUnknown();
+            if (element.type().kind == TypeKind::Unknown) {
+                call.ctx.error(QStringLiteral("E0416"),
+                               QStringLiteral("vector.resize cannot default-construct %1").arg(vector->elementType.displayName()),
+                               call.callSpan);
+                return AbelValue::makeUnknown();
+            }
+            vector->elements.push_back(element);
+        }
     } catch (const std::exception& e) {
         call.ctx.error(QStringLiteral("E0412"), QStringLiteral("vector.resize failed: %1").arg(QString::fromLocal8Bit(e.what())), call.callSpan);
         return AbelValue::makeUnknown();

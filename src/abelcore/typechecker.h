@@ -6,6 +6,7 @@
 
 #include <QHash>
 #include <QList>
+#include <QSet>
 
 namespace abel {
 
@@ -111,6 +112,8 @@ private:
     const VariableInfo* lookupVariable(const QString& name) const;
 
     bool isSupportedType(const AbelType& type) const;
+    bool isDefaultConstructible(const AbelType& type) const;
+    bool isDefaultConstructible(const AbelType& type, QSet<QString>& visiting) const;
     bool isAssignable(const AbelType& target, const AbelType& source) const;
     bool isStringifiable(const AbelType& type) const;
     bool hasUserToStrFor(const AbelType& type) const;

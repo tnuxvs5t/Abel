@@ -283,6 +283,73 @@ private slots:
         QVERIFY(!result.diagnostics.isEmpty());
     }
 
+    void acceptsVectorStructResizeWhenElementDefaultConstructible()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Point {
+                int x;
+                int y;
+            }
+
+            fn int main() {
+                vector<Point> xs;
+                xs.resize(2);
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void acceptsZeroArgInitAsDefaultConstructor()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Point {
+                int x;
+
+                init() {
+                    x = 7;
+                }
+            }
+
+            fn int main() {
+                vector<Point> xs;
+                xs.resize(2);
+                Point p;
+                Point q = Point();
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsVectorStructResizeWhenElementNeedsConstructorArgs()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Complex {
+                int x;
+
+                init(int v) {
+                    x = v;
+                }
+            }
+
+            fn int main() {
+                vector<Complex> xs;
+                xs.resize(2);
+                Complex c;
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
+
     void rejectsAssigningConstVectorFront()
     {
         auto result = checkSource(QStringLiteral("fn int main() { const vector<int> xs = {1}; xs.front() = 2; return 0; }"));

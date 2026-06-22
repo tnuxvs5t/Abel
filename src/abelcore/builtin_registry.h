@@ -25,6 +25,7 @@ struct BuiltinMethodCall {
     std::vector<AbelValue> args;
     std::vector<SourceSpan> argSpans;
     SourceSpan callSpan;
+    std::function<AbelValue(const AbelType&, const SourceSpan&)> defaultValue;
 };
 
 struct BuiltinFunctionDesc {

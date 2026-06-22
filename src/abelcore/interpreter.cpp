@@ -832,7 +832,9 @@ ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
             values.push_back(convertOrError(evalExpr(*element), *type.pointee, element->span));
         value = AbelValue::makeVector(*type.pointee, std::move(values));
     } else {
-        value = stmt.init ? convertOrError(evalExpr(*stmt.init), type, stmt.span) : defaultValueForType(type);
+        value = stmt.init ? convertOrError(evalExpr(*stmt.init), type, stmt.span) : defaultConstructValue(type, stmt.span);
+        if (m_ctx->hasError())
+            return ExecResult::normal();
     }
     m_ctx->defineValueVariable(stmt.name, value, stmt.isConst || stmt.type->isConst, stmt.span);
     return ExecResult::normal();
@@ -1511,28 +1513,29 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
     QHash<QString, AbelValue> fields;
     std::vector<QString> order;
     order.reserve(info.decl->fields.size());
-    for (const auto& field : info.decl->fields) {
-        const AbelType type = typeFromAst(*field->type);
-        order.push_back(field->name);
-        fields.insert(field->name, defaultValueForType(type));
-    }
-    AbelValue object = AbelValue::makeStruct(name, order, std::move(fields));
-    AbelLocation* self = m_ctx->createStorage(object);
 
     if (!info.constructor) {
+        if (args.empty())
+            return defaultConstructValue(makeStructType(name), span);
         if (args.size() != info.decl->fields.size()) {
             error(QStringLiteral("E0575"), QStringLiteral("constructor '%1' expects %2 argument(s)").arg(name).arg(info.decl->fields.size()), span);
             return AbelValue::makeUnknown();
         }
-        auto structValue = self->read().asStruct();
         for (size_t i = 0; i < args.size(); ++i) {
             const auto& field = info.decl->fields[i];
+            order.push_back(field->name);
             AbelValue value = convertOrError(evalExpr(*args[i]), typeFromAst(*field->type), args[i]->span);
-            structValue->fields.insert(field->name, value);
+            fields.insert(field->name, value);
         }
-        return self->read();
+        if (m_ctx->hasError())
+            return AbelValue::makeUnknown();
+        return AbelValue::makeStruct(name, order, std::move(fields));
     }
 
+    if (args.empty() && !info.constructor->params.empty()) {
+        error(QStringLiteral("E0588"), QStringLiteral("constructor '%1' is not default-constructible").arg(name), span);
+        return AbelValue::makeUnknown();
+    }
     if (args.size() != info.constructor->params.size()) {
         error(QStringLiteral("E0576"), QStringLiteral("constructor '%1' called with wrong argument count").arg(name), span);
         return AbelValue::makeUnknown();
@@ -1546,6 +1549,14 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
     }
     if (m_ctx->hasError())
         return AbelValue::makeUnknown();
+
+    for (const auto& field : info.decl->fields) {
+        const AbelType type = typeFromAst(*field->type);
+        order.push_back(field->name);
+        fields.insert(field->name, defaultValueForType(type));
+    }
+    AbelValue object = AbelValue::makeStruct(name, order, std::move(fields));
+    AbelLocation* self = m_ctx->createStorage(object);
 
     RuntimeFrameGuard frame(*m_ctx, true, constructorFrameSymbol(name), span);
     m_ctx->defineVariable(QStringLiteral("this"), self, false, false, span);
@@ -1602,6 +1613,9 @@ AbelValue Interpreter::evalBuiltinMethod(const FieldAccessExprNode& callee, cons
         {},
         {},
         callee.span,
+        [this](const AbelType& type, const SourceSpan& span) {
+            return defaultConstructValue(type, span);
+        },
     };
     call.args.reserve(args.size());
     call.argSpans.reserve(args.size());
@@ -1636,6 +1650,66 @@ AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
     AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.span);
     lhs->write(rhs);
     return rhs;
+}
+
+AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceSpan& span)
+{
+    QSet<QString> visiting;
+    return defaultConstructValue(type, span, visiting);
+}
+
+AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceSpan& span, QSet<QString>& visiting)
+{
+    if (type.kind == TypeKind::Struct) {
+        const StructRuntimeInfo info = m_structs.value(type.spelling);
+        if (!info.decl) {
+            error(QStringLiteral("E0589"), QStringLiteral("unknown struct '%1'").arg(type.displayName()), span);
+            return AbelValue::makeUnknown();
+        }
+        if (visiting.contains(type.spelling)) {
+            error(QStringLiteral("E0590"), QStringLiteral("recursive default construction of '%1' is not supported").arg(type.displayName()), span);
+            return AbelValue::makeUnknown();
+        }
+        if (info.constructor && !info.constructor->params.empty()) {
+            error(QStringLiteral("E0588"), QStringLiteral("constructor '%1' is not default-constructible").arg(type.displayName()), span);
+            return AbelValue::makeUnknown();
+        }
+
+        visiting.insert(type.spelling);
+        QHash<QString, AbelValue> fields;
+        std::vector<QString> order;
+        order.reserve(info.decl->fields.size());
+        for (const auto& field : info.decl->fields) {
+            const AbelType fieldType = typeFromAst(*field->type);
+            order.push_back(field->name);
+            fields.insert(field->name,
+                          info.constructor
+                              ? defaultValueForType(fieldType)
+                              : defaultConstructValue(fieldType, field->span, visiting));
+            if (m_ctx->hasError()) {
+                visiting.remove(type.spelling);
+                return AbelValue::makeUnknown();
+            }
+        }
+        AbelValue object = AbelValue::makeStruct(type.spelling, order, std::move(fields));
+        if (info.constructor) {
+            AbelLocation* self = m_ctx->createStorage(object);
+            RuntimeFrameGuard frame(*m_ctx, true, constructorFrameSymbol(type.spelling), span);
+            m_ctx->defineVariable(QStringLiteral("this"), self, false, false, span);
+            auto structValue = self->read().asStruct();
+            for (const auto& fieldName : structValue->fieldOrder)
+                m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(structValue.get(), fieldName), false, false, span);
+            if (!m_ctx->hasError()) {
+                ExecResult flow = execBlock(*info.constructor->body);
+                if (flow.kind == FlowKind::Return)
+                    error(QStringLiteral("E0577"), QStringLiteral("constructor cannot return a value"), span);
+            }
+            object = m_ctx->hasError() ? AbelValue::makeUnknown() : self->read();
+        }
+        visiting.remove(type.spelling);
+        return object;
+    }
+    return defaultValueForType(type);
 }
 
 std::optional<QString> Interpreter::stringifyValue(const AbelValue& value, const SourceSpan& span)
