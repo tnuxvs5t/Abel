@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 6：BuiltinRegistry 最小闭环已建立，进入 any/variadic 与 std builtin 闭环。
+Stage 7：any/variadic 与 std string/print builtin 最小闭环已建立，进入 typechecker/backend/struct-lambda 闭环。
 ```
 
 ### 已完成
@@ -1985,6 +1985,12 @@ Stage 6：BuiltinRegistry 最小闭环已建立，进入 any/variadic 与 std bu
 37. 将 vector.len/empty/push/pop/front/back 从 Interpreter 硬编码迁入 BuiltinRegistry。
 38. Interpreter 只负责解析 receiver/args 并委托 BuiltinRegistry 调用 method/function。
 39. 增加 builtin registry QTest，验证默认 vector methods 与自定义 builtin function 注册/调用。
+40. 实现 any 显式装箱值容器，`any` 赋值会保留内部 AbelValue。
+41. 实现 user function 的 `any...` 最小运行时打包：剩余实参打包为 `vector<any>`。
+42. Parser 增加 `any...` 规则校验：最多一个、必须最后、只允许 `any...`。
+43. BuiltinRegistry 接入 `to_str` / `build_string` / `print` / `println` 最小闭环。
+44. Interpreter 可调用 builtin function；`build_string("x=", x)` 通过 registry 执行。
+45. 增加 builtin/interpreter/parser tests，覆盖 string builtins 与 `any...` 参数。
 ```
 
 ### 最近验证
@@ -2040,6 +2046,13 @@ Stage 6：BuiltinRegistry 最小闭环已建立，进入 any/variadic 与 std bu
 - Stage 6 CLI run smoke 通过：
   /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
   输出 exit=0。
+- Stage 7 构建通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
+- Stage 7 在 4GB 虚拟内存上限下测试通过：
+  /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+- Stage 7 CLI run smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
+  输出 exit=0。
 ```
 
 ### 未完成
@@ -2048,20 +2061,20 @@ Stage 6：BuiltinRegistry 最小闭环已建立，进入 any/variadic 与 std bu
 1. 尚无独立 typechecker；Stage 3 仅在解释器内做最小运行时类型检查。
 2. 尚无 backend plugin 示例。
 3. parser 仍是最小闭环，尚未覆盖 struct/lambda/for/range-for。
-4. interpreter 尚未实现 struct/lambda/backend/any/variadic。
+4. interpreter 尚未实现 struct/lambda/backend。
 5. const 指针、const 引用的完整静态语义尚未实现；当前只保留基础 const 变量写保护。
-6. BuiltinRegistry 尚未接入 build_string/print/println/to_str/scan，当前只迁移 vector methods 并预留 function 接口。
+6. BuiltinRegistry 尚未接入 scan；`to_str` 尚未支持用户自定义重载，只覆盖内建 stringify。
 ```
 
 ### 下一步
 
 ```text
-Stage 7：
-1. 实现 any 的值容器语义，至少支持基础值与 vector 的显式装箱。
-2. 实现 parser 对 any... 参数的最小支持与 function signature 记录。
-3. 在 BuiltinRegistry 中实现 to_str/build_string/print/println 最小闭环。
-4. 让 `build_string("x=", x)` 与 `println(...)` 通过 interpreter 调用 builtin function。
-5. 增加 variadic/builtin interpreter tests。
+Stage 8：
+1. 拆出独立 TypeChecker，先覆盖 Stage 3-7 已支持语义。
+2. `abel check` 从“仅 parse ok”升级为 parse + typecheck。
+3. TypeChecker 覆盖函数表、main 签名、变量声明、赋值、return、if/while/repeat 条件 bool、函数调用、引用参数、pointer/vector/any...、builtin function/method arity。
+4. 增加 typechecker tests，至少覆盖当前 interpreter tests 的静态错误子集。
+5. 保持 interpreter runtime 检查作为第二道防线，不移除诊断。
 6. build + ctest + commit。
 ```
 
@@ -2085,7 +2098,8 @@ ca49a01 docs: replace Abel design with agent manual
 de2fa03 interpreter: add Stage 3 tree runner
 8805f8c runtime: add pointer and reference locations
 6e4a3b3 runtime: add vector value semantics
-待本次 Stage 6 BuiltinRegistry 提交后追加 commit hash。
+3cde439 builtins: add registry for vector methods
+待本次 Stage 7 any/variadic builtin 提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。

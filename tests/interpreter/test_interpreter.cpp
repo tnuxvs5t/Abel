@@ -268,6 +268,42 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 14);
     }
+
+    void buildStringBuiltinWorks()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                str s = build_string("x=", 4, ", ok=", true);
+                if (s == "x=4, ok=true") {
+                    return 12;
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 12);
+    }
+
+    void anyVariadicUserFunctionPacksArgs()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int count(any... args) {
+                return args.len();
+            }
+
+            fn int main() {
+                return count(1, "a", true);
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 3);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

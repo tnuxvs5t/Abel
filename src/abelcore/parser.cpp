@@ -50,11 +50,16 @@ Token Parser::consume(TokenKind kind, const QString& message)
 
 void Parser::errorAt(const Token& token, const QString& message)
 {
+    errorAtSpan(token.span, message);
+}
+
+void Parser::errorAtSpan(const SourceSpan& span, const QString& message)
+{
     Diagnostic d;
     d.severity = Severity::Error;
     d.code = QStringLiteral("E0102");
     d.message = message;
-    d.primary = token.span;
+    d.primary = span;
     m_diagnostics.push_back(d);
 }
 
@@ -87,6 +92,19 @@ std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt
         } while (match(TokenKind::Comma));
     }
     consume(TokenKind::RParen, QStringLiteral("expected ')'"));
+    bool seenVariadic = false;
+    for (size_t i = 0; i < fn->params.size(); ++i) {
+        const auto& param = fn->params[i];
+        if (!param->variadic)
+            continue;
+        if (seenVariadic)
+            errorAtSpan(param->span, QStringLiteral("only one variadic parameter is allowed"));
+        seenVariadic = true;
+        if (i + 1 != fn->params.size())
+            errorAtSpan(param->span, QStringLiteral("variadic parameter must be last"));
+        if (param->type->name != QStringLiteral("any") || param->type->elementType || param->type->pointerDepth > 0 || param->type->isReference)
+            errorAtSpan(param->span, QStringLiteral("only any... variadic parameters are supported"));
+    }
     if (debt) {
         consume(TokenKind::Semicolon, QStringLiteral("expected ';' after debt function"));
     } else {

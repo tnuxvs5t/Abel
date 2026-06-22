@@ -1,5 +1,7 @@
 #include "abelcore/builtin_registry.h"
 
+#include <QTextStream>
+
 namespace abel {
 
 namespace {
@@ -25,6 +27,77 @@ AbelValue convertBuiltinArg(BuiltinMethodCall& call, int index, const AbelType& 
         return AbelValue::makeUnknown();
     }
     return convertValue(value, target);
+}
+
+QString stringifyBuiltinValue(const AbelValue& value)
+{
+    switch (value.type().kind) {
+    case TypeKind::Void:
+        return QString();
+    case TypeKind::Bool:
+        return value.asBool() ? QStringLiteral("true") : QStringLiteral("false");
+    case TypeKind::I32:
+    case TypeKind::I64:
+        return QString::number(value.asInt());
+    case TypeKind::F64:
+        return QString::number(value.asDouble(), 'g', 16);
+    case TypeKind::Char:
+        return QString(value.asChar());
+    case TypeKind::Str:
+        return value.asString();
+    case TypeKind::Any:
+        return stringifyBuiltinValue(value.asAny()->value);
+    case TypeKind::Nullptr:
+        return QStringLiteral("nullptr");
+    case TypeKind::Pointer:
+        return value.asPointer() ? QStringLiteral("<ptr>") : QStringLiteral("nullptr");
+    case TypeKind::Vector: {
+        QString out = QStringLiteral("[");
+        const auto vector = value.asVector();
+        for (size_t i = 0; i < vector->elements.size(); ++i) {
+            if (i > 0)
+                out += QStringLiteral(", ");
+            out += stringifyBuiltinValue(vector->elements[i]);
+        }
+        out += QStringLiteral("]");
+        return out;
+    }
+    case TypeKind::Reference:
+    case TypeKind::Unknown:
+        return value.debugString();
+    }
+    return value.debugString();
+}
+
+AbelValue builtinToStr(BuiltinFunctionCall& call)
+{
+    return AbelValue::makeString(stringifyBuiltinValue(call.args[0]));
+}
+
+AbelValue builtinBuildString(BuiltinFunctionCall& call)
+{
+    QString out;
+    for (const auto& arg : call.args)
+        out += stringifyBuiltinValue(arg);
+    return AbelValue::makeString(out);
+}
+
+AbelValue builtinPrint(BuiltinFunctionCall& call)
+{
+    QTextStream out(stdout);
+    for (const auto& arg : call.args)
+        out << stringifyBuiltinValue(arg);
+    out.flush();
+    return AbelValue::makeVoid();
+}
+
+AbelValue builtinPrintln(BuiltinFunctionCall& call)
+{
+    QTextStream out(stdout);
+    for (const auto& arg : call.args)
+        out << stringifyBuiltinValue(arg);
+    out << Qt::endl;
+    return AbelValue::makeVoid();
 }
 
 AbelValue vectorLen(BuiltinMethodCall& call)
@@ -91,6 +164,11 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerMethod({TypeKind::Vector, QStringLiteral("pop"), 0, 0, true, vectorPop, QStringLiteral("vector pop")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("front"), 0, 0, false, vectorFront, QStringLiteral("vector front")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("back"), 0, 0, false, vectorBack, QStringLiteral("vector back")});
+
+    registry.registerFunction({QStringLiteral("to_str"), 1, 1, false, builtinToStr, QStringLiteral("stringify one value")});
+    registry.registerFunction({QStringLiteral("build_string"), 0, -1, true, builtinBuildString, QStringLiteral("concatenate stringified values")});
+    registry.registerFunction({QStringLiteral("print"), 0, -1, true, builtinPrint, QStringLiteral("print stringified values")});
+    registry.registerFunction({QStringLiteral("println"), 0, -1, true, builtinPrintln, QStringLiteral("print stringified values plus newline")});
 
     return registry;
 }

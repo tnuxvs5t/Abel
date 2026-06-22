@@ -120,18 +120,20 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
         error(QStringLiteral("E0539"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
     }
-    if (args.size() != fn.params.size()) {
+    const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
+    const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
+    if ((!variadic && args.size() != fn.params.size()) || (variadic && args.size() < fixedCount)) {
         error(QStringLiteral("E0540"),
               QStringLiteral("function '%1' expects %2 argument(s), got %3")
                   .arg(fn.name)
-                  .arg(fn.params.size())
+                  .arg(variadic ? QStringLiteral("at least %1").arg(fixedCount) : QString::number(fn.params.size()))
                   .arg(args.size()),
               span);
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
     m_ctx->pushFrame();
-    for (size_t i = 0; i < args.size(); ++i) {
+    for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         const AbelType target = typeFromAst(*p.type);
         if (target.isReference()) {
@@ -150,6 +152,18 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
         } else {
             AbelValue converted = convertOrError(evalExpr(*args[i]), target, p.span);
             m_ctx->defineValueVariable(p.name, converted, false, p.span);
+        }
+    }
+    if (variadic) {
+        const ParameterNode& p = *fn.params.back();
+        if (typeFromAst(*p.type).kind != TypeKind::Any) {
+            error(QStringLiteral("E0560"), QStringLiteral("only any... variadic parameters are supported"), p.span);
+        } else {
+            std::vector<AbelValue> packed;
+            packed.reserve(args.size() - fixedCount);
+            for (size_t i = fixedCount; i < args.size(); ++i)
+                packed.push_back(AbelValue::makeAny(evalExpr(*args[i])));
+            m_ctx->defineValueVariable(p.name, AbelValue::makeVector(makeType(TypeKind::Any), std::move(packed)), false, p.span);
         }
     }
     if (m_ctx->hasError()) {

@@ -44,6 +44,22 @@ private slots:
         QVERIFY(parsed.diagnostics.isEmpty());
         QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(2));
     }
+
+    void validatesVariadicParameterShape()
+    {
+        auto parse = [](const QString& src) {
+            abel::Lexer lexer;
+            auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+            if (!lexed.diagnostics.isEmpty())
+                return lexed.diagnostics;
+            abel::Parser parser;
+            return parser.parse(lexed.tokens).diagnostics;
+        };
+
+        QVERIFY(parse(QStringLiteral("fn int ok(any... args) { return 0; }")).isEmpty());
+        QVERIFY(!parse(QStringLiteral("fn int bad(any... args, int x) { return 0; }")).isEmpty());
+        QVERIFY(!parse(QStringLiteral("fn int bad(int... xs) { return 0; }")).isEmpty());
+    }
 };
 
 QTEST_MAIN(AbelParserTests)

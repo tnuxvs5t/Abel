@@ -29,6 +29,7 @@ private:
     bool match(TokenKind kind);
     Token consume(TokenKind kind, const QString& message);
     void errorAt(const Token& token, const QString& message);
+    void errorAtSpan(const SourceSpan& span, const QString& message);
 
     std::unique_ptr<DeclNode> parseDeclaration();
     std::unique_ptr<FunctionDeclNode> parseFunction(bool exported, bool debt);

@@ -13,11 +13,13 @@ namespace abel {
 
 struct AbelLocation;
 struct AbelVectorValue;
+struct AbelAnyValue;
 
 class AbelValue {
 public:
     using VectorPtr = std::shared_ptr<AbelVectorValue>;
-    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*, VectorPtr>;
+    using AnyPtr = std::shared_ptr<AbelAnyValue>;
+    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*, VectorPtr, AnyPtr>;
 
     AbelValue() = default;
 
@@ -31,6 +33,7 @@ public:
     static AbelValue makeNullPointer(const AbelType& pointee);
     static AbelValue makeNullptr();
     static AbelValue makeVector(const AbelType& elementType, std::vector<AbelValue> elements);
+    static AbelValue makeAny(const AbelValue& value);
     static AbelValue makeUnknown();
 
     const AbelType& type() const { return m_type; }
@@ -43,6 +46,7 @@ public:
     QChar asChar() const;
     AbelLocation* asPointer() const;
     VectorPtr asVector() const;
+    AnyPtr asAny() const;
 
     QString debugString() const;
 
@@ -56,6 +60,10 @@ private:
 struct AbelVectorValue {
     AbelType elementType;
     std::vector<AbelValue> elements;
+};
+
+struct AbelAnyValue {
+    AbelValue value;
 };
 
 AbelValue defaultValueForType(const AbelType& type);

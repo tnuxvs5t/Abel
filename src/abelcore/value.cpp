@@ -63,6 +63,13 @@ AbelValue AbelValue::makeVector(const AbelType& elementType, std::vector<AbelVal
     return AbelValue(makeVectorType(elementType), vector);
 }
 
+AbelValue AbelValue::makeAny(const AbelValue& value)
+{
+    auto any = std::make_shared<AbelAnyValue>();
+    any->value = value;
+    return AbelValue(makeType(TypeKind::Any), any);
+}
+
 AbelValue AbelValue::makeUnknown()
 {
     return AbelValue(makeType(TypeKind::Unknown), std::monostate{});
@@ -105,6 +112,11 @@ AbelValue::VectorPtr AbelValue::asVector() const
     return std::get<VectorPtr>(m_payload);
 }
 
+AbelValue::AnyPtr AbelValue::asAny() const
+{
+    return std::get<AnyPtr>(m_payload);
+}
+
 QString AbelValue::debugString() const
 {
     switch (m_type.kind) {
@@ -115,7 +127,7 @@ QString AbelValue::debugString() const
     case TypeKind::F64: return QString::number(asDouble(), 'g', 16);
     case TypeKind::Char: return QString(asChar());
     case TypeKind::Str: return asString();
-    case TypeKind::Any: return QStringLiteral("<any>");
+    case TypeKind::Any: return asAny()->value.debugString();
     case TypeKind::Pointer:
         return asPointer() ? QStringLiteral("<ptr>") : QStringLiteral("nullptr");
     case TypeKind::Reference: return QStringLiteral("<ref>");
@@ -146,6 +158,7 @@ AbelValue defaultValueForType(const AbelType& type)
     case TypeKind::Vector:
         return type.pointee ? AbelValue::makeVector(*type.pointee, {}) : AbelValue::makeUnknown();
     case TypeKind::Any:
+        return AbelValue::makeAny(AbelValue::makeVoid());
     case TypeKind::Unknown: return AbelValue::makeUnknown();
     }
     return AbelValue::makeUnknown();
@@ -170,7 +183,7 @@ AbelValue convertValue(const AbelValue& value, const AbelType& target)
     if (target.kind == TypeKind::Pointer && value.type().kind == TypeKind::Pointer)
         return value;
     if (target.kind == TypeKind::Any)
-        return value;
+        return AbelValue::makeAny(value);
     return AbelValue::makeUnknown();
 }
 

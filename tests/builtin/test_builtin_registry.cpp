@@ -74,6 +74,33 @@ private slots:
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(value.asInt(), 42);
     }
+
+    void defaultStringBuiltinsWork()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        QVERIFY(registry.hasFunction(QStringLiteral("to_str")));
+        QVERIFY(registry.hasFunction(QStringLiteral("build_string")));
+        QVERIFY(registry.hasFunction(QStringLiteral("print")));
+        QVERIFY(registry.hasFunction(QStringLiteral("println")));
+
+        abel::AbelRuntimeContext ctx;
+        abel::BuiltinFunctionCall call{
+            ctx,
+            QStringLiteral("build_string"),
+            {
+                abel::AbelValue::makeString(QStringLiteral("x=")),
+                abel::AbelValue::makeInt(7),
+                abel::AbelValue::makeString(QStringLiteral(", ok=")),
+                abel::AbelValue::makeBool(true),
+            },
+            {},
+            {},
+        };
+        auto value = registry.callFunction(std::move(call));
+
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(value.asString(), QStringLiteral("x=7, ok=true"));
+    }
 };
 
 QTEST_MAIN(AbelBuiltinRegistryTests)
