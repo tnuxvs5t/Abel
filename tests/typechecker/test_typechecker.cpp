@@ -28,6 +28,16 @@ private:
         return checker.check(*parsed.program);
     }
 
+    static int countMessagesContaining(const abel::TypeCheckResult& result, const QString& needle)
+    {
+        int count = 0;
+        for (const auto& d : result.diagnostics) {
+            if (d.message.contains(needle))
+                ++count;
+        }
+        return count;
+    }
+
 private slots:
     void acceptsArithmeticMain()
     {
@@ -239,6 +249,61 @@ private slots:
     {
         auto result = checkSource(QStringLiteral("fn int main() { return nope(); }"));
         QVERIFY(!result.diagnostics.isEmpty());
+    }
+
+    void suppressesUnknownReturnAndBinaryCascades()
+    {
+        auto result = checkSource(QStringLiteral("fn int main() { return nope() + 1; }"));
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QCOMPARE(result.diagnostics.size(), 1);
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("unknown function 'nope'")));
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("operator")), 0);
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("cannot return")), 0);
+    }
+
+    void suppressesUnknownConditionCascade()
+    {
+        auto result = checkSource(QStringLiteral(R"(
+            fn int main() {
+                if (missing()) {
+                    return 1;
+                }
+                return 0;
+            }
+        )"));
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QCOMPARE(result.diagnostics.size(), 1);
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("unknown function 'missing'")));
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("condition must be bool")), 0);
+    }
+
+    void keepsIndependentUnknownSiblingDiagnostics()
+    {
+        auto result = checkSource(QStringLiteral(R"(
+            fn int main() {
+                int a = nope();
+                int b = other();
+                return 0;
+            }
+        )"));
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QCOMPARE(result.diagnostics.size(), 2);
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("unknown function 'nope'")), 1);
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("unknown function 'other'")), 1);
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("cannot initialize")), 0);
+    }
+
+    void suppressesUnknownReceiverMethodCascade()
+    {
+        auto result = checkSource(QStringLiteral("fn int main() { return missingVector().len(); }"));
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QCOMPARE(result.diagnostics.size(), 1);
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("unknown function 'missingVector'")));
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("requires vector receiver")), 0);
     }
 
     void rejectsBreakOutsideLoop()

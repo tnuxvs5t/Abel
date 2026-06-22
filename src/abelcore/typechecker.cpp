@@ -22,6 +22,16 @@ AbelType sourceLocationBuiltinType(const QString& name)
     return makeType(TypeKind::I32);
 }
 
+bool isUnknownType(const AbelType& type)
+{
+    return type.kind == TypeKind::Unknown;
+}
+
+ExprType unknownExprType()
+{
+    return {makeType(TypeKind::Unknown), ValueCategory::PRValue, false};
+}
+
 } // namespace
 
 TypeCheckResult TypeChecker::check(const ProgramNode& program)
@@ -268,7 +278,7 @@ void TypeChecker::checkStmt(const StmtNode& stmt)
 {
     if (auto* s = dynamic_cast<const ReturnStmtNode*>(&stmt)) {
         ExprType value = s->expr ? checkExpr(*s->expr) : ExprType{makeType(TypeKind::Void), ValueCategory::PRValue, false};
-        if (!isAssignable(m_currentReturnType, value.type))
+        if (!isUnknownType(value.type) && !isAssignable(m_currentReturnType, value.type))
             error(stmt.span,
                   QStringLiteral("cannot return %1 from function returning %2")
                       .arg(value.type.displayName(), m_currentReturnType.displayName()));
@@ -290,7 +300,7 @@ void TypeChecker::checkStmt(const StmtNode& stmt)
         for (const auto& branch : s->branches) {
             if (branch.condition) {
                 ExprType cond = checkExpr(*branch.condition);
-                if (cond.type.kind != TypeKind::Bool)
+                if (!isUnknownType(cond.type) && cond.type.kind != TypeKind::Bool)
                     error(branch.condition->span, QStringLiteral("if condition must be bool, got %1").arg(cond.type.displayName()));
             }
             checkBlock(*branch.body, true);
@@ -299,7 +309,7 @@ void TypeChecker::checkStmt(const StmtNode& stmt)
     }
     if (auto* s = dynamic_cast<const WhileStmtNode*>(&stmt)) {
         ExprType cond = checkExpr(*s->condition);
-        if (cond.type.kind != TypeKind::Bool)
+        if (!isUnknownType(cond.type) && cond.type.kind != TypeKind::Bool)
             error(s->condition->span, QStringLiteral("while condition must be bool, got %1").arg(cond.type.displayName()));
         ++m_loopDepth;
         checkBlock(*s->body, true);
@@ -308,7 +318,7 @@ void TypeChecker::checkStmt(const StmtNode& stmt)
     }
     if (auto* s = dynamic_cast<const RepeatStmtNode*>(&stmt)) {
         ExprType count = checkExpr(*s->count);
-        if (!count.type.isInteger())
+        if (!isUnknownType(count.type) && !count.type.isInteger())
             error(s->count->span, QStringLiteral("repeat count must be integer, got %1").arg(count.type.displayName()));
         ++m_loopDepth;
         checkBlock(*s->body, true);
@@ -346,7 +356,9 @@ void TypeChecker::checkVarDecl(const VarDeclStmtNode& stmt)
             return;
         }
         ExprType init = checkExpr(*stmt.init);
-        if (init.category != ValueCategory::LValue)
+        if (isUnknownType(init.type)) {
+            // Root diagnostic already emitted by the initializer; do not add a reference-binding cascade.
+        } else if (init.category != ValueCategory::LValue)
             error(stmt.init->span, QStringLiteral("reference variable '%1' must bind to an lvalue").arg(stmt.name));
         else if (!type.pointee || !isAssignable(*type.pointee, init.type))
             error(stmt.init->span,
@@ -377,7 +389,7 @@ void TypeChecker::checkFor(const ForStmtNode& stmt)
         checkStmt(*stmt.init);
     if (stmt.condition) {
         ExprType cond = checkExpr(*stmt.condition);
-        if (cond.type.kind != TypeKind::Bool)
+        if (!isUnknownType(cond.type) && cond.type.kind != TypeKind::Bool)
             error(stmt.condition->span, QStringLiteral("for condition must be bool, got %1").arg(cond.type.displayName()));
     }
     if (stmt.step)
@@ -391,6 +403,8 @@ void TypeChecker::checkFor(const ForStmtNode& stmt)
 void TypeChecker::checkRangeFor(const RangeForStmtNode& stmt)
 {
     ExprType range = checkExpr(*stmt.range);
+    if (isUnknownType(range.type))
+        return;
     if (range.type.kind != TypeKind::Vector || !range.type.pointee) {
         error(stmt.range->span, QStringLiteral("range-for requires vector, got %1").arg(range.type.displayName()));
         return;
@@ -453,17 +467,23 @@ ExprType TypeChecker::checkUnary(const UnaryExprNode& expr)
 {
     if (expr.op == QStringLiteral("&")) {
         ExprType inner = checkExpr(*expr.expr);
+        if (isUnknownType(inner.type))
+            return unknownExprType();
         if (inner.category != ValueCategory::LValue)
             return errorExpr(expr.span, QStringLiteral("address-of requires lvalue"));
         return {makePointerType(inner.type), ValueCategory::PRValue, false};
     }
     if (expr.op == QStringLiteral("*")) {
         ExprType inner = checkExpr(*expr.expr);
+        if (isUnknownType(inner.type))
+            return unknownExprType();
         if (!inner.type.isPointer() || !inner.type.pointee)
             return errorExpr(expr.span, QStringLiteral("dereference requires pointer"));
         return {*inner.type.pointee, ValueCategory::LValue, true};
     }
     ExprType inner = checkExpr(*expr.expr);
+    if (isUnknownType(inner.type))
+        return unknownExprType();
     if (expr.op == QStringLiteral("!")) {
         if (inner.type.kind != TypeKind::Bool)
             return errorExpr(expr.span, QStringLiteral("operator ! requires bool"));
@@ -485,6 +505,8 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
     ExprType lhs = checkExpr(*expr.lhs);
     ExprType rhs = checkExpr(*expr.rhs);
     const QString& op = expr.op;
+    if (isUnknownType(lhs.type) || isUnknownType(rhs.type))
+        return unknownExprType();
 
     if (op == QStringLiteral("&&") || op == QStringLiteral("||")) {
         if (lhs.type.kind != TypeKind::Bool || rhs.type.kind != TypeKind::Bool)
@@ -530,6 +552,8 @@ ExprType TypeChecker::checkCast(const CastExprNode& expr)
         return errorExpr(expr.targetType->span, QStringLiteral("cast target must be a value type"));
 
     ExprType source = checkExpr(*expr.expr);
+    if (isUnknownType(source.type))
+        return unknownExprType();
     if (source.type.kind == TypeKind::Any)
         return {target, ValueCategory::PRValue, false};
     if (source.type.isNumeric() && target.isNumeric())
@@ -561,29 +585,47 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
                                       const std::vector<std::unique_ptr<ExprNode>>& args,
                                       const SourceSpan& span)
 {
+    auto checkRestArgs = [&]() {
+        for (const auto& argExpr : args)
+            checkExpr(*argExpr);
+    };
+
     if (const VariableInfo* variable = lookupVariable(name)) {
         const AbelType calleeType = valueTypeOfVariable(variable->type);
         if (calleeType.kind != TypeKind::Function)
             return errorExpr(nameSpan, QStringLiteral("pipe target variable '%1' is not a function value").arg(name));
+        if (isUnknownType(lhs.type)) {
+            checkRestArgs();
+            return unknownExprType();
+        }
         return checkFunctionValueCallShape(calleeType, lhs, args, span);
     }
 
-    if (const FunctionDeclNode* fn = m_functions.value(name, nullptr))
+    if (const FunctionDeclNode* fn = m_functions.value(name, nullptr)) {
+        if (isUnknownType(lhs.type)) {
+            checkRestArgs();
+            return unknownExprType();
+        }
         return checkFunctionCallShape(name, *fn, lhs, args, span);
+    }
 
     if (m_builtins.hasFunction(name)) {
+        if (isUnknownType(lhs.type)) {
+            checkRestArgs();
+            return unknownExprType();
+        }
         const qsizetype argc = static_cast<qsizetype>(args.size()) + 1;
         if (name == QStringLiteral("to_str")) {
             if (argc != 1)
                 return errorExpr(span, QStringLiteral("to_str expects one argument"));
-            if (!isStringifiable(lhs.type))
+            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
                 return errorExpr(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("str_to_chars")) {
             if (argc != 1)
                 return errorExpr(span, QStringLiteral("str_to_chars expects one argument"));
-            if (lhs.type.kind != TypeKind::Str)
+            if (!isUnknownType(lhs.type) && lhs.type.kind != TypeKind::Str)
                 return errorExpr(span, QStringLiteral("str_to_chars expects str, got %1").arg(lhs.type.displayName()));
             return {makeVectorType(makeType(TypeKind::Char)), ValueCategory::PRValue, false};
         }
@@ -591,26 +633,26 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             if (argc != 1)
                 return errorExpr(span, QStringLiteral("chars_to_str expects one argument"));
             const AbelType charVector = makeVectorType(makeType(TypeKind::Char));
-            if (!isAssignable(charVector, lhs.type))
+            if (!isUnknownType(lhs.type) && !isAssignable(charVector, lhs.type))
                 return errorExpr(span, QStringLiteral("chars_to_str expects vector<char>, got %1").arg(lhs.type.displayName()));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("build_string")) {
-            if (!isStringifiable(lhs.type))
+            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
                 error(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
             for (const auto& argExpr : args) {
                 ExprType arg = checkExpr(*argExpr);
-                if (!isStringifiable(arg.type))
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
                     error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
             }
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("print") || name == QStringLiteral("println")) {
-            if (!isStringifiable(lhs.type))
+            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
                 error(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
             for (const auto& argExpr : args) {
                 ExprType arg = checkExpr(*argExpr);
-                if (!isStringifiable(arg.type))
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
                     error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
@@ -633,6 +675,8 @@ ExprType TypeChecker::checkFunctionCallShape(const QString& name,
         return errorExpr(span, QStringLiteral("function '%1' called with wrong argument count").arg(name));
 
     auto checkOne = [&](size_t i, const ExprType& arg, const SourceSpan& argSpan) {
+        if (isUnknownType(arg.type))
+            return;
         const ParameterNode& param = *fn.params[i];
         const AbelType paramType = typeFromAst(*param.type);
         if (paramType.isReference()) {
@@ -667,12 +711,19 @@ ExprType TypeChecker::checkFunctionValueCallShape(const AbelType& functionType,
                                                   const std::vector<std::unique_ptr<ExprNode>>& restArgs,
                                                   const SourceSpan& span)
 {
+    if (isUnknownType(functionType)) {
+        for (const auto& argExpr : restArgs)
+            checkExpr(*argExpr);
+        return unknownExprType();
+    }
     if (functionType.kind != TypeKind::Function || !functionType.pointee)
         return errorExpr(span, QStringLiteral("callee is not a function value"));
     if (restArgs.size() + 1 != functionType.params.size())
         return errorExpr(span, QStringLiteral("function value called with wrong argument count"));
 
     auto checkOne = [&](size_t i, const ExprType& arg, const SourceSpan& argSpan) {
+        if (isUnknownType(arg.type))
+            return;
         const AbelType& paramType = functionType.params[i];
         if (paramType.isReference()) {
             if (arg.category != ValueCategory::LValue)
@@ -699,6 +750,8 @@ ExprType TypeChecker::checkAssignment(const AssignExprNode& expr)
 {
     ExprType lhs = checkExpr(*expr.lhs);
     ExprType rhs = checkExpr(*expr.rhs);
+    if (isUnknownType(lhs.type) || isUnknownType(rhs.type))
+        return unknownExprType();
     if (lhs.category != ValueCategory::LValue)
         return errorExpr(expr.span, QStringLiteral("left side of assignment must be an lvalue"));
     if (!lhs.isMutable)
@@ -715,6 +768,11 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
 
     if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get())) {
         ExprType receiver = checkExpr(*field->base);
+        if (isUnknownType(receiver.type)) {
+            for (const auto& argExpr : expr.args)
+                checkExpr(*argExpr);
+            return unknownExprType();
+        }
         if (receiver.type.kind == TypeKind::Struct) {
             const StructInfo info = m_structs.value(receiver.type.spelling);
             const FunctionDeclNode* method = info.methods.value(field->field, nullptr);
@@ -725,7 +783,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             for (size_t i = 0; i < expr.args.size(); ++i) {
                 AbelType paramType = typeFromAst(*method->params[i]->type);
                 ExprType arg = checkExpr(*expr.args[i]);
-                if (!isAssignable(paramType, arg.type))
+                if (!isUnknownType(arg.type) && !isAssignable(paramType, arg.type))
                     error(expr.args[i]->span, QStringLiteral("cannot pass %1 to method parameter %2").arg(arg.type.displayName(), paramType.displayName()));
             }
             return {typeFromAst(*method->returnType), method->returnType->isReference ? ValueCategory::LValue : ValueCategory::PRValue, false};
@@ -756,7 +814,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                 for (size_t i = 0; i < argc; ++i) {
                     const QString& fieldName = info->decl->fields[i]->name;
                     ExprType arg = checkExpr(*expr.args[i]);
-                    if (!isAssignable(info->fields.value(fieldName).type, arg.type))
+                    if (!isUnknownType(arg.type) && !isAssignable(info->fields.value(fieldName).type, arg.type))
                         error(expr.args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
                 }
             }
@@ -766,7 +824,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             for (size_t i = 0; i < argc; ++i) {
                 AbelType paramType = typeFromAst(*info->constructor->params[i]->type);
                 ExprType arg = checkExpr(*expr.args[i]);
-                if (!isAssignable(paramType, arg.type))
+                if (!isUnknownType(arg.type) && !isAssignable(paramType, arg.type))
                     error(expr.args[i]->span, QStringLiteral("cannot pass %1 to constructor parameter %2").arg(arg.type.displayName(), paramType.displayName()));
             }
         }
@@ -782,6 +840,8 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             const ParameterNode& param = *fn->params[i];
             const AbelType paramType = typeFromAst(*param.type);
             ExprType arg = checkExpr(*expr.args[i]);
+            if (isUnknownType(arg.type))
+                continue;
             if (paramType.isReference()) {
                 if (arg.category != ValueCategory::LValue)
                     error(expr.args[i]->span, QStringLiteral("reference parameter '%1' requires lvalue").arg(param.name));
@@ -804,7 +864,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             if (argc != 1)
                 return errorExpr(expr.span, QStringLiteral("to_str expects one argument"));
             ExprType arg = checkExpr(*expr.args[0]);
-            if (!isStringifiable(arg.type))
+            if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
                 return errorExpr(expr.args[0]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
@@ -812,7 +872,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             if (argc != 1)
                 return errorExpr(expr.span, QStringLiteral("str_to_chars expects one argument"));
             ExprType arg = checkExpr(*expr.args[0]);
-            if (arg.type.kind != TypeKind::Str)
+            if (!isUnknownType(arg.type) && arg.type.kind != TypeKind::Str)
                 return errorExpr(expr.args[0]->span, QStringLiteral("str_to_chars expects str, got %1").arg(arg.type.displayName()));
             return {makeVectorType(makeType(TypeKind::Char)), ValueCategory::PRValue, false};
         }
@@ -821,14 +881,14 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                 return errorExpr(expr.span, QStringLiteral("chars_to_str expects one argument"));
             ExprType arg = checkExpr(*expr.args[0]);
             const AbelType charVector = makeVectorType(makeType(TypeKind::Char));
-            if (!isAssignable(charVector, arg.type))
+            if (!isUnknownType(arg.type) && !isAssignable(charVector, arg.type))
                 return errorExpr(expr.args[0]->span, QStringLiteral("chars_to_str expects vector<char>, got %1").arg(arg.type.displayName()));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name->name == QStringLiteral("build_string")) {
             for (const auto& argExpr : expr.args) {
                 ExprType arg = checkExpr(*argExpr);
-                if (!isStringifiable(arg.type))
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
                     error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
             }
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
@@ -836,7 +896,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
         if (name->name == QStringLiteral("print") || name->name == QStringLiteral("println")) {
             for (const auto& argExpr : expr.args) {
                 ExprType arg = checkExpr(*argExpr);
-                if (!isStringifiable(arg.type))
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
                     error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
@@ -869,6 +929,8 @@ ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
         const ParameterNode& param = *fn->params[i];
         const AbelType paramType = typeFromAst(*param.type);
         ExprType arg = checkExpr(*args[i]);
+        if (isUnknownType(arg.type))
+            continue;
         if (paramType.isReference()) {
             if (arg.category != ValueCategory::LValue)
                 error(args[i]->span, QStringLiteral("backend reference parameter '%1' requires lvalue").arg(param.name));
@@ -891,6 +953,11 @@ ExprType TypeChecker::checkFunctionValueCall(const AbelType& functionType,
                                              const std::vector<std::unique_ptr<ExprNode>>& args,
                                              const SourceSpan& span)
 {
+    if (isUnknownType(functionType)) {
+        for (const auto& argExpr : args)
+            checkExpr(*argExpr);
+        return unknownExprType();
+    }
     if (functionType.kind != TypeKind::Function || !functionType.pointee)
         return errorExpr(span, QStringLiteral("callee is not a function value"));
     if (args.size() != functionType.params.size())
@@ -898,6 +965,8 @@ ExprType TypeChecker::checkFunctionValueCall(const AbelType& functionType,
     for (size_t i = 0; i < args.size(); ++i) {
         const AbelType& paramType = functionType.params[i];
         ExprType arg = checkExpr(*args[i]);
+        if (isUnknownType(arg.type))
+            continue;
         if (paramType.isReference()) {
             if (arg.category != ValueCategory::LValue)
                 error(args[i]->span, QStringLiteral("reference function parameter requires lvalue"));
@@ -1001,6 +1070,11 @@ ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
 ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args)
 {
     ExprType receiver = checkExpr(*callee.base);
+    if (isUnknownType(receiver.type)) {
+        for (const auto& argExpr : args)
+            checkExpr(*argExpr);
+        return unknownExprType();
+    }
     if (receiver.type.kind != TypeKind::Vector || !receiver.type.pointee)
         return errorExpr(callee.span, QStringLiteral("builtin method '%1' requires vector receiver").arg(callee.field));
     if (!m_builtins.hasMethod(receiver.type, callee.field))
@@ -1020,7 +1094,7 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
         if (receiver.category == ValueCategory::LValue && !receiver.isMutable)
             return errorExpr(callee.span, QStringLiteral("vector.push requires mutable vector receiver"));
         ExprType arg = checkExpr(*args[0]);
-        if (!isAssignable(element, arg.type))
+        if (!isUnknownType(arg.type) && !isAssignable(element, arg.type))
             error(args[0]->span, QStringLiteral("cannot push %1 into vector<%2>").arg(arg.type.displayName(), element.displayName()));
         return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
     }
@@ -1039,7 +1113,7 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
         if (receiver.category == ValueCategory::LValue && !receiver.isMutable)
             return errorExpr(callee.span, QStringLiteral("vector.%1 requires mutable vector receiver").arg(callee.field));
         ExprType count = checkExpr(*args[0]);
-        if (!isAssignable(makeType(TypeKind::I64), count.type))
+        if (!isUnknownType(count.type) && !isAssignable(makeType(TypeKind::I64), count.type))
             error(args[0]->span, QStringLiteral("vector.%1 size must be integer").arg(callee.field));
         if (callee.field == QStringLiteral("resize") && !isDefaultConstructible(element))
             error(callee.span, QStringLiteral("vector.resize requires default-constructible element type %1").arg(element.displayName()));
@@ -1057,9 +1131,11 @@ ExprType TypeChecker::checkIndex(const IndexExprNode& expr)
 {
     ExprType base = checkExpr(*expr.base);
     ExprType index = checkExpr(*expr.index);
+    if (isUnknownType(base.type))
+        return unknownExprType();
     if (base.type.kind != TypeKind::Vector || !base.type.pointee)
         return errorExpr(expr.span, QStringLiteral("indexing requires vector"));
-    if (!index.type.isInteger())
+    if (!isUnknownType(index.type) && !index.type.isInteger())
         error(expr.index->span, QStringLiteral("vector index must be integer"));
     return {*base.type.pointee, ValueCategory::LValue, base.category == ValueCategory::PRValue || base.isMutable};
 }
@@ -1070,7 +1146,7 @@ ExprType TypeChecker::checkInitListAgainst(const InitListExprNode& init, const A
         return errorExpr(init.span, QStringLiteral("initializer list requires vector target"));
     for (const auto& value : init.values) {
         ExprType element = checkExpr(*value);
-        if (!isAssignable(*target.pointee, element.type))
+        if (!isUnknownType(element.type) && !isAssignable(*target.pointee, element.type))
             error(value->span, QStringLiteral("cannot put %1 into %2").arg(element.type.displayName(), target.displayName()));
     }
     return {target, ValueCategory::PRValue, false};
@@ -1112,6 +1188,8 @@ const TypeChecker::VariableInfo* TypeChecker::lookupVariable(const QString& name
 ExprType TypeChecker::checkFieldAccess(const FieldAccessExprNode& expr)
 {
     ExprType base = checkExpr(*expr.base);
+    if (isUnknownType(base.type))
+        return unknownExprType();
     AbelType objectType = base.type;
     bool mutableBase = base.isMutable;
     if (expr.pointer) {
@@ -1119,6 +1197,8 @@ ExprType TypeChecker::checkFieldAccess(const FieldAccessExprNode& expr)
             return errorExpr(expr.span, QStringLiteral("operator -> requires pointer receiver"));
         objectType = *objectType.pointee;
     }
+    if (isUnknownType(objectType))
+        return unknownExprType();
     if (objectType.kind != TypeKind::Struct)
         return errorExpr(expr.span, QStringLiteral("field access requires struct receiver"));
     const StructInfo info = m_structs.value(objectType.spelling);
