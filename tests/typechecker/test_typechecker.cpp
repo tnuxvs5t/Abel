@@ -92,6 +92,39 @@ private slots:
         auto result = checkSource(QStringLiteral("fn int main() { break; return 0; }"));
         QVERIFY(!result.diagnostics.isEmpty());
     }
+
+    void acceptsForAndRangeFor()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int sum = 0;
+                for (int i = 0; i < 3; i = i + 1) {
+                    sum = sum + i;
+                }
+                vector<int> xs = {1, 2};
+                for (x in xs) {
+                    x = x + sum;
+                }
+                return xs[1];
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsForConditionThatIsNotBool()
+    {
+        auto result = checkSource(QStringLiteral("fn int main() { for (int i = 0; i; i = i + 1) { } return 0; }"));
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
+
+    void rejectsRangeForNonVector()
+    {
+        auto result = checkSource(QStringLiteral("fn int main() { int x = 0; for (a in x) { } return 0; }"));
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
 };
 
 QTEST_MAIN(AbelTypeCheckerTests)

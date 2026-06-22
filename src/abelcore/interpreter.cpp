@@ -266,6 +266,10 @@ ExecResult Interpreter::execStmt(const StmtNode& stmt)
         }
         return ExecResult::normal();
     }
+    if (auto* s = dynamic_cast<const ForStmtNode*>(&stmt))
+        return execFor(*s);
+    if (auto* s = dynamic_cast<const RangeForStmtNode*>(&stmt))
+        return execRangeFor(*s);
     if (dynamic_cast<const BreakStmtNode*>(&stmt))
         return ExecResult::breakFlow();
     if (dynamic_cast<const ContinueStmtNode*>(&stmt))
@@ -320,6 +324,77 @@ ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
         value = stmt.init ? convertOrError(evalExpr(*stmt.init), type, stmt.span) : defaultValueForType(type);
     }
     m_ctx->defineValueVariable(stmt.name, value, stmt.isConst || stmt.type->isConst, stmt.span);
+    return ExecResult::normal();
+}
+
+ExecResult Interpreter::execFor(const ForStmtNode& stmt)
+{
+    m_ctx->pushFrame();
+    if (stmt.init) {
+        ExecResult init = execStmt(*stmt.init);
+        if (init.kind != FlowKind::Normal || m_ctx->hasError()) {
+            m_ctx->popFrame();
+            return init;
+        }
+    }
+
+    for (;;) {
+        if (stmt.condition) {
+            bool cond = false;
+            if (!requireBool(evalExpr(*stmt.condition), stmt.condition->span, cond) || !cond)
+                break;
+        }
+        ExecResult r = execStmt(*stmt.body);
+        if (r.kind == FlowKind::Return) {
+            m_ctx->popFrame();
+            return r;
+        }
+        if (r.kind == FlowKind::Break)
+            break;
+        if (m_ctx->hasError())
+            break;
+        if (stmt.step)
+            evalExpr(*stmt.step);
+        if (m_ctx->hasError())
+            break;
+        if (r.kind == FlowKind::Continue)
+            continue;
+    }
+
+    m_ctx->popFrame();
+    return ExecResult::normal();
+}
+
+ExecResult Interpreter::execRangeFor(const RangeForStmtNode& stmt)
+{
+    AbelValue range = evalExpr(*stmt.range);
+    if (range.type().kind != TypeKind::Vector || !range.type().pointee) {
+        error(QStringLiteral("E0561"),
+              QStringLiteral("range-for requires vector, got %1").arg(range.type().displayName()),
+              stmt.range->span);
+        return ExecResult::normal();
+    }
+
+    auto vector = range.asVector();
+    m_ctx->pushFrame();
+    for (size_t i = 0; i < vector->elements.size(); ++i) {
+        AbelLocation* loc = m_ctx->createVectorElementLocation(vector.get(), i);
+        m_ctx->pushFrame();
+        m_ctx->defineVariable(stmt.variable, loc, false, true, stmt.span);
+        ExecResult r = execBlock(*stmt.body);
+        m_ctx->popFrame();
+        if (r.kind == FlowKind::Return) {
+            m_ctx->popFrame();
+            return r;
+        }
+        if (r.kind == FlowKind::Break)
+            break;
+        if (m_ctx->hasError())
+            break;
+        if (r.kind == FlowKind::Continue)
+            continue;
+    }
+    m_ctx->popFrame();
     return ExecResult::normal();
 }
 

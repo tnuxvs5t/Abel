@@ -304,6 +304,45 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 3);
     }
+
+    void cStyleForWorks()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int sum = 0;
+                for (int i = 0; i < 5; i = i + 1) {
+                    if (i == 3) {
+                        continue;
+                    }
+                    sum = sum + i;
+                }
+                return sum;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 7);
+    }
+
+    void rangeForMutatesVectorElements()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1, 2, 3};
+                for (x in xs) {
+                    x = x + 10;
+                }
+                return xs[0] + xs[1] + xs[2];
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 36);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

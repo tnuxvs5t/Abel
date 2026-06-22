@@ -40,8 +40,10 @@ private:
     std::unique_ptr<StmtNode> parseStatement();
     std::unique_ptr<StmtNode> parseIf();
     std::unique_ptr<StmtNode> parseWhile();
+    std::unique_ptr<StmtNode> parseFor();
     std::unique_ptr<StmtNode> parseRepeat();
     std::unique_ptr<StmtNode> parseReturn();
+    std::unique_ptr<StmtNode> parseForInit();
     std::unique_ptr<StmtNode> parseVarOrExprStatement();
 
     std::unique_ptr<ExprNode> parseExpression();

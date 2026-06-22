@@ -140,6 +140,14 @@ void TypeChecker::checkStmt(const StmtNode& stmt)
         --m_loopDepth;
         return;
     }
+    if (auto* s = dynamic_cast<const ForStmtNode*>(&stmt)) {
+        checkFor(*s);
+        return;
+    }
+    if (auto* s = dynamic_cast<const RangeForStmtNode*>(&stmt)) {
+        checkRangeFor(*s);
+        return;
+    }
     if (dynamic_cast<const BreakStmtNode*>(&stmt) || dynamic_cast<const ContinueStmtNode*>(&stmt)) {
         if (m_loopDepth == 0)
             error(stmt.span, QStringLiteral("break/continue must be inside a loop"));
@@ -183,6 +191,40 @@ void TypeChecker::checkVarDecl(const VarDeclStmtNode& stmt)
         }
     }
     defineVariable(stmt.name, type, stmt.isConst || stmt.type->isConst, stmt.span);
+}
+
+void TypeChecker::checkFor(const ForStmtNode& stmt)
+{
+    pushScope();
+    if (stmt.init)
+        checkStmt(*stmt.init);
+    if (stmt.condition) {
+        ExprType cond = checkExpr(*stmt.condition);
+        if (cond.type.kind != TypeKind::Bool)
+            error(stmt.condition->span, QStringLiteral("for condition must be bool, got %1").arg(cond.type.displayName()));
+    }
+    if (stmt.step)
+        checkExpr(*stmt.step);
+    ++m_loopDepth;
+    checkBlock(*stmt.body, true);
+    --m_loopDepth;
+    popScope();
+}
+
+void TypeChecker::checkRangeFor(const RangeForStmtNode& stmt)
+{
+    ExprType range = checkExpr(*stmt.range);
+    if (range.type.kind != TypeKind::Vector || !range.type.pointee) {
+        error(stmt.range->span, QStringLiteral("range-for requires vector, got %1").arg(range.type.displayName()));
+        return;
+    }
+
+    pushScope();
+    defineVariable(stmt.variable, makeReferenceType(*range.type.pointee), false, stmt.span);
+    ++m_loopDepth;
+    checkBlock(*stmt.body, true);
+    --m_loopDepth;
+    popScope();
 }
 
 ExprType TypeChecker::checkExpr(const ExprNode& expr)

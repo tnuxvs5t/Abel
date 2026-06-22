@@ -173,6 +173,7 @@ std::unique_ptr<StmtNode> Parser::parseStatement()
     if (match(TokenKind::KwReturn)) return parseReturn();
     if (match(TokenKind::KwIf)) return parseIf();
     if (match(TokenKind::KwWhile)) return parseWhile();
+    if (match(TokenKind::KwFor)) return parseFor();
     if (match(TokenKind::KwRepeat)) return parseRepeat();
     if (match(TokenKind::KwBreak)) {
         auto s = std::make_unique<BreakStmtNode>();
@@ -223,6 +224,33 @@ std::unique_ptr<StmtNode> Parser::parseWhile()
     return s;
 }
 
+std::unique_ptr<StmtNode> Parser::parseFor()
+{
+    consume(TokenKind::LParen, QStringLiteral("expected '('"));
+    if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::KwIn) {
+        auto s = std::make_unique<RangeForStmtNode>();
+        s->variable = consume(TokenKind::Identifier, QStringLiteral("expected range-for variable")).text;
+        consume(TokenKind::KwIn, QStringLiteral("expected in"));
+        s->range = parseExpression();
+        consume(TokenKind::RParen, QStringLiteral("expected ')'"));
+        s->body = parseBlock();
+        return s;
+    }
+
+    auto s = std::make_unique<ForStmtNode>();
+    if (!check(TokenKind::Semicolon))
+        s->init = parseForInit();
+    consume(TokenKind::Semicolon, QStringLiteral("expected ';' after for init"));
+    if (!check(TokenKind::Semicolon))
+        s->condition = parseExpression();
+    consume(TokenKind::Semicolon, QStringLiteral("expected ';' after for condition"));
+    if (!check(TokenKind::RParen))
+        s->step = parseExpression();
+    consume(TokenKind::RParen, QStringLiteral("expected ')'"));
+    s->body = parseBlock();
+    return s;
+}
+
 std::unique_ptr<StmtNode> Parser::parseRepeat()
 {
     auto s = std::make_unique<RepeatStmtNode>();
@@ -239,6 +267,21 @@ std::unique_ptr<StmtNode> Parser::parseReturn()
     if (!check(TokenKind::Semicolon))
         s->expr = parseExpression();
     consume(TokenKind::Semicolon, QStringLiteral("expected ';'"));
+    return s;
+}
+
+std::unique_ptr<StmtNode> Parser::parseForInit()
+{
+    if (looksLikeType()) {
+        auto s = std::make_unique<VarDeclStmtNode>();
+        s->type = parseType();
+        s->name = consume(TokenKind::Identifier, QStringLiteral("expected variable name")).text;
+        if (match(TokenKind::Equal))
+            s->init = parseExpression();
+        return s;
+    }
+    auto s = std::make_unique<ExprStmtNode>();
+    s->expr = parseExpression();
     return s;
 }
 

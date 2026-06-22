@@ -60,6 +60,33 @@ private slots:
         QVERIFY(!parse(QStringLiteral("fn int bad(any... args, int x) { return 0; }")).isEmpty());
         QVERIFY(!parse(QStringLiteral("fn int bad(int... xs) { return 0; }")).isEmpty());
     }
+
+    void parsesForLoops()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int s = 0;
+                for (int i = 0; i < 3; i = i + 1) {
+                    s = s + i;
+                }
+                vector<int> xs = {1, 2, 3};
+                for (x in xs) {
+                    s = s + x;
+                }
+                return s;
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
+    }
 };
 
 QTEST_MAIN(AbelParserTests)

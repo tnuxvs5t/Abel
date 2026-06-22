@@ -130,6 +130,19 @@ struct RepeatStmtNode final : StmtNode {
     std::unique_ptr<BlockStmtNode> body;
 };
 
+struct ForStmtNode final : StmtNode {
+    std::unique_ptr<StmtNode> init; // VarDeclStmtNode or ExprStmtNode, optional
+    std::unique_ptr<ExprNode> condition;
+    std::unique_ptr<ExprNode> step;
+    std::unique_ptr<BlockStmtNode> body;
+};
+
+struct RangeForStmtNode final : StmtNode {
+    QString variable;
+    std::unique_ptr<ExprNode> range;
+    std::unique_ptr<BlockStmtNode> body;
+};
+
 struct BreakStmtNode final : StmtNode {};
 struct ContinueStmtNode final : StmtNode {};
 

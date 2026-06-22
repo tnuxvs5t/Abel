@@ -46,6 +46,8 @@ private:
     void checkBlock(const BlockStmtNode& block, bool pushScope);
     void checkStmt(const StmtNode& stmt);
     void checkVarDecl(const VarDeclStmtNode& stmt);
+    void checkFor(const ForStmtNode& stmt);
+    void checkRangeFor(const RangeForStmtNode& stmt);
 
     ExprType checkExpr(const ExprNode& expr);
     ExprType checkName(const NameExprNode& expr);

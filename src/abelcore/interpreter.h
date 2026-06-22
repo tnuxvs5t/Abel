@@ -29,6 +29,8 @@ private:
     ExecResult execBlock(const BlockStmtNode& block);
     ExecResult execStmt(const StmtNode& stmt);
     ExecResult execVarDecl(const VarDeclStmtNode& stmt);
+    ExecResult execFor(const ForStmtNode& stmt);
+    ExecResult execRangeFor(const RangeForStmtNode& stmt);
     AbelValue evalExpr(const ExprNode& expr);
     AbelLocation* evalLocation(const ExprNode& expr);
     AbelValue evalBinary(const BinaryExprNode& expr);
