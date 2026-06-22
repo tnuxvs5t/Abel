@@ -10,6 +10,8 @@ bool AbelType::operator==(const AbelType& other) const
         return false;
     if ((kind == TypeKind::Pointer || kind == TypeKind::Reference || kind == TypeKind::Vector) && pointee && other.pointee)
         return *pointee == *other.pointee;
+    if (kind == TypeKind::Struct)
+        return spelling == other.spelling;
     return true;
 }
 
@@ -63,6 +65,7 @@ QString AbelType::displayName() const
     case TypeKind::Nullptr: return QStringLiteral("nullptr");
     case TypeKind::Vector:
         return pointee ? QStringLiteral("vector<") + pointee->displayName() + QStringLiteral(">") : QStringLiteral("vector<?>");
+    case TypeKind::Struct: return spelling.isEmpty() ? QStringLiteral("<struct>") : spelling;
     case TypeKind::Unknown: return QStringLiteral("<unknown>");
     }
     return QStringLiteral("<unknown>");
@@ -100,6 +103,14 @@ AbelType makeVectorType(const AbelType& element)
     return t;
 }
 
+AbelType makeStructType(const QString& name)
+{
+    AbelType t;
+    t.kind = TypeKind::Struct;
+    t.spelling = name;
+    return t;
+}
+
 AbelType typeFromName(const QString& name)
 {
     if (name == QStringLiteral("void"))
@@ -118,7 +129,7 @@ AbelType typeFromName(const QString& name)
         return makeType(TypeKind::Str, name);
     if (name == QStringLiteral("any"))
         return makeType(TypeKind::Any, name);
-    return makeType(TypeKind::Unknown, name);
+    return makeStructType(name);
 }
 
 AbelType typeFromAst(const TypeNode& node)

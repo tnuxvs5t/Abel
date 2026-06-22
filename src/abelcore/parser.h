@@ -33,6 +33,9 @@ private:
 
     std::unique_ptr<DeclNode> parseDeclaration();
     std::unique_ptr<FunctionDeclNode> parseFunction(bool exported, bool debt);
+    std::unique_ptr<StructDeclNode> parseStruct(bool exported);
+    std::unique_ptr<FieldDeclNode> parseStructField();
+    std::unique_ptr<ConstructorDeclNode> parseConstructor();
     std::unique_ptr<BackendBlockNode> parseBackend(bool exported);
     std::unique_ptr<ParameterNode> parseParameter();
     std::unique_ptr<TypeNode> parseType();

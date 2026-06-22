@@ -70,6 +70,15 @@ AbelValue AbelValue::makeAny(const AbelValue& value)
     return AbelValue(makeType(TypeKind::Any), any);
 }
 
+AbelValue AbelValue::makeStruct(const QString& typeName, const std::vector<QString>& fieldOrder, QHash<QString, AbelValue> fields)
+{
+    auto object = std::make_shared<AbelStructValue>();
+    object->typeName = typeName;
+    object->fieldOrder = fieldOrder;
+    object->fields = std::move(fields);
+    return AbelValue(makeStructType(typeName), object);
+}
+
 AbelValue AbelValue::makeUnknown()
 {
     return AbelValue(makeType(TypeKind::Unknown), std::monostate{});
@@ -117,6 +126,11 @@ AbelValue::AnyPtr AbelValue::asAny() const
     return std::get<AnyPtr>(m_payload);
 }
 
+AbelValue::StructPtr AbelValue::asStruct() const
+{
+    return std::get<StructPtr>(m_payload);
+}
+
 QString AbelValue::debugString() const
 {
     switch (m_type.kind) {
@@ -134,6 +148,8 @@ QString AbelValue::debugString() const
     case TypeKind::Nullptr: return QStringLiteral("nullptr");
     case TypeKind::Vector:
         return QStringLiteral("<vector len=%1>").arg(asVector()->elements.size());
+    case TypeKind::Struct:
+        return QStringLiteral("<struct %1>").arg(asStruct()->typeName);
     case TypeKind::Unknown: return QStringLiteral("<unknown>");
     }
     return QStringLiteral("<unknown>");
@@ -159,6 +175,8 @@ AbelValue defaultValueForType(const AbelType& type)
         return type.pointee ? AbelValue::makeVector(*type.pointee, {}) : AbelValue::makeUnknown();
     case TypeKind::Any:
         return AbelValue::makeAny(AbelValue::makeVoid());
+    case TypeKind::Struct:
+        return AbelValue::makeUnknown();
     case TypeKind::Unknown: return AbelValue::makeUnknown();
     }
     return AbelValue::makeUnknown();
@@ -168,7 +186,18 @@ AbelValue convertValue(const AbelValue& value, const AbelType& target)
 {
     if (target.kind == TypeKind::Vector && value.type().kind == TypeKind::Vector && target.pointee) {
         auto copied = value.asVector();
-        return AbelValue::makeVector(*target.pointee, copied->elements);
+        std::vector<AbelValue> elements;
+        elements.reserve(copied->elements.size());
+        for (const auto& element : copied->elements)
+            elements.push_back(convertValue(element, element.type()));
+        return AbelValue::makeVector(*target.pointee, std::move(elements));
+    }
+    if (target.kind == TypeKind::Struct && value.type().kind == TypeKind::Struct && target.spelling == value.type().spelling) {
+        auto copied = value.asStruct();
+        QHash<QString, AbelValue> fields;
+        for (const auto& name : copied->fieldOrder)
+            fields.insert(name, convertValue(copied->fields.value(name), copied->fields.value(name).type()));
+        return AbelValue::makeStruct(copied->typeName, copied->fieldOrder, std::move(fields));
     }
     if (value.type().kind == target.kind)
         return value;

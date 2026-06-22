@@ -76,6 +76,8 @@ struct StaticAccessExprNode final : ExprNode {
     QString member;
 };
 
+struct ThisExprNode final : ExprNode {};
+
 struct InitListExprNode final : ExprNode {
     std::vector<std::unique_ptr<ExprNode>> values;
 };
@@ -159,10 +161,29 @@ struct DeclNode : AstNode {
 struct FunctionDeclNode final : DeclNode {
     bool exported = false;
     bool debt = false;
+    bool isConstMethod = false;
     std::unique_ptr<TypeNode> returnType;
     QString name;
     std::vector<std::unique_ptr<ParameterNode>> params;
     std::unique_ptr<BlockStmtNode> body;
+};
+
+struct FieldDeclNode : AstNode {
+    std::unique_ptr<TypeNode> type;
+    QString name;
+};
+
+struct ConstructorDeclNode : AstNode {
+    std::vector<std::unique_ptr<ParameterNode>> params;
+    std::unique_ptr<BlockStmtNode> body;
+};
+
+struct StructDeclNode final : DeclNode {
+    bool exported = false;
+    QString name;
+    std::vector<std::unique_ptr<FieldDeclNode>> fields;
+    std::vector<std::unique_ptr<ConstructorDeclNode>> constructors;
+    std::vector<std::unique_ptr<FunctionDeclNode>> methods;
 };
 
 struct BackendBlockNode final : DeclNode {

@@ -156,6 +156,52 @@ private slots:
         auto result = checkSource(QStringLiteral("fn int main() { const vector<int> xs = {1}; xs.front() = 2; return 0; }"));
         QVERIFY(!result.diagnostics.isEmpty());
     }
+
+    void acceptsStructCounter()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Counter {
+                int value;
+
+                init(int start) {
+                    value = start;
+                }
+
+                fn void inc() {
+                    value = value + 1;
+                }
+
+                const fn int get() {
+                    return value;
+                }
+            }
+
+            fn int main() {
+                Counter c = Counter(0);
+                c.inc();
+                return c.get();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsUnknownStructField()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+            fn int main() {
+                Box b = Box(1);
+                return b.y;
+            }
+        )");
+        auto result = checkSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+    }
 };
 
 QTEST_MAIN(AbelTypeCheckerTests)

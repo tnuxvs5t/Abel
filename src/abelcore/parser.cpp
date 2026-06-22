@@ -72,6 +72,8 @@ std::unique_ptr<DeclNode> Parser::parseDeclaration()
     }
     if (match(TokenKind::KwBackend))
         return parseBackend(exported);
+    if (match(TokenKind::KwStruct))
+        return parseStruct(exported);
     if (match(TokenKind::KwFn))
         return parseFunction(exported, false);
     errorAt(peek(), QStringLiteral("expected top-level declaration"));
@@ -111,6 +113,55 @@ std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt
         fn->body = parseBlock();
     }
     return fn;
+}
+
+std::unique_ptr<StructDeclNode> Parser::parseStruct(bool exported)
+{
+    auto s = std::make_unique<StructDeclNode>();
+    s->exported = exported;
+    s->name = consume(TokenKind::Identifier, QStringLiteral("expected struct name")).text;
+    consume(TokenKind::LBrace, QStringLiteral("expected '{'"));
+    while (!check(TokenKind::RBrace) && !atEnd()) {
+        if (match(TokenKind::KwInit)) {
+            s->constructors.push_back(parseConstructor());
+        } else {
+            const bool constMethod = match(TokenKind::KwConst);
+            if (match(TokenKind::KwFn)) {
+                auto method = parseFunction(false, false);
+                method->isConstMethod = constMethod;
+                s->methods.push_back(std::move(method));
+            } else {
+                if (constMethod)
+                    errorAt(previous(), QStringLiteral("const only applies to methods in struct body"));
+                s->fields.push_back(parseStructField());
+            }
+        }
+    }
+    consume(TokenKind::RBrace, QStringLiteral("expected '}'"));
+    return s;
+}
+
+std::unique_ptr<FieldDeclNode> Parser::parseStructField()
+{
+    auto field = std::make_unique<FieldDeclNode>();
+    field->type = parseType();
+    field->name = consume(TokenKind::Identifier, QStringLiteral("expected field name")).text;
+    consume(TokenKind::Semicolon, QStringLiteral("expected ';' after field"));
+    return field;
+}
+
+std::unique_ptr<ConstructorDeclNode> Parser::parseConstructor()
+{
+    auto ctor = std::make_unique<ConstructorDeclNode>();
+    consume(TokenKind::LParen, QStringLiteral("expected '(' after init"));
+    if (!check(TokenKind::RParen)) {
+        do {
+            ctor->params.push_back(parseParameter());
+        } while (match(TokenKind::Comma));
+    }
+    consume(TokenKind::RParen, QStringLiteral("expected ')'"));
+    ctor->body = parseBlock();
+    return ctor;
 }
 
 std::unique_ptr<BackendBlockNode> Parser::parseBackend(bool exported)
@@ -444,6 +495,8 @@ std::unique_ptr<ExprNode> Parser::parsePrimary()
         lit->kind = LiteralExprNode::Kind::Nullptr;
         return lit;
     }
+    if (match(TokenKind::KwThis))
+        return std::make_unique<ThisExprNode>();
     if (match(TokenKind::Identifier)) {
         auto name = std::make_unique<NameExprNode>();
         name->name = previous().text;

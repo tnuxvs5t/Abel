@@ -8,8 +8,10 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     m_scopes.clear();
     m_diagnostics.clear();
     m_currentReturnType = makeType(TypeKind::Void);
+    m_currentStruct.clear();
     m_loopDepth = 0;
 
+    collectStructs(program);
     collectFunctions(program);
 
     const FunctionDeclNode* main = m_functions.value(QStringLiteral("main"), nullptr);
@@ -25,8 +27,48 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
 
     for (const auto& fn : m_functions)
         checkFunction(*fn);
+    for (const auto& info : m_structs)
+        checkStruct(*info.decl);
 
     return {m_diagnostics};
+}
+
+void TypeChecker::collectStructs(const ProgramNode& program)
+{
+    m_structs.clear();
+    for (const auto& decl : program.declarations) {
+        auto* s = dynamic_cast<StructDeclNode*>(decl.get());
+        if (!s)
+            continue;
+        if (m_structs.contains(s->name)) {
+            error(s->span, QStringLiteral("duplicate struct '%1'").arg(s->name));
+            continue;
+        }
+        StructInfo info;
+        info.decl = s;
+        for (const auto& field : s->fields) {
+            if (info.fields.contains(field->name)) {
+                error(field->span, QStringLiteral("duplicate field '%1'").arg(field->name));
+                continue;
+            }
+            AbelType type = typeFromAst(*field->type);
+            if (type.isReference())
+                error(field->span, QStringLiteral("reference fields are not supported in v0"));
+            info.fields.insert(field->name, FieldInfo{type, field->type->isConst});
+        }
+        for (const auto& method : s->methods) {
+            if (info.methods.contains(method->name)) {
+                error(method->span, QStringLiteral("duplicate method '%1'").arg(method->name));
+                continue;
+            }
+            info.methods.insert(method->name, method.get());
+        }
+        if (s->constructors.size() > 1)
+            error(s->span, QStringLiteral("only one constructor is supported per struct in this v0 slice"));
+        if (!s->constructors.empty())
+            info.constructor = s->constructors.front().get();
+        m_structs.insert(s->name, info);
+    }
 }
 
 void TypeChecker::collectFunctions(const ProgramNode& program)
@@ -40,6 +82,65 @@ void TypeChecker::collectFunctions(const ProgramNode& program)
             m_functions.insert(fn->name, fn);
         }
     }
+}
+
+void TypeChecker::checkStruct(const StructDeclNode& decl)
+{
+    for (const auto& field : decl.fields) {
+        AbelType type = typeFromAst(*field->type);
+        if (!isSupportedType(type))
+            error(field->span, QStringLiteral("unsupported field type '%1'").arg(field->type->displayName()));
+        if (type.isReference())
+            error(field->span, QStringLiteral("reference fields are not supported in v0"));
+    }
+    for (const auto& ctor : decl.constructors)
+        checkConstructor(decl, *ctor);
+    for (const auto& method : decl.methods)
+        checkMethod(decl, *method);
+}
+
+void TypeChecker::checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor)
+{
+    m_currentReturnType = makeType(TypeKind::Void);
+    m_currentStruct = owner.name;
+    pushScope();
+    defineVariable(QStringLiteral("this"), makePointerType(makeStructType(owner.name)), false, owner.span);
+    for (const auto& field : owner.fields)
+        defineVariable(field->name, typeFromAst(*field->type), field->type->isConst, field->span);
+    for (const auto& param : ctor.params) {
+        AbelType paramType = typeFromAst(*param->type);
+        if (!isSupportedType(paramType))
+            error(param->span, QStringLiteral("unsupported parameter type '%1'").arg(param->type->displayName()));
+        defineVariable(param->name, param->variadic ? makeVectorType(makeType(TypeKind::Any)) : paramType, false, param->span);
+    }
+    checkBlock(*ctor.body, false);
+    popScope();
+    m_currentStruct.clear();
+}
+
+void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNode& method)
+{
+    const AbelType returnType = typeFromAst(*method.returnType);
+    if (!isSupportedType(returnType)) {
+        error(method.returnType->span, QStringLiteral("unsupported return type '%1'").arg(method.returnType->displayName()));
+        return;
+    }
+    m_currentReturnType = returnType;
+    m_currentStruct = owner.name;
+    pushScope();
+    defineVariable(QStringLiteral("this"), makePointerType(makeStructType(owner.name)), method.isConstMethod, method.span);
+    for (const auto& field : owner.fields)
+        defineVariable(field->name, typeFromAst(*field->type), method.isConstMethod || field->type->isConst, field->span);
+    for (const auto& param : method.params) {
+        AbelType paramType = typeFromAst(*param->type);
+        if (!isSupportedType(paramType))
+            error(param->span, QStringLiteral("unsupported parameter type '%1'").arg(param->type->displayName()));
+        defineVariable(param->name, param->variadic ? makeVectorType(makeType(TypeKind::Any)) : paramType, false, param->span);
+    }
+    if (method.body)
+        checkBlock(*method.body, false);
+    popScope();
+    m_currentStruct.clear();
 }
 
 void TypeChecker::checkFunction(const FunctionDeclNode& fn)
@@ -244,7 +345,13 @@ ExprType TypeChecker::checkExpr(const ExprNode& expr)
     if (auto* e = dynamic_cast<const BinaryExprNode*>(&expr)) return checkBinary(*e);
     if (auto* e = dynamic_cast<const AssignExprNode*>(&expr)) return checkAssignment(*e);
     if (auto* e = dynamic_cast<const CallExprNode*>(&expr)) return checkCall(*e);
+    if (auto* e = dynamic_cast<const FieldAccessExprNode*>(&expr)) return checkFieldAccess(*e);
     if (auto* e = dynamic_cast<const IndexExprNode*>(&expr)) return checkIndex(*e);
+    if (dynamic_cast<const ThisExprNode*>(&expr)) {
+        if (m_currentStruct.isEmpty())
+            return errorExpr(expr.span, QStringLiteral("this is only available inside struct methods"));
+        return {makePointerType(makeStructType(m_currentStruct)), ValueCategory::PRValue, false};
+    }
     if (dynamic_cast<const InitListExprNode*>(&expr))
         return errorExpr(expr.span, QStringLiteral("initializer list needs a target type"));
     if (dynamic_cast<const StaticAccessExprNode*>(&expr))
@@ -345,12 +452,53 @@ ExprType TypeChecker::checkAssignment(const AssignExprNode& expr)
 
 ExprType TypeChecker::checkCall(const CallExprNode& expr)
 {
-    if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get()))
+    if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get())) {
+        ExprType receiver = checkExpr(*field->base);
+        if (receiver.type.kind == TypeKind::Struct) {
+            const StructInfo info = m_structs.value(receiver.type.spelling);
+            const FunctionDeclNode* method = info.methods.value(field->field, nullptr);
+            if (!method)
+                return errorExpr(field->span, QStringLiteral("unknown method '%1' on %2").arg(field->field, receiver.type.displayName()));
+            if (expr.args.size() != method->params.size())
+                return errorExpr(expr.span, QStringLiteral("method '%1' called with wrong argument count").arg(field->field));
+            for (size_t i = 0; i < expr.args.size(); ++i) {
+                AbelType paramType = typeFromAst(*method->params[i]->type);
+                ExprType arg = checkExpr(*expr.args[i]);
+                if (!isAssignable(paramType, arg.type))
+                    error(expr.args[i]->span, QStringLiteral("cannot pass %1 to method parameter %2").arg(arg.type.displayName(), paramType.displayName()));
+            }
+            return {typeFromAst(*method->returnType), method->returnType->isReference ? ValueCategory::LValue : ValueCategory::PRValue, false};
+        }
         return checkBuiltinMethodCall(*field, expr.args);
+    }
 
     auto* name = dynamic_cast<NameExprNode*>(expr.callee.get());
     if (!name)
         return errorExpr(expr.span, QStringLiteral("only direct function and builtin method calls are supported"));
+
+    if (const StructInfo* info = m_structs.contains(name->name) ? &m_structs[name->name] : nullptr) {
+        const size_t argc = expr.args.size();
+        if (!info->constructor) {
+            if (argc != info->fields.size())
+                return errorExpr(expr.span, QStringLiteral("constructor '%1' expects %2 argument(s)").arg(name->name).arg(info->fields.size()));
+            for (size_t i = 0; i < argc; ++i) {
+                const QString& fieldName = info->decl->fields[i]->name;
+                ExprType arg = checkExpr(*expr.args[i]);
+                if (!isAssignable(info->fields.value(fieldName).type, arg.type))
+                    error(expr.args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
+            }
+        } else {
+            if (argc != info->constructor->params.size())
+                return errorExpr(expr.span, QStringLiteral("constructor '%1' called with wrong argument count").arg(name->name));
+            for (size_t i = 0; i < argc; ++i) {
+                AbelType paramType = typeFromAst(*info->constructor->params[i]->type);
+                ExprType arg = checkExpr(*expr.args[i]);
+                if (!isAssignable(paramType, arg.type))
+                    error(expr.args[i]->span, QStringLiteral("cannot pass %1 to constructor parameter %2").arg(arg.type.displayName(), paramType.displayName()));
+            }
+        }
+        return {makeStructType(name->name), ValueCategory::PRValue, false};
+    }
 
     if (const FunctionDeclNode* fn = m_functions.value(name->name, nullptr)) {
         const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
@@ -503,10 +651,31 @@ const TypeChecker::VariableInfo* TypeChecker::lookupVariable(const QString& name
     return nullptr;
 }
 
+ExprType TypeChecker::checkFieldAccess(const FieldAccessExprNode& expr)
+{
+    ExprType base = checkExpr(*expr.base);
+    AbelType objectType = base.type;
+    bool mutableBase = base.isMutable;
+    if (expr.pointer) {
+        if (!objectType.isPointer() || !objectType.pointee)
+            return errorExpr(expr.span, QStringLiteral("operator -> requires pointer receiver"));
+        objectType = *objectType.pointee;
+    }
+    if (objectType.kind != TypeKind::Struct)
+        return errorExpr(expr.span, QStringLiteral("field access requires struct receiver"));
+    const StructInfo info = m_structs.value(objectType.spelling);
+    if (!info.fields.contains(expr.field))
+        return errorExpr(expr.span, QStringLiteral("unknown field '%1' on %2").arg(expr.field, objectType.displayName()));
+    const FieldInfo field = info.fields.value(expr.field);
+    return {field.type, ValueCategory::LValue, mutableBase && !field.isConst};
+}
+
 bool TypeChecker::isSupportedType(const AbelType& type) const
 {
     if (type.kind == TypeKind::Unknown || type.kind == TypeKind::Nullptr)
         return false;
+    if (type.kind == TypeKind::Struct)
+        return m_structs.contains(type.spelling);
     if ((type.kind == TypeKind::Pointer || type.kind == TypeKind::Reference || type.kind == TypeKind::Vector) && type.pointee)
         return isSupportedType(*type.pointee);
     return true;

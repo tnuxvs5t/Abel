@@ -9,8 +9,15 @@ InterpreterResult Interpreter::run(const ProgramNode& program)
     AbelRuntimeContext ctx;
     m_ctx = &ctx;
     m_functions.clear();
+    m_structs.clear();
 
     InterpreterResult result;
+    if (!collectStructs(program, ctx)) {
+        result.exitCode = 1;
+        result.diagnostics = ctx.takeDiagnostics();
+        m_ctx = nullptr;
+        return result;
+    }
     if (!collectFunctions(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
@@ -50,6 +57,29 @@ InterpreterResult Interpreter::run(const ProgramNode& program)
     return result;
 }
 
+bool Interpreter::collectStructs(const ProgramNode& program, AbelRuntimeContext& ctx)
+{
+    bool ok = true;
+    for (const auto& decl : program.declarations) {
+        auto* s = dynamic_cast<StructDeclNode*>(decl.get());
+        if (!s)
+            continue;
+        if (m_structs.contains(s->name)) {
+            ctx.error(QStringLiteral("E0565"), QStringLiteral("duplicate struct '%1'").arg(s->name), s->span);
+            ok = false;
+            continue;
+        }
+        StructRuntimeInfo info;
+        info.decl = s;
+        if (!s->constructors.empty())
+            info.constructor = s->constructors.front().get();
+        for (const auto& method : s->methods)
+            info.methods.insert(method->name, method.get());
+        m_structs.insert(s->name, info);
+    }
+    return ok;
+}
+
 bool Interpreter::collectFunctions(const ProgramNode& program, AbelRuntimeContext& ctx)
 {
     bool ok = true;
@@ -64,6 +94,69 @@ bool Interpreter::collectFunctions(const ProgramNode& program, AbelRuntimeContex
         }
     }
     return ok;
+}
+
+ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
+                                           AbelLocation* self,
+                                           const std::vector<std::unique_ptr<ExprNode>>& args,
+                                           const SourceSpan& span)
+{
+    if (!self) {
+        error(QStringLiteral("E0566"), QStringLiteral("missing struct receiver for '%1'").arg(fn.name), span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+    const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
+    const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
+    if ((!variadic && args.size() != fn.params.size()) || (variadic && args.size() < fixedCount)) {
+        error(QStringLiteral("E0567"), QStringLiteral("method '%1' called with wrong argument count").arg(fn.name), span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    AbelValue selfValue = self->read();
+    if (selfValue.type().kind != TypeKind::Struct) {
+        error(QStringLiteral("E0568"), QStringLiteral("method receiver is not a struct"), span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    m_ctx->pushFrame();
+    m_ctx->defineVariable(QStringLiteral("this"), self, fn.isConstMethod, false, span);
+    auto object = selfValue.asStruct();
+    for (const auto& fieldName : object->fieldOrder)
+        m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(object.get(), fieldName), fn.isConstMethod, false, span);
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& p = *fn.params[i];
+        const AbelType target = typeFromAst(*p.type);
+        if (target.isReference()) {
+            AbelLocation* loc = evalLocation(*args[i]);
+            if (loc)
+                m_ctx->defineVariable(p.name, loc, false, true, p.span);
+        } else {
+            AbelValue converted = convertOrError(evalExpr(*args[i]), target, p.span);
+            m_ctx->defineValueVariable(p.name, converted, false, p.span);
+        }
+    }
+    if (variadic) {
+        const ParameterNode& p = *fn.params.back();
+        std::vector<AbelValue> packed;
+        packed.reserve(args.size() - fixedCount);
+        for (size_t i = fixedCount; i < args.size(); ++i)
+            packed.push_back(AbelValue::makeAny(evalExpr(*args[i])));
+        m_ctx->defineValueVariable(p.name, AbelValue::makeVector(makeType(TypeKind::Any), std::move(packed)), false, p.span);
+    }
+    if (m_ctx->hasError()) {
+        m_ctx->popFrame();
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    ExecResult flow = execBlock(*fn.body);
+    m_ctx->popFrame();
+    const AbelType returnType = typeFromAst(*fn.returnType);
+    if (flow.kind == FlowKind::Return)
+        return ExecResult::returned(convertOrError(flow.value, returnType, fn.span));
+    if (returnType.kind == TypeKind::Void)
+        return ExecResult::returned(AbelValue::makeVoid());
+    error(QStringLiteral("E0569"), QStringLiteral("method '%1' ended without return").arg(fn.name), fn.span);
+    return ExecResult::returned(AbelValue::makeUnknown());
 }
 
 ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args)
@@ -419,6 +512,14 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
         }
         return slot->location ? slot->location->read() : AbelValue::makeUnknown();
     }
+    if (dynamic_cast<const ThisExprNode*>(&expr)) {
+        const VariableSlot* slot = m_ctx->lookupVariable(QStringLiteral("this"));
+        if (!slot || !slot->location) {
+            error(QStringLiteral("E0570"), QStringLiteral("this is not available here"), expr.span);
+            return AbelValue::makeUnknown();
+        }
+        return slot->location->read();
+    }
     if (auto* e = dynamic_cast<const UnaryExprNode*>(&expr))
         return evalUnary(*e);
     if (auto* e = dynamic_cast<const BinaryExprNode*>(&expr))
@@ -428,6 +529,10 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
     if (auto* e = dynamic_cast<const CallExprNode*>(&expr))
         return evalCall(*e);
     if (auto* e = dynamic_cast<const IndexExprNode*>(&expr)) {
+        AbelLocation* loc = evalLocation(*e);
+        return loc ? loc->read() : AbelValue::makeUnknown();
+    }
+    if (auto* e = dynamic_cast<const FieldAccessExprNode*>(&expr)) {
         AbelLocation* loc = evalLocation(*e);
         return loc ? loc->read() : AbelValue::makeUnknown();
     }
@@ -453,6 +558,38 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
             return nullptr;
         }
         return slot->location;
+    }
+    if (auto* e = dynamic_cast<const FieldAccessExprNode*>(&expr)) {
+        AbelValue base;
+        AbelStructValue* object = nullptr;
+        if (e->pointer) {
+            AbelValue ptr = evalExpr(*e->base);
+            if (!ptr.type().isPointer() || !ptr.type().pointee || ptr.type().pointee->kind != TypeKind::Struct) {
+                error(QStringLiteral("E0571"), QStringLiteral("operator -> requires pointer to struct"), e->span);
+                return nullptr;
+            }
+            AbelLocation* pointee = ptr.asPointer();
+            if (!pointee) {
+                error(QStringLiteral("E0572"), QStringLiteral("cannot dereference nullptr struct pointer"), e->span);
+                return nullptr;
+            }
+            base = pointee->read();
+        } else {
+            AbelLocation* baseLoc = evalLocation(*e->base);
+            if (!baseLoc)
+                return nullptr;
+            base = baseLoc->read();
+        }
+        if (base.type().kind != TypeKind::Struct) {
+            error(QStringLiteral("E0573"), QStringLiteral("field access requires struct"), e->span);
+            return nullptr;
+        }
+        object = base.asStruct().get();
+        if (!object->fields.contains(e->field)) {
+            error(QStringLiteral("E0574"), QStringLiteral("unknown field '%1'").arg(e->field), e->span);
+            return nullptr;
+        }
+        return m_ctx->createStructFieldLocation(object, e->field);
     }
     if (auto* e = dynamic_cast<const UnaryExprNode*>(&expr); e && e->op == QStringLiteral("*")) {
         AbelValue ptr = evalExpr(*e->expr);
@@ -677,8 +814,12 @@ AbelValue Interpreter::evalUnary(const UnaryExprNode& expr)
 
 AbelValue Interpreter::evalCall(const CallExprNode& expr)
 {
-    if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get()))
+    if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get())) {
+        AbelValue receiver = evalExpr(*field->base);
+        if (receiver.type().kind == TypeKind::Struct)
+            return evalStructMethod(*field, expr.args, expr.span);
         return evalBuiltinMethod(*field, expr.args);
+    }
 
     auto* name = dynamic_cast<NameExprNode*>(expr.callee.get());
     if (!name) {
@@ -687,6 +828,8 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
     }
     const FunctionDeclNode* fn = m_functions.value(name->name, nullptr);
     if (!fn) {
+        if (m_structs.contains(name->name))
+            return evalStructConstructor(name->name, m_structs.value(name->name), expr.args, expr.span);
         if (m_builtins.hasFunction(name->name)) {
             BuiltinFunctionCall call{*m_ctx, name->name, {}, {}, expr.span};
             call.args.reserve(expr.args.size());
@@ -701,6 +844,79 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         return AbelValue::makeUnknown();
     }
     return callFunctionExpr(*fn, expr.args, expr.span).value;
+}
+
+AbelValue Interpreter::evalStructConstructor(const QString& name,
+                                             const StructRuntimeInfo& info,
+                                             const std::vector<std::unique_ptr<ExprNode>>& args,
+                                             const SourceSpan& span)
+{
+    QHash<QString, AbelValue> fields;
+    std::vector<QString> order;
+    order.reserve(info.decl->fields.size());
+    for (const auto& field : info.decl->fields) {
+        const AbelType type = typeFromAst(*field->type);
+        order.push_back(field->name);
+        fields.insert(field->name, defaultValueForType(type));
+    }
+    AbelValue object = AbelValue::makeStruct(name, order, std::move(fields));
+    AbelLocation* self = m_ctx->createStorage(object);
+
+    if (!info.constructor) {
+        if (args.size() != info.decl->fields.size()) {
+            error(QStringLiteral("E0575"), QStringLiteral("constructor '%1' expects %2 argument(s)").arg(name).arg(info.decl->fields.size()), span);
+            return AbelValue::makeUnknown();
+        }
+        auto structValue = self->read().asStruct();
+        for (size_t i = 0; i < args.size(); ++i) {
+            const auto& field = info.decl->fields[i];
+            AbelValue value = convertOrError(evalExpr(*args[i]), typeFromAst(*field->type), args[i]->span);
+            structValue->fields.insert(field->name, value);
+        }
+        return self->read();
+    }
+
+    if (args.size() != info.constructor->params.size()) {
+        error(QStringLiteral("E0576"), QStringLiteral("constructor '%1' called with wrong argument count").arg(name), span);
+        return AbelValue::makeUnknown();
+    }
+
+    m_ctx->pushFrame();
+    m_ctx->defineVariable(QStringLiteral("this"), self, false, false, span);
+    auto structValue = self->read().asStruct();
+    for (const auto& fieldName : structValue->fieldOrder)
+        m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(structValue.get(), fieldName), false, false, span);
+    for (size_t i = 0; i < args.size(); ++i) {
+        const ParameterNode& p = *info.constructor->params[i];
+        AbelValue converted = convertOrError(evalExpr(*args[i]), typeFromAst(*p.type), p.span);
+        m_ctx->defineValueVariable(p.name, converted, false, p.span);
+    }
+    ExecResult flow = execBlock(*info.constructor->body);
+    m_ctx->popFrame();
+    if (flow.kind == FlowKind::Return)
+        error(QStringLiteral("E0577"), QStringLiteral("constructor cannot return a value"), span);
+    return m_ctx->hasError() ? AbelValue::makeUnknown() : self->read();
+}
+
+AbelValue Interpreter::evalStructMethod(const FieldAccessExprNode& callee,
+                                        const std::vector<std::unique_ptr<ExprNode>>& args,
+                                        const SourceSpan& span)
+{
+    AbelLocation* self = evalLocation(*callee.base);
+    if (!self)
+        return AbelValue::makeUnknown();
+    AbelValue receiver = self->read();
+    if (receiver.type().kind != TypeKind::Struct) {
+        error(QStringLiteral("E0578"), QStringLiteral("method receiver is not struct"), callee.span);
+        return AbelValue::makeUnknown();
+    }
+    const StructRuntimeInfo info = m_structs.value(receiver.type().spelling);
+    const FunctionDeclNode* method = info.methods.value(callee.field, nullptr);
+    if (!method) {
+        error(QStringLiteral("E0579"), QStringLiteral("unknown method '%1'").arg(callee.field), callee.span);
+        return AbelValue::makeUnknown();
+    }
+    return callStructFunction(*method, self, args, span).value;
 }
 
 AbelValue Interpreter::evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args)

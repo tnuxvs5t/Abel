@@ -3,6 +3,7 @@
 #include "abelcore/type.h"
 
 #include <QChar>
+#include <QHash>
 #include <QString>
 
 #include <memory>
@@ -14,12 +15,14 @@ namespace abel {
 struct AbelLocation;
 struct AbelVectorValue;
 struct AbelAnyValue;
+struct AbelStructValue;
 
 class AbelValue {
 public:
     using VectorPtr = std::shared_ptr<AbelVectorValue>;
     using AnyPtr = std::shared_ptr<AbelAnyValue>;
-    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*, VectorPtr, AnyPtr>;
+    using StructPtr = std::shared_ptr<AbelStructValue>;
+    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*, VectorPtr, AnyPtr, StructPtr>;
 
     AbelValue() = default;
 
@@ -34,6 +37,7 @@ public:
     static AbelValue makeNullptr();
     static AbelValue makeVector(const AbelType& elementType, std::vector<AbelValue> elements);
     static AbelValue makeAny(const AbelValue& value);
+    static AbelValue makeStruct(const QString& typeName, const std::vector<QString>& fieldOrder, QHash<QString, AbelValue> fields);
     static AbelValue makeUnknown();
 
     const AbelType& type() const { return m_type; }
@@ -47,6 +51,7 @@ public:
     AbelLocation* asPointer() const;
     VectorPtr asVector() const;
     AnyPtr asAny() const;
+    StructPtr asStruct() const;
 
     QString debugString() const;
 
@@ -64,6 +69,12 @@ struct AbelVectorValue {
 
 struct AbelAnyValue {
     AbelValue value;
+};
+
+struct AbelStructValue {
+    QString typeName;
+    std::vector<QString> fieldOrder;
+    QHash<QString, AbelValue> fields;
 };
 
 AbelValue defaultValueForType(const AbelType& type);

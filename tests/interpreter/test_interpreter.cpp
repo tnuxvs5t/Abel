@@ -382,6 +382,61 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 36);
     }
+
+    void structCounterWorks()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Counter {
+                int value;
+
+                init(int start) {
+                    value = start;
+                }
+
+                fn void inc() {
+                    value = value + 1;
+                }
+
+                const fn int get() {
+                    return value;
+                }
+            }
+
+            fn int main() {
+                Counter c = Counter(0);
+                c.inc();
+                c.inc();
+                return c.get();
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 2);
+    }
+
+    void structAssignmentCopies()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Pair {
+                int x;
+                int y;
+            }
+
+            fn int main() {
+                Pair a = Pair(1, 2);
+                Pair b = a;
+                b.x = 10;
+                return a.x + b.x + b.y;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 13);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

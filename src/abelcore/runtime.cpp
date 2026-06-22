@@ -6,6 +6,8 @@ AbelValue AbelLocation::read() const
 {
     if (vector)
         return vector->elements[index];
+    if (object)
+        return object->fields.value(fieldName, AbelValue::makeUnknown());
     return storage ? storage->value : AbelValue::makeUnknown();
 }
 
@@ -13,6 +15,8 @@ void AbelLocation::write(const AbelValue& value)
 {
     if (vector)
         vector->elements[index] = value;
+    else if (object)
+        object->fields.insert(fieldName, value);
     else if (storage)
         storage->value = value;
 }
@@ -78,6 +82,16 @@ AbelLocation* AbelRuntimeContext::createVectorElementLocation(AbelVectorValue* v
     auto location = std::make_unique<AbelLocation>();
     location->vector = vector;
     location->index = index;
+    AbelLocation* loc = location.get();
+    m_locations.push_back(std::move(location));
+    return loc;
+}
+
+AbelLocation* AbelRuntimeContext::createStructFieldLocation(AbelStructValue* object, const QString& fieldName)
+{
+    auto location = std::make_unique<AbelLocation>();
+    location->object = object;
+    location->fieldName = fieldName;
     AbelLocation* loc = location.get();
     m_locations.push_back(std::move(location));
     return loc;

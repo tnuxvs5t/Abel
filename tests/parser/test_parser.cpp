@@ -87,6 +87,43 @@ private slots:
         QVERIFY(parsed.diagnostics.isEmpty());
         QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
     }
+
+    void parsesStructCounter()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Counter {
+                int value;
+
+                init(int start) {
+                    value = start;
+                }
+
+                fn void inc() {
+                    value = value + 1;
+                }
+
+                const fn int get() {
+                    return value;
+                }
+            }
+
+            fn int main() {
+                Counter c = Counter(0);
+                c.inc();
+                return c.get();
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(2));
+    }
 };
 
 QTEST_MAIN(AbelParserTests)

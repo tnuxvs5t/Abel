@@ -34,15 +34,33 @@ private:
         bool isConst = false;
     };
 
+    struct FieldInfo {
+        AbelType type;
+        bool isConst = false;
+    };
+
+    struct StructInfo {
+        const StructDeclNode* decl = nullptr;
+        QHash<QString, FieldInfo> fields;
+        QHash<QString, const FunctionDeclNode*> methods;
+        const ConstructorDeclNode* constructor = nullptr;
+    };
+
     QHash<QString, const FunctionDeclNode*> m_functions;
+    QHash<QString, StructInfo> m_structs;
     QList<QHash<QString, VariableInfo>> m_scopes;
     QList<Diagnostic> m_diagnostics;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
     AbelType m_currentReturnType = makeType(TypeKind::Void);
+    QString m_currentStruct;
     int m_loopDepth = 0;
 
+    void collectStructs(const ProgramNode& program);
     void collectFunctions(const ProgramNode& program);
     void checkFunction(const FunctionDeclNode& fn);
+    void checkStruct(const StructDeclNode& decl);
+    void checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor);
+    void checkMethod(const StructDeclNode& owner, const FunctionDeclNode& method);
     void checkBlock(const BlockStmtNode& block, bool pushScope);
     void checkStmt(const StmtNode& stmt);
     void checkVarDecl(const VarDeclStmtNode& stmt);
@@ -55,6 +73,7 @@ private:
     ExprType checkBinary(const BinaryExprNode& expr);
     ExprType checkAssignment(const AssignExprNode& expr);
     ExprType checkCall(const CallExprNode& expr);
+    ExprType checkFieldAccess(const FieldAccessExprNode& expr);
     ExprType checkBuiltinMethodCall(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     ExprType checkIndex(const IndexExprNode& expr);
     ExprType checkInitListAgainst(const InitListExprNode& init, const AbelType& target);

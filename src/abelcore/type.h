@@ -21,6 +21,7 @@ enum class TypeKind {
     Reference,
     Nullptr,
     Vector,
+    Struct,
     Unknown,
 };
 
@@ -44,6 +45,7 @@ AbelType makeType(TypeKind kind, const QString& spelling = QString());
 AbelType makePointerType(const AbelType& pointee);
 AbelType makeReferenceType(const AbelType& referred);
 AbelType makeVectorType(const AbelType& element);
+AbelType makeStructType(const QString& name);
 AbelType typeFromName(const QString& name);
 AbelType typeFromAst(const TypeNode& node);
 bool canAssignValue(const AbelType& target, const AbelType& source);
