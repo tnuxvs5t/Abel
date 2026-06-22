@@ -141,6 +141,28 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsSourceLocationBuiltinsWithoutLambdaCapture()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                func int() f = lambda [] int() {
+                    int line = __LINE__;
+                    int column = __COLUMN__;
+                    str file = __FILE__;
+                    if (file == "<test>") {
+                        return line + column;
+                    }
+                    return 0;
+                };
+                return f();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void acceptsUserToStrForBuildString()
     {
         const QString src = QStringLiteral(R"ABEL(

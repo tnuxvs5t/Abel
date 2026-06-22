@@ -6,6 +6,24 @@
 
 namespace abel {
 
+namespace {
+
+bool isSourceLocationBuiltinName(const QString& name)
+{
+    return name == QStringLiteral("__FILE__")
+        || name == QStringLiteral("__LINE__")
+        || name == QStringLiteral("__COLUMN__");
+}
+
+AbelType sourceLocationBuiltinType(const QString& name)
+{
+    if (name == QStringLiteral("__FILE__"))
+        return makeType(TypeKind::Str);
+    return makeType(TypeKind::I32);
+}
+
+} // namespace
+
 TypeCheckResult TypeChecker::check(const ProgramNode& program)
 {
     m_functions.clear();
@@ -422,6 +440,9 @@ ExprType TypeChecker::checkExpr(const ExprNode& expr)
 
 ExprType TypeChecker::checkName(const NameExprNode& expr)
 {
+    if (isSourceLocationBuiltinName(expr.name))
+        return {sourceLocationBuiltinType(expr.name), ValueCategory::PRValue, false};
+
     const VariableInfo* var = lookupVariable(expr.name);
     if (!var)
         return errorExpr(expr.span, QStringLiteral("unknown variable '%1'").arg(expr.name));

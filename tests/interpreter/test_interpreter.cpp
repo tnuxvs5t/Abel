@@ -511,6 +511,25 @@ private slots:
         QCOMPARE(result.exitCode, 110);
     }
 
+    void sourceLocationBuiltinsReportCallSite()
+    {
+        const QString src = QStringLiteral(
+            "fn int main() {\n"
+            "    int line = __LINE__;\n"
+            "    int column = __COLUMN__;\n"
+            "    str file = __FILE__;\n"
+            "    if (file == \"<test>\" && line == 2 && column == 18) {\n"
+            "        return line + column;\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 20);
+    }
+
     void buildStringUsesUserToStr()
     {
         const QString src = QStringLiteral(R"ABEL(

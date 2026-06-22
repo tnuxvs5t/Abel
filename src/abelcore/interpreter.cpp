@@ -33,6 +33,22 @@ QString backendFrameSymbol(const QString& backendId, const QString& symbol)
     return QStringLiteral("backend %1::%2").arg(backendId, symbol);
 }
 
+bool isSourceLocationBuiltinName(const QString& name)
+{
+    return name == QStringLiteral("__FILE__")
+        || name == QStringLiteral("__LINE__")
+        || name == QStringLiteral("__COLUMN__");
+}
+
+AbelValue evalSourceLocationBuiltin(const QString& name, const SourceSpan& span)
+{
+    if (name == QStringLiteral("__FILE__"))
+        return AbelValue::makeString(span.file);
+    if (name == QStringLiteral("__LINE__"))
+        return AbelValue::makeInt(span.startLine, TypeKind::I32);
+    return AbelValue::makeInt(span.startColumn, TypeKind::I32);
+}
+
 } // namespace
 
 InterpreterResult Interpreter::run(const ProgramNode& program)
@@ -925,6 +941,9 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
         }
     }
     if (auto* e = dynamic_cast<const NameExprNode*>(&expr)) {
+        if (isSourceLocationBuiltinName(e->name))
+            return evalSourceLocationBuiltin(e->name, e->span);
+
         const VariableSlot* slot = m_ctx->lookupVariable(e->name);
         if (!slot) {
             error(QStringLiteral("E0513"), QStringLiteral("unknown variable '%1'").arg(e->name), e->span);
