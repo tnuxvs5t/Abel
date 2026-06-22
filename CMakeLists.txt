@@ -34,6 +34,8 @@ add_library(abelcore SHARED
     src/abelcore/value.cpp
     src/abelcore/runtime.h
     src/abelcore/runtime.cpp
+    src/abelcore/builtin_registry.h
+    src/abelcore/builtin_registry.cpp
     src/abelcore/interpreter.h
     src/abelcore/interpreter.cpp
 )
@@ -103,3 +105,16 @@ target_link_libraries(abel_interpreter_tests
 )
 
 add_test(NAME abel_interpreter_tests COMMAND abel_interpreter_tests)
+
+add_executable(abel_builtin_tests
+    tests/builtin/test_builtin_registry.cpp
+)
+
+target_link_libraries(abel_builtin_tests
+    PRIVATE
+        abelcore
+        Qt6::Core
+        Qt6::Test
+)
+
+add_test(NAME abel_builtin_tests COMMAND abel_builtin_tests)

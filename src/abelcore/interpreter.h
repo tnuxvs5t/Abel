@@ -1,6 +1,7 @@
 #pragma once
 
 #include "abelcore/ast.h"
+#include "abelcore/builtin_registry.h"
 #include "abelcore/runtime.h"
 
 #include <QHash>
@@ -19,6 +20,7 @@ public:
 
 private:
     QHash<QString, const FunctionDeclNode*> m_functions;
+    BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
     AbelRuntimeContext* m_ctx = nullptr;
 
     bool collectFunctions(const ProgramNode& program, AbelRuntimeContext& ctx);
@@ -32,7 +34,7 @@ private:
     AbelValue evalBinary(const BinaryExprNode& expr);
     AbelValue evalUnary(const UnaryExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);
-    AbelValue evalVectorMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
+    AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     AbelValue evalAssignment(const AssignExprNode& expr);
 
     bool requireBool(const AbelValue& value, const SourceSpan& span, bool& out);

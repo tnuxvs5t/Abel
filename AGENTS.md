@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 5：vector<T> 值类型与元素 lvalue 最小闭环已建立，进入 BuiltinRegistry / typechecker 闭环。
+Stage 6：BuiltinRegistry 最小闭环已建立，进入 any/variadic 与 std builtin 闭环。
 ```
 
 ### 已完成
@@ -1981,6 +1981,10 @@ Stage 5：vector<T> 值类型与元素 lvalue 最小闭环已建立，进入 Bui
 33. 实现 vector 方法最小分发：len/empty/push/pop/front/back。
 34. 实现 vector<T>& 参数按调用方 lvalue 绑定，函数内修改原 vector。
 35. 增加 vector interpreter tests：索引写回、方法、赋值复制、引用参数写回。
+36. 实现 BuiltinRegistry 最小接口：function/method 描述、arity 检查、运行时回调、默认注册入口。
+37. 将 vector.len/empty/push/pop/front/back 从 Interpreter 硬编码迁入 BuiltinRegistry。
+38. Interpreter 只负责解析 receiver/args 并委托 BuiltinRegistry 调用 method/function。
+39. 增加 builtin registry QTest，验证默认 vector methods 与自定义 builtin function 注册/调用。
 ```
 
 ### 最近验证
@@ -2029,6 +2033,13 @@ Stage 5：vector<T> 值类型与元素 lvalue 最小闭环已建立，进入 Bui
 - Stage 5 CLI run smoke 通过：
   /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
   输出 exit=0。
+- Stage 6 构建通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
+- Stage 6 在 4GB 虚拟内存上限下测试通过：
+  /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+- Stage 6 CLI run smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
+  输出 exit=0。
 ```
 
 ### 未完成
@@ -2037,20 +2048,20 @@ Stage 5：vector<T> 值类型与元素 lvalue 最小闭环已建立，进入 Bui
 1. 尚无独立 typechecker；Stage 3 仅在解释器内做最小运行时类型检查。
 2. 尚无 backend plugin 示例。
 3. parser 仍是最小闭环，尚未覆盖 struct/lambda/for/range-for。
-4. interpreter 尚未实现 struct/lambda/backend/any/BuiltinRegistry。
+4. interpreter 尚未实现 struct/lambda/backend/any/variadic。
 5. const 指针、const 引用的完整静态语义尚未实现；当前只保留基础 const 变量写保护。
-6. vector 方法仍是 interpreter 内硬编码，尚未迁移到 BuiltinRegistry。
+6. BuiltinRegistry 尚未接入 build_string/print/println/to_str/scan，当前只迁移 vector methods 并预留 function 接口。
 ```
 
 ### 下一步
 
 ```text
-Stage 6：
-1. 设计 BuiltinRegistry 最小接口，先覆盖 vector methods 与普通 builtin function/method 描述。
-2. 将 vector.len/empty/push/pop/front/back 的查找与运行时回调迁入 registry。
-3. 为 build_string/print/println/any... 预留签名结构，但不要一口气实现全部。
-4. 继续为 Stage 3/4/5 已支持语义拆出独立 typechecker。
-5. 增加 registry 单测，确保新增内建能力不散落在 parser/interpreter。
+Stage 7：
+1. 实现 any 的值容器语义，至少支持基础值与 vector 的显式装箱。
+2. 实现 parser 对 any... 参数的最小支持与 function signature 记录。
+3. 在 BuiltinRegistry 中实现 to_str/build_string/print/println 最小闭环。
+4. 让 `build_string("x=", x)` 与 `println(...)` 通过 interpreter 调用 builtin function。
+5. 增加 variadic/builtin interpreter tests。
 6. build + ctest + commit。
 ```
 
@@ -2073,7 +2084,8 @@ ca49a01 docs: replace Abel design with agent manual
 1073d7d parser: add Abel lexer and parser baseline
 de2fa03 interpreter: add Stage 3 tree runner
 8805f8c runtime: add pointer and reference locations
-待本次 Stage 5 vector 提交后追加 commit hash。
+6e4a3b3 runtime: add vector value semantics
+待本次 Stage 6 BuiltinRegistry 提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。
