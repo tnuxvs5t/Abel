@@ -18,6 +18,7 @@ struct InterpreterResult {
 class Interpreter {
 public:
     InterpreterResult run(const ProgramNode& program);
+    InterpreterResult run(const ProgramNode& program, BackendRegistry* backendRegistry);
 
 private:
     struct StructRuntimeInfo {
@@ -35,6 +36,7 @@ private:
     QHash<QString, StructRuntimeInfo> m_structs;
     QHash<QString, BackendRuntimeInfo> m_backends;
     BackendRegistry m_backendRegistry;
+    BackendRegistry* m_activeBackendRegistry = nullptr;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
     AbelRuntimeContext* m_ctx = nullptr;
 

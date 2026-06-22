@@ -1,7 +1,7 @@
 #pragma once
 
 #include "abelcore/diagnostic.h"
-#include "abelcore/value.h"
+#include "abelcore/runtime.h"
 
 #include <QHash>
 #include <QString>
@@ -30,7 +30,7 @@ struct BackendCall {
 
 class BackendRegistry {
 public:
-    using RuntimeCallback = std::function<AbelValue(const BackendCall&)>;
+    using RuntimeCallback = std::function<AbelValue(const BackendCall&, AbelRuntimeContext&)>;
 
     bool registerFunction(BackendFunctionDesc desc, Diagnostic* diagnostic = nullptr);
     bool bindFunction(const QString& backendId, const QString& symbol, RuntimeCallback runtime, Diagnostic* diagnostic = nullptr);
@@ -38,7 +38,7 @@ public:
     bool hasFunction(const QString& backendId, const QString& symbol) const;
     const BackendFunctionDesc* findFunction(const QString& backendId, const QString& symbol) const;
 
-    AbelValue call(const BackendCall& call, QList<Diagnostic>& diagnostics) const;
+    AbelValue call(const BackendCall& call, QList<Diagnostic>& diagnostics, AbelRuntimeContext* ctx = nullptr) const;
 
 private:
     struct Entry {

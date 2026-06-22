@@ -1940,7 +1940,7 @@ Abel_Language_Standard_v1_1_zh.md
 ### 当前阶段
 
 ```text
-Stage 13b：BackendRegistry 与 ResourceNode JSON 骨架已完成，进入 Qt backend plugin interface/base/binder/example plugin 动态链接闭环。
+Stage 13c：Qt backend plugin interface/base/binder/example plugin 与 ResourceNode 动态加载闭环已完成，进入 v0 剩余差距审计与收口。
 ```
 
 ### 已完成
@@ -2024,6 +2024,15 @@ Stage 13b：BackendRegistry 与 ResourceNode JSON 骨架已完成，进入 Qt ba
 76. CLI 增加 `abel resources check <resource.json>`，合法资源输出 ok，非法资源输出 E0612 诊断。
 77. 新增 `plugins/examples/math_backend/resource.json` 示例资源节点。
 78. 新增 backend/resource QTest，覆盖 registry 注册/绑定/诊断、非法外部 symbol、ResourceNode 合法/非法 JSON。
+79. 增加 `backend_interface.h`：`IAbelBackend`、`AbelBackendFunction`、IID `org.abel.IAbelBackend/1.0` 与 `Q_DECLARE_INTERFACE`。
+80. 增加 `backend_plugin_base.h` / `backend_binder.h` 最小开发者友好层，支持低样板 `bind("Backend.symbol", lambda)`，当前覆盖 int/bool/i64/double/str/AbelValue/vector<int>& 的基础映射。
+81. 建立 `plugins/examples/math_backend` Qt plugin 编译目标，链接同一个 `libabelcore.so`，输出 `build/plugins/libmath_backend.so`。
+82. `MathBackend` 示例插件导出 `MathSystem.fast_add(int,int)` 与 `MathSystem.sort(vector<int>&)`。
+83. ResourceNode loader 接入 `QPluginLoader`，校验 IID、backendId、symbols、签名，并把 plugin 函数绑定到 `BackendRegistry`。
+84. `BackendRegistry` runtime callback 增加 `AbelRuntimeContext&`，便于 plugin/binder 报告结构化运行时诊断。
+85. Interpreter 增加外部 `BackendRegistry` 注入入口；若已有 plugin 绑定，收集 backend block 时校验 Abel 声明与绑定签名一致，不再重复注册破坏绑定。
+86. ResourceNode loader 调用 plugin 时保留引用参数的 `AbelLocation` 当前值，覆盖 `vector<int>&` 从 Abel 调到 Qt plugin 后写回。
+87. backend/resource QTest 增加动态加载闭环：加载 math backend、registry 调用 fast_add、registry 调用 sort 写回 vector、Interpreter 注入 registry 后执行 `MathSystem::fast_add` 和 `MathSystem::sort`。
 ```
 
 ### 最近验证
@@ -2162,30 +2171,43 @@ Stage 13b：BackendRegistry 与 ResourceNode JSON 骨架已完成，进入 Qt ba
 - Stage 13b ResourceNode CLI smoke 通过：
   /bin/bash -lc 'ulimit -v 4194304; build/abel resources check plugins/examples/math_backend/resource.json'
   输出 ok。
+- Stage 13c diff whitespace 检查通过：
+  git diff --check
+- Stage 13c 构建通过：
+  /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
+- Stage 13c 在 4GB 虚拟内存上限下测试通过：
+  /bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+  输出 6/6 tests passed。
+- Stage 13c CLI check smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel check examples/smoke/hello.abel'
+  输出 ok。
+- Stage 13c CLI run smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel run examples/smoke/hello.abel; printf "exit=%s\n" "$?"'
+  输出 exit=0。
+- Stage 13c ResourceNode CLI smoke 通过：
+  /bin/bash -lc 'ulimit -v 4194304; build/abel resources check plugins/examples/math_backend/resource.json'
+  输出 ok。
 ```
 
 ### 未完成
 
 ```text
-1. BackendRegistry 与 ResourceNode JSON 校验已建立，但尚未实现 QPluginLoader 动态加载与 IAbelBackend QObject 绑定。
-2. BackendRegistry 目前只支持 descriptor + runtime callback；尚未持有/调用 Qt plugin 实例。
-3. 尚无 Qt backend plugin interface/base/binder/example plugin 编译目标。
-4. const 指针、const 引用的完整静态语义尚未实现；当前只保留基础 const 变量写保护。
-5. BuiltinRegistry 尚未接入 scan；`to_str` 尚未支持用户自定义重载，只覆盖内建 stringify。
-6. struct 当前是最小闭环：尚未覆盖 private/public、复杂 const receiver、引用返回生命周期、指针字段高级场景。
+1. CLI 尚未提供 `abel run` 直接加载 ResourceNode 的用户入口；当前动态 backend 绑定由 core API/QTest 验证。
+2. Backend binder 仍是最小友好层，只覆盖 v0 示例所需基础类型与 `vector<int>&`，尚未覆盖完整类型矩阵。
+3. const 指针、const 引用的完整静态语义尚未实现；当前只保留基础 const 变量写保护。
+4. BuiltinRegistry 尚未接入 scan；`to_str` 尚未支持用户自定义重载，只覆盖内建 stringify。
+5. struct 当前是最小闭环：尚未覆盖 private/public、复杂 const receiver、引用返回生命周期、指针字段高级场景。
+6. 需要对 AGENTS.md 的 v0 清单做一次系统审计，确认哪些缺口必须补、哪些可作为 v0 明确延期。
 ```
 
 ### 下一步
 
 ```text
-Stage 13c：
-1. 增加 `backend_interface.h`：IAbelBackend、AbelBackendFunction、IID `org.abel.IAbelBackend/1.0`、Q_DECLARE_INTERFACE。
-2. 增加 `backend_plugin_base.h` / `backend_binder.h` 最小开发者友好层，先覆盖 int/bool/double/str/vector<int>&/AbelValue 的绑定路径。
-3. 建立 `plugins/examples/math_backend` Qt plugin 编译目标，链接同一个 `libabelcore.so`。
-4. ResourceNode loader 接入 QPluginLoader：校验 IID/backendId/symbol，并把 plugin 函数绑定到 BackendRegistry。
-5. 增加 backend 动态加载测试或 CLI smoke，使 `MathSystem::fast_add(1, 2)` 在绑定资源后返回 3。
-6. 随后补 scan 与用户自定义 to_str 的范围决策。
-7. 保持每个小闭环 build + 4GB ctest + CLI smoke + commit。
+Stage 14：
+1. 按 AGENTS.md 对 v0 做剩余差距审计，列出 must-fix / can-defer，并避免继续无边界扩张。
+2. 优先检查 `scan`、用户自定义 `to_str(T)`、`str_to_chars/chars_to_str`、`|>` pipe、const 引用/指针、repeat 负数语义、CLI resource 绑定入口。
+3. 对每个 must-fix 缺口形成小闭环：实现 + QTest/CLI smoke + 4GB ctest + commit。
+4. 若某项决定延期，必须在 AGENTS.md 的未完成/风险区写明 v0 边界，而不是静默遗漏。
 ```
 
 ### 风险与未决
@@ -2216,7 +2238,8 @@ be0424a builtins: add any variadic string functions
 dab7040 struct: add fields constructors and methods
 dee8b16 lambda: add function values and captures
 2cde7e4 backend: typecheck static calls
-待本次 Stage 13b backend-registry/resource-node 提交后追加 commit hash。
+78de6ff backend: add registry and resource nodes
+待本次 Stage 13c backend-plugin-loader 提交后追加 commit hash。
 
 说明：
 - 本区记录已经完成且可回滚的实质提交。

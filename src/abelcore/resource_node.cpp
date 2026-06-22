@@ -1,8 +1,13 @@
 #include "abelcore/resource_node.h"
 
+#include "abelcore/backend_interface.h"
+
+#include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
+#include <QPluginLoader>
 
 namespace abel {
 
@@ -20,6 +25,15 @@ void addError(QList<Diagnostic>& diagnostics, const QString& message, const Sour
     diagnostics.push_back(d);
 }
 
+void addLoadError(QList<Diagnostic>& diagnostics, const QString& message)
+{
+    Diagnostic d;
+    d.severity = Severity::Error;
+    d.code = QStringLiteral("E0613");
+    d.message = message;
+    diagnostics.push_back(d);
+}
+
 QString requiredString(const QJsonObject& object, const QString& key, QList<Diagnostic>& diagnostics, const SourceSpan& span)
 {
     const QJsonValue value = object.value(key);
@@ -28,6 +42,21 @@ QString requiredString(const QJsonObject& object, const QString& key, QList<Diag
         return {};
     }
     return value.toString();
+}
+
+QString resolvedPluginPath(const ResourceNode& node, const QString& baseDir)
+{
+    QFileInfo info(node.path);
+    if (info.isRelative() && !baseDir.isEmpty())
+        info = QFileInfo(QDir(baseDir).absoluteFilePath(node.path));
+    return info.absoluteFilePath();
+}
+
+bool sameSignature(const BackendFunctionDesc& expected, const AbelBackendFunction& actual)
+{
+    return expected.returnType == actual.returnType
+        && expected.params == actual.params
+        && expected.variadic == actual.variadic;
 }
 
 } // namespace
@@ -129,6 +158,127 @@ ResourceNodeParseResult resourceNodeFromJsonText(const QString& text, const QStr
         return result;
     }
     return resourceNodeFromJson(doc.object(), span);
+}
+
+ResourceNodeLoadResult::ResourceNodeLoadResult() = default;
+ResourceNodeLoadResult::~ResourceNodeLoadResult() = default;
+ResourceNodeLoadResult::ResourceNodeLoadResult(ResourceNodeLoadResult&&) noexcept = default;
+ResourceNodeLoadResult& ResourceNodeLoadResult::operator=(ResourceNodeLoadResult&&) noexcept = default;
+
+ResourceNodeLoadResult loadBackendResourceNode(const ResourceNode& node,
+                                               BackendRegistry& registry,
+                                               const QString& baseDir)
+{
+    ResourceNodeLoadResult result;
+    result.node = node;
+    result.node.state = ResourceNodeState::Failed;
+
+    if (node.kind != QStringLiteral("qt_plugin")) {
+        addLoadError(result.diagnostics, QStringLiteral("resource node kind must be 'qt_plugin'"));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+    if (node.iid != QString::fromLatin1(kBackendIid)) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("resource node iid must be '%1'").arg(QString::fromLatin1(kBackendIid)));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+
+    const QString pluginPath = resolvedPluginPath(node, baseDir);
+    auto loader = std::make_shared<QPluginLoader>(pluginPath);
+    const QString metadataIid = loader->metaData().value(QStringLiteral("IID")).toString();
+    if (!metadataIid.isEmpty() && metadataIid != node.iid) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("plugin IID '%1' does not match resource IID '%2'").arg(metadataIid, node.iid));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+
+    QObject* object = loader->instance();
+    if (!object) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("failed to load plugin '%1': %2").arg(pluginPath, loader->errorString()));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+
+    auto* backend = qobject_cast<IAbelBackend*>(object);
+    if (!backend) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("plugin '%1' does not implement IAbelBackend").arg(pluginPath));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+    if (backend->backendId() != node.backendId) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("plugin backendId '%1' does not match resource backendId '%2'")
+                         .arg(backend->backendId(), node.backendId));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+
+    QHash<QString, AbelBackendFunction> functions;
+    for (const auto& function : backend->functions())
+        functions.insert(function.symbol, function);
+
+    for (const QString& symbol : node.symbols) {
+        const auto found = functions.constFind(symbol);
+        if (found == functions.constEnd()) {
+            addLoadError(result.diagnostics,
+                         QStringLiteral("plugin backend '%1' does not export symbol '%2'").arg(node.backendId, symbol));
+            continue;
+        }
+
+        const BackendFunctionDesc pluginDesc{
+            node.backendId,
+            symbol,
+            found->returnType,
+            found->params,
+            found->variadic,
+        };
+        if (const BackendFunctionDesc* existing = registry.findFunction(node.backendId, symbol)) {
+            if (!sameSignature(*existing, *found)) {
+                addLoadError(result.diagnostics,
+                             QStringLiteral("plugin symbol '%1' signature does not match registry declaration").arg(symbol));
+                continue;
+            }
+        } else {
+            Diagnostic diagnostic;
+            if (!registry.registerFunction(pluginDesc, &diagnostic)) {
+                result.diagnostics.push_back(diagnostic);
+                continue;
+            }
+        }
+
+        Diagnostic diagnostic;
+        if (!registry.bindFunction(node.backendId,
+                                   symbol,
+                                   [backend, loader, symbol](const BackendCall& call, AbelRuntimeContext& ctx) {
+                                       QList<AbelValue> args;
+                                       args.reserve(static_cast<qsizetype>(call.args.size()));
+                                       for (size_t i = 0; i < call.args.size(); ++i) {
+                                           if (i < call.argLocations.size() && call.argLocations[i])
+                                               args.push_back(call.argLocations[i]->read());
+                                           else
+                                               args.push_back(call.args[i]);
+                                       }
+                                       return backend->call(symbol, args, ctx);
+                                   },
+                                   &diagnostic)) {
+            result.diagnostics.push_back(diagnostic);
+        }
+    }
+
+    if (!result.diagnostics.isEmpty()) {
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+
+    result.node.state = ResourceNodeState::Loaded;
+    result.node.lastError.clear();
+    result.loader = std::move(loader);
+    return result;
 }
 
 } // namespace abel

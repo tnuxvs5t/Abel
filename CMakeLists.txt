@@ -34,6 +34,9 @@ add_library(abelcore SHARED
     src/abelcore/value.cpp
     src/abelcore/runtime.h
     src/abelcore/runtime.cpp
+    src/abelcore/backend_interface.h
+    src/abelcore/backend_binder.h
+    src/abelcore/backend_plugin_base.h
     src/abelcore/backend_registry.h
     src/abelcore/backend_registry.cpp
     src/abelcore/resource_node.h
@@ -69,6 +72,21 @@ target_link_libraries(abel
     PRIVATE
         abelcore
         Qt6::Core
+)
+
+add_library(math_backend MODULE
+    plugins/examples/math_backend/math_backend.cpp
+)
+
+target_link_libraries(math_backend
+    PRIVATE
+        abelcore
+        Qt6::Core
+)
+
+set_target_properties(math_backend PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+    OUTPUT_NAME math_backend
 )
 
 enable_testing()
@@ -148,5 +166,7 @@ target_link_libraries(abel_backend_resource_tests
         Qt6::Core
         Qt6::Test
 )
+
+add_dependencies(abel_backend_resource_tests math_backend)
 
 add_test(NAME abel_backend_resource_tests COMMAND abel_backend_resource_tests)

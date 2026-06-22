@@ -1,4 +1,8 @@
+#include "abelcore/backend_interface.h"
 #include "abelcore/backend_registry.h"
+#include "abelcore/interpreter.h"
+#include "abelcore/lexer.h"
+#include "abelcore/parser.h"
 #include "abelcore/resource_node.h"
 
 #include <QtTest/QtTest>
@@ -85,7 +89,7 @@ private slots:
         size_t seenArgCount = 0;
         QVERIFY(registry.bindFunction(QStringLiteral("MathSystem"),
                                       QStringLiteral("fast_add"),
-                                      [&called, &seenBackend, &seenSymbol, &seenArgCount](const abel::BackendCall& call) {
+                                      [&called, &seenBackend, &seenSymbol, &seenArgCount](const abel::BackendCall& call, abel::AbelRuntimeContext&) {
                                           called = true;
                                           seenBackend = call.backendId;
                                           seenSymbol = call.symbol;
@@ -163,6 +167,107 @@ private slots:
         })");
         auto parsed = abel::resourceNodeFromJsonText(text, QStringLiteral("<test>"));
         QVERIFY(!parsed.diagnostics.isEmpty());
+    }
+
+    void loadsMathBackendPluginAndCallsRegistry()
+    {
+        abel::ResourceNode node;
+        node.id = QStringLiteral("math.backend");
+        node.kind = QStringLiteral("qt_plugin");
+        node.path = QStringLiteral("plugins/libmath_backend.so");
+        node.iid = QStringLiteral(IAbelBackend_iid);
+        node.backendId = QStringLiteral("MathSystem");
+        node.qtVersion = QStringLiteral("6.11.1");
+        node.kit = QStringLiteral("gcc_64");
+        node.symbols = {QStringLiteral("MathSystem.fast_add"), QStringLiteral("MathSystem.sort")};
+
+        abel::BackendRegistry registry;
+        auto loaded = abel::loadBackendResourceNode(node, registry, QCoreApplication::applicationDirPath());
+        for (const auto& d : loaded.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(loaded.ok());
+        QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("fast_add")));
+        QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("sort")));
+
+        QList<abel::Diagnostic> diagnostics;
+        auto sum = registry.call({
+            QStringLiteral("MathSystem"),
+            QStringLiteral("fast_add"),
+            {abel::AbelValue::makeInt(1), abel::AbelValue::makeInt(2)},
+            {},
+        }, diagnostics);
+        for (const auto& d : diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(diagnostics.isEmpty());
+        QCOMPARE(sum.asInt(), 3);
+
+        diagnostics.clear();
+        auto xs = abel::AbelValue::makeVector(abel::makeType(abel::TypeKind::I32),
+                                              {abel::AbelValue::makeInt(3),
+                                               abel::AbelValue::makeInt(1),
+                                               abel::AbelValue::makeInt(2)});
+        auto sorted = registry.call({
+            QStringLiteral("MathSystem"),
+            QStringLiteral("sort"),
+            {xs},
+            {},
+        }, diagnostics);
+        for (const auto& d : diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(diagnostics.isEmpty());
+        QCOMPARE(sorted.type().kind, abel::TypeKind::Void);
+        QCOMPARE(xs.asVector()->elements[0].asInt(), 1);
+        QCOMPARE(xs.asVector()->elements[1].asInt(), 2);
+        QCOMPARE(xs.asVector()->elements[2].asInt(), 3);
+    }
+
+    void loadedMathBackendRunsThroughInterpreter()
+    {
+        abel::ResourceNode node;
+        node.id = QStringLiteral("math.backend");
+        node.kind = QStringLiteral("qt_plugin");
+        node.path = QStringLiteral("plugins/libmath_backend.so");
+        node.iid = QStringLiteral(IAbelBackend_iid);
+        node.backendId = QStringLiteral("MathSystem");
+        node.qtVersion = QStringLiteral("6.11.1");
+        node.kit = QStringLiteral("gcc_64");
+        node.symbols = {QStringLiteral("MathSystem.fast_add"), QStringLiteral("MathSystem.sort")};
+
+        abel::BackendRegistry registry;
+        auto loaded = abel::loadBackendResourceNode(node, registry, QCoreApplication::applicationDirPath());
+        for (const auto& d : loaded.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(loaded.ok());
+
+        const QString src = QStringLiteral(R"(
+            backend MathSystem {
+                fn int fast_add(int a, int b);
+                fn void sort(vector<int>& xs);
+            }
+
+            fn int main() {
+                vector<int> xs = {3, 1, 2};
+                MathSystem::sort(xs);
+                return MathSystem::fast_add(xs[0], xs[2]);
+            }
+        )");
+
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<backend-test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+
+        abel::Interpreter interpreter;
+        auto result = interpreter.run(*parsed.program, &registry);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 4);
     }
 };
 

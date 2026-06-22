@@ -8,30 +8,39 @@ namespace abel {
 
 InterpreterResult Interpreter::run(const ProgramNode& program)
 {
+    return run(program, nullptr);
+}
+
+InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* backendRegistry)
+{
     AbelRuntimeContext ctx;
     m_ctx = &ctx;
     m_functions.clear();
     m_structs.clear();
     m_backends.clear();
     m_backendRegistry = BackendRegistry();
+    m_activeBackendRegistry = backendRegistry ? backendRegistry : &m_backendRegistry;
 
     InterpreterResult result;
     if (!collectStructs(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
         m_ctx = nullptr;
+        m_activeBackendRegistry = nullptr;
         return result;
     }
     if (!collectFunctions(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
         m_ctx = nullptr;
+        m_activeBackendRegistry = nullptr;
         return result;
     }
     if (!collectBackends(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
         m_ctx = nullptr;
+        m_activeBackendRegistry = nullptr;
         return result;
     }
 
@@ -41,6 +50,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program)
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
         m_ctx = nullptr;
+        m_activeBackendRegistry = nullptr;
         return result;
     }
 
@@ -50,6 +60,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program)
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
         m_ctx = nullptr;
+        m_activeBackendRegistry = nullptr;
         return result;
     }
 
@@ -64,6 +75,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program)
         result.exitCode = static_cast<int>(flow.value.asInt());
     }
     m_ctx = nullptr;
+    m_activeBackendRegistry = nullptr;
     return result;
 }
 
@@ -131,13 +143,24 @@ bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext
             params.reserve(fn->params.size());
             for (const auto& param : fn->params)
                 params.push_back(typeFromAst(*param->type));
-            m_backendRegistry.registerFunction({
+            BackendFunctionDesc desc{
                 backend->name,
                 fn->name,
                 typeFromAst(*fn->returnType),
                 std::move(params),
                 !fn->params.empty() && fn->params.back()->variadic,
-            });
+            };
+            if (const BackendFunctionDesc* existing = m_activeBackendRegistry->findFunction(backend->name, fn->name)) {
+                if (existing->returnType != desc.returnType || existing->params != desc.params || existing->variadic != desc.variadic) {
+                    ctx.error(QStringLiteral("E0614"),
+                              QStringLiteral("backend declaration '%1::%2' does not match bound backend signature")
+                                  .arg(backend->name, fn->name),
+                              fn->span);
+                    ok = false;
+                }
+            } else {
+                m_activeBackendRegistry->registerFunction(std::move(desc));
+            }
         }
         m_backends.insert(backend->name, info);
     }
@@ -1102,7 +1125,7 @@ AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
         return AbelValue::makeUnknown();
 
     QList<Diagnostic> diagnostics;
-    AbelValue result = m_backendRegistry.call({backendName->name, callee.member, std::move(values), span, std::move(locations)}, diagnostics);
+    AbelValue result = m_activeBackendRegistry->call({backendName->name, callee.member, std::move(values), span, std::move(locations)}, diagnostics, m_ctx);
     for (const auto& diagnostic : diagnostics)
         m_ctx->error(diagnostic.code, diagnostic.message, diagnostic.primary);
     return result;

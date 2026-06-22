@@ -115,7 +115,7 @@ const BackendFunctionDesc* BackendRegistry::findFunction(const QString& backendI
     return &function->desc;
 }
 
-AbelValue BackendRegistry::call(const BackendCall& call, QList<Diagnostic>& diagnostics) const
+AbelValue BackendRegistry::call(const BackendCall& call, QList<Diagnostic>& diagnostics, AbelRuntimeContext* ctx) const
 {
     auto backend = m_backends.constFind(call.backendId);
     const QString key = canonicalSymbol(call.backendId, call.symbol);
@@ -153,7 +153,14 @@ AbelValue BackendRegistry::call(const BackendCall& call, QList<Diagnostic>& diag
 
     BackendCall normalized = call;
     normalized.symbol = key;
-    return function->runtime(normalized);
+    if (ctx)
+        return function->runtime(normalized, *ctx);
+
+    AbelRuntimeContext localCtx;
+    AbelValue result = function->runtime(normalized, localCtx);
+    for (const auto& diagnostic : localCtx.diagnostics())
+        diagnostics.push_back(diagnostic);
+    return result;
 }
 
 } // namespace abel
