@@ -102,6 +102,13 @@ struct PackageResolvedResource {
     PackageBackendBuildSpec build;
 };
 
+struct PackageSourceFile {
+    QString packageName;
+    QString path;
+    bool fromDependency = false;
+    bool entry = false;
+};
+
 struct PackageCachedResource {
     QString packageName;
     QString packageRoot;
@@ -146,6 +153,7 @@ PackageGraphResult packageGraphFromDirectory(const QString& dir);
 PackageGraphResult updatePackageGraph(const QString& dir);
 QStringList packageSourceFiles(const PackageManifest& package, bool includeEntry = true);
 QStringList packageGraphSourceFiles(const PackageGraphResult& graph);
+QList<PackageSourceFile> packageGraphSourceFileEntries(const PackageGraphResult& graph);
 PackageBackendCacheResult updatePackageBackendCache(const PackageGraphResult& graph);
 QList<PackageResolvedResource> cachedPackageBackendArtifacts(const PackageGraphResult& graph);
 PackageDependencyChangeResult addPathPackageDependency(const QString& dir, const QString& dependencyDir);

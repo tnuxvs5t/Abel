@@ -60,6 +60,7 @@ private:
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
     AbelType m_currentReturnType = makeType(TypeKind::Void);
     QString m_currentStruct;
+    QString m_currentPackage;
     int m_loopDepth = 0;
 
     void collectStructs(const ProgramNode& program);
@@ -112,6 +113,13 @@ private:
     const VariableInfo* lookupVariable(const QString& name) const;
 
     bool isSupportedType(const AbelType& type) const;
+    bool isDeclVisible(const DeclNode& decl) const;
+    bool isFunctionVisible(const FunctionDeclNode& fn) const;
+    bool isStructVisible(const StructDeclNode& decl) const;
+    bool isBackendVisible(const BackendBlockNode& backend) const;
+    bool requireFunctionVisible(const FunctionDeclNode& fn, const SourceSpan& span);
+    bool requireStructVisible(const StructDeclNode& decl, const SourceSpan& span);
+    bool requireBackendVisible(const BackendBlockNode& backend, const SourceSpan& span);
     bool isDefaultConstructible(const AbelType& type) const;
     bool isDefaultConstructible(const AbelType& type, QSet<QString>& visiting) const;
     bool isAssignable(const AbelType& target, const AbelType& source) const;

@@ -160,6 +160,9 @@ struct ParameterNode : AstNode {
 };
 
 struct DeclNode : AstNode {
+    QString packageName;
+    bool fromDependency = false;
+
     virtual ~DeclNode() = default;
 };
 

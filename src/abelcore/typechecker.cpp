@@ -92,6 +92,7 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     m_diagnostics.clear();
     m_currentReturnType = makeType(TypeKind::Void);
     m_currentStruct.clear();
+    m_currentPackage.clear();
     m_loopDepth = 0;
 
     collectStructs(program);
@@ -195,6 +196,8 @@ void TypeChecker::collectBackends(const ProgramNode& program)
 
 void TypeChecker::checkStruct(const StructDeclNode& decl)
 {
+    const QString previousPackage = m_currentPackage;
+    m_currentPackage = decl.packageName;
     for (const auto& field : decl.fields) {
         AbelType type = typeFromAst(*field->type);
         if (!isSupportedType(type))
@@ -206,10 +209,13 @@ void TypeChecker::checkStruct(const StructDeclNode& decl)
         checkConstructor(decl, *ctor);
     for (const auto& method : decl.methods)
         checkMethod(decl, *method);
+    m_currentPackage = previousPackage;
 }
 
 void TypeChecker::checkBackend(const BackendBlockNode& backend)
 {
+    const QString previousPackage = m_currentPackage;
+    m_currentPackage = backend.packageName;
     for (const auto& fn : backend.functions) {
         const AbelType returnType = typeFromAst(*fn->returnType);
         if (!isSupportedType(returnType))
@@ -231,6 +237,7 @@ void TypeChecker::checkBackend(const BackendBlockNode& backend)
                 error(param.span, QStringLiteral("only any... variadic parameters are supported"));
         }
     }
+    m_currentPackage = previousPackage;
 }
 
 void TypeChecker::checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor)
@@ -288,10 +295,13 @@ void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNod
 
 void TypeChecker::checkFunction(const FunctionDeclNode& fn)
 {
+    const QString previousPackage = m_currentPackage;
+    m_currentPackage = fn.packageName;
     const qsizetype diagnosticsBeforeCallable = m_diagnostics.size();
     const AbelType returnType = typeFromAst(*fn.returnType);
     if (!isSupportedType(returnType)) {
         error(fn.returnType->span, QStringLiteral("unsupported return type '%1'").arg(fn.returnType->displayName()));
+        m_currentPackage = previousPackage;
         return;
     }
     m_currentReturnType = returnType;
@@ -331,6 +341,7 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
                   .arg(fn.name, returnType.displayName()));
     }
     popScope();
+    m_currentPackage = previousPackage;
 }
 
 void TypeChecker::checkBlock(const BlockStmtNode& block, bool push)
@@ -671,6 +682,10 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
     }
 
     if (const FunctionDeclNode* fn = m_functions.value(name, nullptr)) {
+        if (!requireFunctionVisible(*fn, nameSpan)) {
+            checkRestArgs();
+            return unknownExprType();
+        }
         if (isUnknownType(lhs.type)) {
             checkRestArgs();
             return unknownExprType();
@@ -884,6 +899,11 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (const StructInfo* info = m_structs.contains(name->name) ? &m_structs[name->name] : nullptr) {
+        if (!requireStructVisible(*info->decl, name->span)) {
+            for (const auto& argExpr : expr.args)
+                checkExpr(*argExpr);
+            return unknownExprType();
+        }
         const size_t argc = expr.args.size();
         if (!info->constructor) {
             if (argc == 0) {
@@ -913,6 +933,11 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (const FunctionDeclNode* fn = m_functions.value(name->name, nullptr)) {
+        if (!requireFunctionVisible(*fn, name->span)) {
+            for (const auto& argExpr : expr.args)
+                checkExpr(*argExpr);
+            return unknownExprType();
+        }
         const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
         const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
         if ((!variadic && expr.args.size() != fn->params.size()) || (variadic && expr.args.size() < fixedCount))
@@ -1015,6 +1040,11 @@ ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
     const BackendInfo* backend = m_backends.contains(backendName->name) ? &m_backends[backendName->name] : nullptr;
     if (!backend)
         return errorExpr(callee.span, QStringLiteral("unknown backend '%1'").arg(backendName->name));
+    if (!requireBackendVisible(*backend->decl, backendName->span)) {
+        for (const auto& argExpr : args)
+            checkExpr(*argExpr);
+        return unknownExprType();
+    }
     const FunctionDeclNode* fn = backend->functions.value(callee.member, nullptr);
     if (!fn)
         return errorExpr(callee.span, QStringLiteral("unknown backend function '%1::%2'").arg(backendName->name, callee.member));
@@ -1319,8 +1349,10 @@ bool TypeChecker::isSupportedType(const AbelType& type) const
 {
     if (type.kind == TypeKind::Unknown || type.kind == TypeKind::Nullptr)
         return false;
-    if (type.kind == TypeKind::Struct)
-        return m_structs.contains(type.spelling);
+    if (type.kind == TypeKind::Struct) {
+        const StructInfo info = m_structs.value(type.spelling);
+        return info.decl && isStructVisible(*info.decl);
+    }
     if (type.kind == TypeKind::Function) {
         if (!type.pointee || !isSupportedType(*type.pointee))
             return false;
@@ -1333,6 +1365,56 @@ bool TypeChecker::isSupportedType(const AbelType& type) const
     if ((type.kind == TypeKind::Pointer || type.kind == TypeKind::Reference || type.kind == TypeKind::Vector) && type.pointee)
         return isSupportedType(*type.pointee);
     return true;
+}
+
+bool TypeChecker::isDeclVisible(const DeclNode& decl) const
+{
+    return !decl.fromDependency || decl.packageName == m_currentPackage;
+}
+
+bool TypeChecker::isFunctionVisible(const FunctionDeclNode& fn) const
+{
+    return isDeclVisible(fn) || fn.exported;
+}
+
+bool TypeChecker::isStructVisible(const StructDeclNode& decl) const
+{
+    return isDeclVisible(decl) || decl.exported;
+}
+
+bool TypeChecker::isBackendVisible(const BackendBlockNode& backend) const
+{
+    return isDeclVisible(backend) || backend.exported;
+}
+
+bool TypeChecker::requireFunctionVisible(const FunctionDeclNode& fn, const SourceSpan& span)
+{
+    if (isFunctionVisible(fn))
+        return true;
+    error(span,
+          QStringLiteral("function '%1' from dependency package '%2' is not exported")
+              .arg(fn.name, fn.packageName));
+    return false;
+}
+
+bool TypeChecker::requireStructVisible(const StructDeclNode& decl, const SourceSpan& span)
+{
+    if (isStructVisible(decl))
+        return true;
+    error(span,
+          QStringLiteral("struct '%1' from dependency package '%2' is not exported")
+              .arg(decl.name, decl.packageName));
+    return false;
+}
+
+bool TypeChecker::requireBackendVisible(const BackendBlockNode& backend, const SourceSpan& span)
+{
+    if (isBackendVisible(backend))
+        return true;
+    error(span,
+          QStringLiteral("backend '%1' from dependency package '%2' is not exported")
+              .arg(backend.name, backend.packageName));
+    return false;
 }
 
 bool TypeChecker::isAssignable(const AbelType& target, const AbelType& source) const

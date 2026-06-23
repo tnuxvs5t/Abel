@@ -24,8 +24,12 @@ fn int main() {
 file(WRITE "${dep_dir}/src/lib/math.abel" [=[
 module dep.lib.math;
 
+fn int private_value() {
+    return 40;
+}
+
 export fn int dep_value() {
-    return 41;
+    return private_value() + 1;
 }
 ]=])
 
@@ -67,4 +71,40 @@ execute_process(
 )
 if(NOT run_result EQUAL 42)
     message(FATAL_ERROR "abel run expected exit code 42, got ${run_result}:\n${run_stdout}\n${run_stderr}")
+endif()
+
+set(bad_app_dir "${project_root}/bad-app")
+file(MAKE_DIRECTORY "${bad_app_dir}/src")
+file(WRITE "${bad_app_dir}/abel.package.json" [=[
+{
+  "name": "bad-app",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "dependencies": [
+    {"name": "dep", "kind": "path", "path": "../dep"}
+  ]
+}
+]=])
+
+file(WRITE "${bad_app_dir}/src/main.abel" [=[
+module bad.main;
+use dep.lib.math;
+
+fn int main() {
+    return private_value();
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${bad_app_dir}"
+    RESULT_VARIABLE bad_check_result
+    OUTPUT_VARIABLE bad_check_stdout
+    ERROR_VARIABLE bad_check_stderr
+)
+if(bad_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted dependency private function:\n${bad_check_stdout}\n${bad_check_stderr}")
+endif()
+string(FIND "${bad_check_stderr}" "not exported" not_exported_pos)
+if(not_exported_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain export failure:\n${bad_check_stdout}\n${bad_check_stderr}")
 endif()

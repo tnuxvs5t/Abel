@@ -67,7 +67,7 @@ static void printDiagnostic(const abel::Diagnostic& d)
 struct CliInput {
     QString sourceFile;
     QString sourceText;
-    QStringList sourceFiles;
+    QList<abel::PackageSourceFile> sourceFiles;
     QString packageRoot;
     QList<abel::PackageResolvedResource> packageResources;
     QList<abel::Diagnostic> diagnostics;
@@ -97,13 +97,15 @@ static CliInput readCliInput(const QString& path)
         if (!graph.ok())
             return input;
         input.sourceFile = graph.root.entryFilePath();
-        input.sourceFiles = abel::packageGraphSourceFiles(graph);
+        input.sourceFiles = abel::packageGraphSourceFileEntries(graph);
         input.packageRoot = graph.root.rootDir;
         input.packageResources = abel::cachedPackageBackendArtifacts(graph);
         filePath = input.sourceFile;
     } else {
         input.sourceFile = info.absoluteFilePath();
-        input.sourceFiles.push_back(input.sourceFile);
+        abel::PackageSourceFile source;
+        source.path = input.sourceFile;
+        input.sourceFiles.push_back(source);
     }
 
     QFile file(filePath);
@@ -140,14 +142,14 @@ static void appendProgram(abel::ProgramNode& target, std::unique_ptr<abel::Progr
     }
 }
 
-static ParsedCliProgram parseSourceFiles(const QStringList& sourceFiles)
+static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& sourceFiles)
 {
     ParsedCliProgram result;
     result.program = std::make_unique<abel::ProgramNode>();
     QSet<QString> seen;
 
-    for (const QString& rawPath : sourceFiles) {
-        const QString sourceFile = QFileInfo(rawPath).absoluteFilePath();
+    for (const abel::PackageSourceFile& sourceEntry : sourceFiles) {
+        const QString sourceFile = QFileInfo(sourceEntry.path).absoluteFilePath();
         if (seen.contains(sourceFile))
             continue;
         seen.insert(sourceFile);
@@ -172,13 +174,17 @@ static ParsedCliProgram parseSourceFiles(const QStringList& sourceFiles)
         if (!parsed.diagnostics.isEmpty())
             continue;
 
+        for (auto& decl : parsed.program->declarations) {
+            decl->packageName = sourceEntry.packageName;
+            decl->fromDependency = sourceEntry.fromDependency;
+        }
         appendProgram(*result.program, std::move(parsed.program));
     }
 
     return result;
 }
 
-static QList<abel::Diagnostic> checkSourceFiles(const QStringList& sourceFiles)
+static QList<abel::Diagnostic> checkSourceFiles(const QList<abel::PackageSourceFile>& sourceFiles)
 {
     QList<abel::Diagnostic> diagnostics;
     auto parsed = parseSourceFiles(sourceFiles);
@@ -245,7 +251,7 @@ int main(int argc, char** argv)
         if (!graph.ok())
             return 1;
 
-        const QList<abel::Diagnostic> diagnostics = checkSourceFiles(abel::packageGraphSourceFiles(graph));
+        const QList<abel::Diagnostic> diagnostics = checkSourceFiles(abel::packageGraphSourceFileEntries(graph));
         for (const auto& d : diagnostics)
             printDiagnostic(d);
         if (!diagnostics.isEmpty())

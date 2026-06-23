@@ -1554,6 +1554,30 @@ QStringList packageGraphSourceFiles(const PackageGraphResult& graph)
     return files;
 }
 
+QList<PackageSourceFile> packageGraphSourceFileEntries(const PackageGraphResult& graph)
+{
+    QList<PackageSourceFile> entries;
+    for (const PackageManifest& dependency : graph.dependencies) {
+        for (const QString& path : packageSourceFiles(dependency, false)) {
+            PackageSourceFile entry;
+            entry.packageName = dependency.name;
+            entry.path = path;
+            entry.fromDependency = true;
+            entry.entry = false;
+            entries.push_back(entry);
+        }
+    }
+    for (const QString& path : packageSourceFiles(graph.root, true)) {
+        PackageSourceFile entry;
+        entry.packageName = graph.root.name;
+        entry.path = path;
+        entry.fromDependency = false;
+        entry.entry = path == graph.root.entryFilePath();
+        entries.push_back(entry);
+    }
+    return entries;
+}
+
 PackageBackendCacheResult updatePackageBackendCache(const PackageGraphResult& graph)
 {
     PackageBackendCacheResult result;
