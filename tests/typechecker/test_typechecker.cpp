@@ -173,6 +173,30 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsDebugBuiltins()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                debug_assert(true);
+                debug_assert(1 < 2, "line=", __LINE__);
+                true |> debug_assert(" via pipe");
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsDebugBuiltinMisuse()
+    {
+        auto badCond = checkSource(QStringLiteral("fn int main() { debug_assert(1); return 0; }"));
+        QVERIFY(!badCond.diagnostics.isEmpty());
+        auto badBreakArg = checkSource(QStringLiteral("fn int main() { debug_break(\"bad\"); return 0; }"));
+        QVERIFY(!badBreakArg.diagnostics.isEmpty());
+    }
+
     void acceptsUserToStrForBuildString()
     {
         const QString src = QStringLiteral(R"ABEL(

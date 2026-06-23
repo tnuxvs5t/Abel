@@ -176,6 +176,43 @@ AbelValue builtinCharsToStr(BuiltinFunctionCall& call)
     return AbelValue::makeString(out);
 }
 
+AbelValue builtinDebugBreak(BuiltinFunctionCall& call)
+{
+    call.ctx.error(QStringLiteral("E0596"), QStringLiteral("debug breakpoint"), call.callSpan);
+    return AbelValue::makeUnknown();
+}
+
+AbelValue builtinDebugAssert(BuiltinFunctionCall& call)
+{
+    const AbelValue& condition = call.args[0];
+    if (condition.type().kind != TypeKind::Bool) {
+        const SourceSpan span = call.argSpans.empty() ? call.callSpan : call.argSpans[0];
+        call.ctx.error(QStringLiteral("E0597"),
+                       QStringLiteral("debug_assert condition must be bool, got %1").arg(condition.type().displayName()),
+                       span);
+        return AbelValue::makeUnknown();
+    }
+    if (condition.asBool())
+        return AbelValue::makeVoid();
+
+    QString message = QStringLiteral("debug assertion failed");
+    if (call.args.size() > 1) {
+        QString detail;
+        for (size_t i = 1; i < call.args.size(); ++i) {
+            const SourceSpan span = i < call.argSpans.size() ? call.argSpans[i] : call.callSpan;
+            auto text = stringifyValue(call, call.args[i], span);
+            if (!text.has_value())
+                return AbelValue::makeUnknown();
+            detail += *text;
+        }
+        if (!detail.isEmpty())
+            message += QStringLiteral(": ") + detail;
+    }
+
+    call.ctx.error(QStringLiteral("E0598"), message, call.callSpan);
+    return AbelValue::makeUnknown();
+}
+
 AbelValue vectorLen(BuiltinMethodCall& call)
 {
     return AbelValue::makeInt(static_cast<qint64>(call.receiver.asVector()->elements.size()), TypeKind::I32);
@@ -314,6 +351,8 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("println"), 0, -1, true, builtinPrintln, QStringLiteral("print stringified values plus newline")});
     registry.registerFunction({QStringLiteral("str_to_chars"), 1, 1, false, builtinStrToChars, QStringLiteral("convert str to vector<char>")});
     registry.registerFunction({QStringLiteral("chars_to_str"), 1, 1, false, builtinCharsToStr, QStringLiteral("convert vector<char> to str")});
+    registry.registerFunction({QStringLiteral("debug_break"), 0, 0, false, builtinDebugBreak, QStringLiteral("emit a debug breakpoint diagnostic")});
+    registry.registerFunction({QStringLiteral("debug_assert"), 1, -1, true, builtinDebugAssert, QStringLiteral("emit a diagnostic when condition is false")});
 
     return registry;
 }

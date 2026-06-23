@@ -873,6 +873,72 @@ private slots:
         QVERIFY(sawBackendCallLine);
         QCOMPARE(result.exitCode, 1);
     }
+
+    void debugBreakReportsStackAndSourceLine()
+    {
+        const QString src = QStringLiteral(R"(
+            fn void stop() {
+                debug_break();
+            }
+
+            fn int main() {
+                stop();
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        const auto& diagnostic = result.diagnostics.front();
+        QCOMPARE(diagnostic.code, QStringLiteral("E0596"));
+        QVERIFY(diagnostic.primary.sourceLine.contains(QStringLiteral("debug_break();")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn stop")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
+        bool sawStopCallLine = false;
+        for (const auto& frame : diagnostic.stackTrace) {
+            if (frame.symbol == QStringLiteral("fn stop"))
+                sawStopCallLine = frame.callSite.sourceLine.contains(QStringLiteral("stop();"));
+        }
+        QVERIFY(sawStopCallLine);
+        QCOMPARE(result.exitCode, 1);
+    }
+
+    void debugAssertTrueContinues()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                debug_assert(true, "ok");
+                return 7;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 7);
+    }
+
+    void debugAssertFalseReportsMessageStackAndSourceLine()
+    {
+        const QString src = QStringLiteral(R"(
+            fn void check() {
+                debug_assert(false, "x=", 4);
+            }
+
+            fn int main() {
+                check();
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        const auto& diagnostic = result.diagnostics.front();
+        QCOMPARE(diagnostic.code, QStringLiteral("E0598"));
+        QVERIFY(diagnostic.message.contains(QStringLiteral("x=4")));
+        QVERIFY(diagnostic.primary.sourceLine.contains(QStringLiteral("debug_assert(false")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn check")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
+        QCOMPARE(result.exitCode, 1);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

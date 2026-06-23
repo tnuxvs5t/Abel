@@ -1410,6 +1410,24 @@ stack:
 
 当前 excerpt 来自 lexer 保存的单行源码；多文件/module source map 仍是 v1 后续大块。
 
+当前 `std.debug` 第一片以 builtin 形式提供：
+
+```abel
+debug_break();                         // 直接产生 debug breakpoint 诊断
+debug_assert(x > 0, "x must > 0");      // 条件 false 时产生断言诊断
+debug_assert(ok, "id=", id, ", bad");   // message 使用 build_string 同一套 stringify
+```
+
+规则：
+
+```text
+debug_break() 无参数，返回 void，但运行到这里会报告 E0596 并终止当前 run。
+debug_assert(cond, any... message) 要求 cond 是 bool。
+cond 为 true 时继续执行。
+cond 为 false 时报告 E0598，message 会拼进诊断。
+诊断同样带 primary 源码行、caret 和 Abel 调用栈。
+```
+
 ### 17.5 修改 parser 后不加错误恢复测试
 
 parser 曾经因为错误恢复不前进导致内存爆炸。以后动 parser，要特别检查：

@@ -995,6 +995,15 @@ backend 排错顺序：
 5. 若没有 sourceLine excerpt，退回 file:line:column；多文件/module source map 仍可能是后续能力边界。
 ```
 
+调试辅助：
+
+```abel
+debug_break();
+debug_assert(cond, "message=", value);
+```
+
+Codex 生成 Abel 用户工程时，可以用 `debug_assert(bool, any...)` 表达必须成立的不变量；不要用它掩盖静态类型错误。`debug_assert` 的 message 使用 `build_string` 同一套 stringify 规则，失败时会输出 Abel 调用栈、源码行和 caret。
+
 ## 16. 验证命令
 
 纯 Abel 项目：

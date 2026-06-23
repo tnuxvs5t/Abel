@@ -657,6 +657,18 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
+        if (name == QStringLiteral("debug_break"))
+            return errorExpr(span, QStringLiteral("debug_break expects no arguments"));
+        if (name == QStringLiteral("debug_assert")) {
+            if (!isUnknownType(lhs.type) && lhs.type.kind != TypeKind::Bool)
+                error(span, QStringLiteral("debug_assert condition must be bool, got %1").arg(lhs.type.displayName()));
+            for (const auto& argExpr : args) {
+                ExprType arg = checkExpr(*argExpr);
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
+                    error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
     }
 
     return errorExpr(nameSpan, QStringLiteral("unknown pipe target '%1'").arg(name));
@@ -898,6 +910,24 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                 ExprType arg = checkExpr(*argExpr);
                 if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
                     error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (name->name == QStringLiteral("debug_break")) {
+            if (argc != 0)
+                return errorExpr(expr.span, QStringLiteral("debug_break expects no arguments"));
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (name->name == QStringLiteral("debug_assert")) {
+            if (argc < 1)
+                return errorExpr(expr.span, QStringLiteral("debug_assert expects at least one argument"));
+            ExprType cond = checkExpr(*expr.args[0]);
+            if (!isUnknownType(cond.type) && cond.type.kind != TypeKind::Bool)
+                error(expr.args[0]->span, QStringLiteral("debug_assert condition must be bool, got %1").arg(cond.type.displayName()));
+            for (size_t i = 1; i < expr.args.size(); ++i) {
+                ExprType arg = checkExpr(*expr.args[i]);
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
+                    error(expr.args[i]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }

@@ -125,6 +125,8 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("println")));
         QVERIFY(registry.hasFunction(QStringLiteral("str_to_chars")));
         QVERIFY(registry.hasFunction(QStringLiteral("chars_to_str")));
+        QVERIFY(registry.hasFunction(QStringLiteral("debug_break")));
+        QVERIFY(registry.hasFunction(QStringLiteral("debug_assert")));
 
         abel::AbelRuntimeContext ctx;
         abel::BuiltinFunctionCall call{
@@ -176,6 +178,36 @@ private slots:
         auto text = registry.callFunction(std::move(toStr));
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(text.asString(), QStringLiteral("ab"));
+    }
+
+    void debugAssertReportsOnlyWhenFalse()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+
+        abel::BuiltinFunctionCall ok{
+            ctx,
+            QStringLiteral("debug_assert"),
+            {abel::AbelValue::makeBool(true), abel::AbelValue::makeString(QStringLiteral("ignored"))},
+            {},
+            {},
+        };
+        auto okValue = registry.callFunction(std::move(ok));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(okValue.type().kind, abel::TypeKind::Void);
+
+        abel::BuiltinFunctionCall fail{
+            ctx,
+            QStringLiteral("debug_assert"),
+            {abel::AbelValue::makeBool(false), abel::AbelValue::makeString(QStringLiteral("x=")), abel::AbelValue::makeInt(7)},
+            {},
+            {},
+        };
+        auto failValue = registry.callFunction(std::move(fail));
+        QVERIFY(!ctx.diagnostics().isEmpty());
+        QCOMPARE(ctx.diagnostics().back().code, QStringLiteral("E0598"));
+        QVERIFY(ctx.diagnostics().back().message.contains(QStringLiteral("x=7")));
+        QCOMPARE(failValue.type().kind, abel::TypeKind::Unknown);
     }
 };
 

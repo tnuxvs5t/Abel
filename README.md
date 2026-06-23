@@ -9,6 +9,7 @@ Current implementation scope:
 - `any`, `any...`, lambda/function values, control flow, and core builtins such as `build_string`, `print`, and vector methods;
 - backend blocks, resource-node JSON, `QPluginLoader` loading, and Qt/C++ plugin dispatch through `libabelcore.so`;
 - runtime diagnostics with Abel stack frames, `file:line:column`, source-line excerpts, and caret lines for the primary error and stack call sites;
+- `std.debug` first slice through builtins `debug_break()` and `debug_assert(bool, any...)`, both reporting through the same runtime diagnostic/stack/source-location path;
 - v1 package skeleton with `abel init [project-dir]`, `abel.package.json`, `abel add/remove/update/build`, local path dependencies with SemVer version requirements, `abel.lock.json`, package graph consumption, CMake backend artifact auto-build metadata, and project-local backend artifact cache under `.abel/cache/backend` with `.abel-cache.json` sidecar validation;
 - installable Abel SDK first slice: headers, `libabelcore.so`, `abel` CLI, `AbelConfig.cmake`, `AbelTargets.cmake`, external backend fixture coverage for `find_package(Abel REQUIRED)`, and a backend binder matrix for common scalar/vector types plus `AbelRuntimeContext&` diagnostics and `bindVariadic` / `AbelVariadicArgs` for Abel `any...`;
 - CLI commands: `abel init`, `abel add`, `abel remove`, `abel update`, `abel build`, `abel check`, `abel run`, `abel package check`, `abel resources check`, and `abel run --resource`.
