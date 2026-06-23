@@ -38,6 +38,7 @@ private:
     struct FieldInfo {
         AbelType type;
         bool isConst = false;
+        bool isPrivate = false;
     };
 
     struct StructInfo {
@@ -204,6 +205,7 @@ private:
     bool requireBackendVisible(const BackendBlockNode& backend, const SourceSpan& span);
     bool isDefaultConstructible(const AbelType& type);
     bool isDefaultConstructible(const AbelType& type, QSet<QString>& visiting);
+    bool isDefaultConstructionAccessible(const AbelType& type);
     bool isAssignable(const AbelType& target, const AbelType& source) const;
     bool isStringifiable(const AbelType& type);
     bool hasUserToStrFor(const AbelType& type);

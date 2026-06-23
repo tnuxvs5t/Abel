@@ -184,6 +184,7 @@ struct FunctionDeclNode final : DeclNode {
     bool exported = false;
     bool debt = false;
     bool isConstMethod = false;
+    bool isPrivate = false;
     std::unique_ptr<TypeNode> returnType;
     QString name;
     std::vector<std::unique_ptr<ParameterNode>> params;
@@ -193,11 +194,13 @@ struct FunctionDeclNode final : DeclNode {
 struct FieldDeclNode : AstNode {
     std::unique_ptr<TypeNode> type;
     QString name;
+    bool isPrivate = false;
 };
 
 struct ConstructorDeclNode : AstNode {
     std::vector<std::unique_ptr<ParameterNode>> params;
     std::unique_ptr<BlockStmtNode> body;
+    bool isPrivate = false;
 };
 
 struct StructDeclNode final : DeclNode {

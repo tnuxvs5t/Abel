@@ -160,6 +160,52 @@ private slots:
         QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(2));
     }
 
+    void parsesStructPublicPrivateLabels()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Vault {
+            private:
+                int secret;
+
+                init(int x) {
+                    secret = x;
+                }
+
+                fn int leak() {
+                    return secret;
+                }
+
+            public:
+                int tag;
+
+                fn int get() {
+                    return leak();
+                }
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
+
+        auto* vault = dynamic_cast<abel::StructDeclNode*>(parsed.program->declarations[0].get());
+        QVERIFY(vault != nullptr);
+        QCOMPARE(vault->fields.size(), static_cast<size_t>(2));
+        QCOMPARE(vault->constructors.size(), static_cast<size_t>(1));
+        QCOMPARE(vault->methods.size(), static_cast<size_t>(2));
+        QVERIFY(vault->fields[0]->isPrivate);
+        QVERIFY(vault->constructors[0]->isPrivate);
+        QVERIFY(vault->methods[0]->isPrivate);
+        QVERIFY(!vault->fields[1]->isPrivate);
+        QVERIFY(!vault->methods[1]->isPrivate);
+    }
+
     void parsesEnumAndTypeAlias()
     {
         const QString src = QStringLiteral(R"(

@@ -796,6 +796,141 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsPrivateStructInternalsFromOwnMethods()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Vault {
+            private:
+                int secret;
+
+                fn int leak() {
+                    return secret;
+                }
+
+            public:
+                init(int x) {
+                    secret = x;
+                }
+
+                fn int get() {
+                    Vault other = Vault(1);
+                    return secret + other.leak();
+                }
+            }
+
+            fn int main() {
+                Vault v = Vault(7);
+                return v.get();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsExternalPrivateStructMembers()
+    {
+        auto privateField = checkSource(QStringLiteral(R"(
+            struct Vault {
+            private:
+                int secret;
+            public:
+                init(int x) {
+                    secret = x;
+                }
+            }
+
+            fn int main() {
+                Vault v = Vault(7);
+                return v.secret;
+            }
+        )"));
+        QVERIFY(!privateField.diagnostics.isEmpty());
+
+        auto privateMethod = checkSource(QStringLiteral(R"(
+            struct Vault {
+            private:
+                int secret;
+
+                fn int leak() {
+                    return secret;
+                }
+
+            public:
+                init(int x) {
+                    secret = x;
+                }
+            }
+
+            fn int main() {
+                Vault v = Vault(7);
+                return v.leak();
+            }
+        )"));
+        QVERIFY(!privateMethod.diagnostics.isEmpty());
+
+        auto privateConstructor = checkSource(QStringLiteral(R"(
+            struct Vault {
+            private:
+                init(int x) {
+                }
+
+            public:
+                fn int get() {
+                    return 0;
+                }
+            }
+
+            fn int main() {
+                Vault v = Vault(7);
+                return v.get();
+            }
+        )"));
+        QVERIFY(!privateConstructor.diagnostics.isEmpty());
+
+        auto privatePositionalField = checkSource(QStringLiteral(R"(
+            struct Box {
+            private:
+                int x;
+
+            public:
+                fn int get() {
+                    return x;
+                }
+            }
+
+            fn int main() {
+                Box b = Box(1);
+                return b.get();
+            }
+        )"));
+        QVERIFY(!privatePositionalField.diagnostics.isEmpty());
+
+        auto privateDefaultResize = checkSource(QStringLiteral(R"(
+            struct Hidden {
+                int x;
+
+            private:
+                init() {
+                    x = 1;
+                }
+
+            public:
+                fn int get() {
+                    return x;
+                }
+            }
+
+            fn int main() {
+                vector<Hidden> xs;
+                xs.resize(1);
+                return 0;
+            }
+        )"));
+        QVERIFY(!privateDefaultResize.diagnostics.isEmpty());
+    }
+
     void rejectsUnknownStructField()
     {
         const QString src = QStringLiteral(R"(

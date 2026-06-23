@@ -826,6 +826,142 @@ private slots:
         QCOMPARE(result.exitCode, 2);
     }
 
+    void privateStructInternalsWorkAtRuntime()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Vault {
+            private:
+                int secret;
+
+                fn int leak() {
+                    return secret;
+                }
+
+            public:
+                init(int x) {
+                    secret = x;
+                }
+
+                fn int get() {
+                    Vault other = Vault(8);
+                    return secret + other.leak();
+                }
+            }
+
+            fn int main() {
+                Vault v = Vault(9);
+                return v.get();
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 17);
+    }
+
+    void rejectsExternalPrivateStructMembersAtRuntime()
+    {
+        auto privateField = runSource(QStringLiteral(R"(
+            struct Vault {
+            private:
+                int secret;
+            public:
+                init(int x) {
+                    secret = x;
+                }
+            }
+
+            fn int main() {
+                Vault v = Vault(7);
+                return v.secret;
+            }
+        )"));
+        QVERIFY(!privateField.diagnostics.isEmpty());
+
+        auto privateMethod = runSource(QStringLiteral(R"(
+            struct Vault {
+            private:
+                int secret;
+
+                fn int leak() {
+                    return secret;
+                }
+
+            public:
+                init(int x) {
+                    secret = x;
+                }
+            }
+
+            fn int main() {
+                Vault v = Vault(7);
+                return v.leak();
+            }
+        )"));
+        QVERIFY(!privateMethod.diagnostics.isEmpty());
+
+        auto privateConstructor = runSource(QStringLiteral(R"(
+            struct Vault {
+            private:
+                init(int x) {
+                }
+
+            public:
+                fn int get() {
+                    return 0;
+                }
+            }
+
+            fn int main() {
+                Vault v = Vault(7);
+                return v.get();
+            }
+        )"));
+        QVERIFY(!privateConstructor.diagnostics.isEmpty());
+
+        auto privatePositionalField = runSource(QStringLiteral(R"(
+            struct Box {
+            private:
+                int x;
+
+            public:
+                fn int get() {
+                    return x;
+                }
+            }
+
+            fn int main() {
+                Box b = Box(1);
+                return b.get();
+            }
+        )"));
+        QVERIFY(!privatePositionalField.diagnostics.isEmpty());
+
+        auto privateDefaultResize = runSource(QStringLiteral(R"(
+            struct Hidden {
+                int x;
+
+            private:
+                init() {
+                    x = 1;
+                }
+
+            public:
+                fn int get() {
+                    return x;
+                }
+            }
+
+            fn int main() {
+                vector<Hidden> xs;
+                xs.resize(1);
+                return 0;
+            }
+        )"));
+        QVERIFY(!privateDefaultResize.diagnostics.isEmpty());
+    }
+
     void structAssignmentCopies()
     {
         const QString src = QStringLiteral(R"(

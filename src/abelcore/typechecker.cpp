@@ -455,7 +455,7 @@ void TypeChecker::collectStructs(const ProgramNode& program)
                 AbelType type = typeFromAstForDecl(*field->type, *s, false);
                 if (type.isReference())
                     error(field->span, QStringLiteral("reference fields are not supported in v0"));
-                info.fields.insert(field->name, FieldInfo{type, isReadOnlyBinding(type, field->type->isConst)});
+                info.fields.insert(field->name, FieldInfo{type, isReadOnlyBinding(type, field->type->isConst), field->isPrivate});
             }
         }
     }
@@ -1317,6 +1317,8 @@ void TypeChecker::checkVarDecl(const VarDeclStmtNode& stmt)
         }
     } else if (!isDefaultConstructible(type)) {
         error(stmt.span, QStringLiteral("type %1 is not default-constructible").arg(type.displayName()));
+    } else if (!isDefaultConstructionAccessible(type)) {
+        error(stmt.span, QStringLiteral("default constructor for %1 is private").arg(type.displayName()));
     }
     defineVariable(stmt.name, type, isReadOnlyBinding(type, stmt.isConst || stmt.type->isConst), stmt.span);
 }
@@ -1757,6 +1759,8 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             const FunctionDeclNode* method = info->methods.value(field->field, nullptr);
             if (!method)
                 return errorExpr(field->span, QStringLiteral("unknown method '%1' on %2").arg(field->field, receiver.type.displayName()));
+            if (method->isPrivate && m_currentStruct != structTypeName(*info->decl))
+                return errorExpr(field->span, QStringLiteral("method '%1' is private").arg(field->field));
             if (receiver.category == ValueCategory::LValue && !receiver.isMutable && !method->isConstMethod)
                 return errorExpr(field->span, QStringLiteral("method '%1' requires mutable receiver").arg(field->field));
             if (expr.args.size() != method->params.size())
@@ -1797,12 +1801,19 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                     return errorExpr(expr.span, QStringLiteral("constructor '%1' expects 0 or %2 argument(s)").arg(name->name).arg(info->fields.size()));
                 for (size_t i = 0; i < argc; ++i) {
                     const QString& fieldName = info->decl->fields[i]->name;
+                    const FieldInfo field = info->fields.value(fieldName);
+                    if (field.isPrivate && m_currentStruct != structTypeName(*info->decl)) {
+                        error(expr.args[i]->span, QStringLiteral("field '%1' is private").arg(fieldName));
+                        continue;
+                    }
                     ExprType arg = checkExpr(*expr.args[i]);
-                    if (!isUnknownType(arg.type) && !isAssignable(info->fields.value(fieldName).type, arg.type))
+                    if (!isUnknownType(arg.type) && !isAssignable(field.type, arg.type))
                         error(expr.args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
                 }
             }
         } else {
+            if (info->constructor->isPrivate && m_currentStruct != structTypeName(*info->decl))
+                return errorExpr(expr.span, QStringLiteral("constructor '%1' is private").arg(name->name));
             if (argc != info->constructor->params.size())
                 return errorExpr(expr.span, QStringLiteral("constructor '%1' called with wrong argument count").arg(name->name));
             for (size_t i = 0; i < argc; ++i) {
@@ -2013,12 +2024,19 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                 return errorExpr(span, QStringLiteral("constructor '%1' expects 0 or %2 argument(s)").arg(displayName).arg(info.fields.size()));
             for (size_t i = 0; i < argc; ++i) {
                 const QString& fieldName = info.decl->fields[i]->name;
+                const FieldInfo field = info.fields.value(fieldName);
+                if (field.isPrivate && m_currentStruct != structTypeName(*info.decl)) {
+                    error(args[i]->span, QStringLiteral("field '%1' is private").arg(fieldName));
+                    continue;
+                }
                 ExprType arg = checkExpr(*args[i]);
-                if (!isUnknownType(arg.type) && !isAssignable(info.fields.value(fieldName).type, arg.type))
+                if (!isUnknownType(arg.type) && !isAssignable(field.type, arg.type))
                     error(args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
             }
         }
     } else {
+        if (info.constructor->isPrivate && m_currentStruct != structTypeName(*info.decl))
+            return errorExpr(span, QStringLiteral("constructor '%1' is private").arg(displayName));
         if (argc != info.constructor->params.size())
             return errorExpr(span, QStringLiteral("constructor '%1' called with wrong argument count").arg(displayName));
         for (size_t i = 0; i < argc; ++i) {
@@ -2297,8 +2315,12 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
         ExprType count = checkExpr(*args[0]);
         if (!isUnknownType(count.type) && !isAssignable(makeType(TypeKind::I64), count.type))
             error(args[0]->span, QStringLiteral("vector.%1 size must be integer").arg(callee.field));
-        if (callee.field == QStringLiteral("resize") && !isDefaultConstructible(element))
-            error(callee.span, QStringLiteral("vector.resize requires default-constructible element type %1").arg(element.displayName()));
+        if (callee.field == QStringLiteral("resize")) {
+            if (!isDefaultConstructible(element))
+                error(callee.span, QStringLiteral("vector.resize requires default-constructible element type %1").arg(element.displayName()));
+            else if (!isDefaultConstructionAccessible(element))
+                error(callee.span, QStringLiteral("vector.resize requires accessible default constructor for %1").arg(element.displayName()));
+        }
         return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
     }
     if (callee.field == QStringLiteral("front") || callee.field == QStringLiteral("back")) {
@@ -2443,6 +2465,8 @@ normalFieldAccess:
     if (!info->fields.contains(expr.field))
         return errorExpr(expr.span, QStringLiteral("unknown field '%1' on %2").arg(expr.field, objectType.displayName()));
     const FieldInfo field = info->fields.value(expr.field);
+    if (field.isPrivate && m_currentStruct != structTypeName(*info->decl))
+        return errorExpr(expr.span, QStringLiteral("field '%1' is private").arg(expr.field));
     return {field.type, ValueCategory::LValue, mutableBase && !field.isConst};
 }
 
@@ -2627,6 +2651,20 @@ bool TypeChecker::isDefaultConstructible(const AbelType& type, QSet<QString>& vi
     }
     }
     return false;
+}
+
+bool TypeChecker::isDefaultConstructionAccessible(const AbelType& type)
+{
+    if (type.kind == TypeKind::Vector && type.pointee)
+        return isDefaultConstructionAccessible(*type.pointee);
+    if (type.kind != TypeKind::Struct)
+        return true;
+    const StructInfo* info = structInfoForType(type);
+    if (!info || !info->decl)
+        return false;
+    if (!info->constructor)
+        return true;
+    return !info->constructor->isPrivate || m_currentStruct == structTypeName(*info->decl);
 }
 
 bool TypeChecker::isStringifiable(const AbelType& type)

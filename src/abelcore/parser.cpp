@@ -188,19 +188,31 @@ std::unique_ptr<StructDeclNode> Parser::parseStruct(bool exported)
     s->exported = exported;
     s->name = consume(TokenKind::Identifier, QStringLiteral("expected struct name")).text;
     consume(TokenKind::LBrace, QStringLiteral("expected '{'"));
+    bool membersPrivate = false;
     while (!check(TokenKind::RBrace) && !atEnd()) {
+        if (match(TokenKind::KwPublic)) {
+            consume(TokenKind::Colon, QStringLiteral("expected ':' after public"));
+            membersPrivate = false;
+            continue;
+        }
+        if (match(TokenKind::KwPrivate)) {
+            consume(TokenKind::Colon, QStringLiteral("expected ':' after private"));
+            membersPrivate = true;
+            continue;
+        }
         if (match(TokenKind::KwInit)) {
-            s->constructors.push_back(parseConstructor());
+            s->constructors.push_back(parseConstructor(membersPrivate));
         } else {
             const bool constMethod = match(TokenKind::KwConst);
             if (match(TokenKind::KwFn)) {
                 auto method = parseFunction(false, false);
                 method->isConstMethod = constMethod;
+                method->isPrivate = membersPrivate;
                 s->methods.push_back(std::move(method));
             } else {
                 if (constMethod)
                     errorAt(previous(), QStringLiteral("const only applies to methods in struct body"));
-                s->fields.push_back(parseStructField());
+                s->fields.push_back(parseStructField(membersPrivate));
             }
         }
     }
@@ -209,9 +221,10 @@ std::unique_ptr<StructDeclNode> Parser::parseStruct(bool exported)
     return s;
 }
 
-std::unique_ptr<FieldDeclNode> Parser::parseStructField()
+std::unique_ptr<FieldDeclNode> Parser::parseStructField(bool isPrivate)
 {
     auto field = std::make_unique<FieldDeclNode>();
+    field->isPrivate = isPrivate;
     field->type = parseType();
     const Token name = consume(TokenKind::Identifier, QStringLiteral("expected field name"));
     field->name = name.text;
@@ -250,10 +263,11 @@ std::unique_ptr<TypeAliasDeclNode> Parser::parseTypeAlias(bool exported)
     return alias;
 }
 
-std::unique_ptr<ConstructorDeclNode> Parser::parseConstructor()
+std::unique_ptr<ConstructorDeclNode> Parser::parseConstructor(bool isPrivate)
 {
     auto ctor = std::make_unique<ConstructorDeclNode>();
     const SourceSpan startSpan = previous().span;
+    ctor->isPrivate = isPrivate;
     consume(TokenKind::LParen, QStringLiteral("expected '(' after init"));
     if (!check(TokenKind::RParen)) {
         do {

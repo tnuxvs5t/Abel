@@ -43,6 +43,7 @@ private:
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
     QString m_currentPackage;
     QString m_currentModule;
+    QString m_currentStruct;
     QList<QString> m_currentImports;
     QHash<QString, QString> m_currentImportAliases;
     QHash<QString, QList<StructRuntimeInfo>> m_structs;
@@ -134,6 +135,8 @@ private:
     bool isEnumVisible(const EnumDeclNode& decl) const;
     bool isTypeAliasVisible(const TypeAliasDeclNode& alias) const;
     bool structFieldReadOnly(const AbelType& structType, const QString& fieldName);
+    bool structFieldPrivate(const AbelType& structType, const QString& fieldName) const;
+    bool isCurrentStruct(const StructRuntimeInfo& info) const;
 
     bool requireBool(const AbelValue& value, const SourceSpan& span, bool& out);
     bool requireInteger(const AbelValue& value, const SourceSpan& span, qint64& out);

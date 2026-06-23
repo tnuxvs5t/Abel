@@ -206,6 +206,25 @@ private:
     QHash<QString, QString> m_previousImportAliases;
 };
 
+class CurrentStructGuard {
+public:
+    CurrentStructGuard(QString& currentStruct, QString structName)
+        : m_currentStruct(currentStruct)
+        , m_previousStruct(currentStruct)
+    {
+        m_currentStruct = std::move(structName);
+    }
+
+    ~CurrentStructGuard()
+    {
+        m_currentStruct = m_previousStruct;
+    }
+
+private:
+    QString& m_currentStruct;
+    QString m_previousStruct;
+};
+
 bool isSourceLocationBuiltinName(const QString& name)
 {
     return name == QStringLiteral("__FILE__")
@@ -241,6 +260,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
     m_resolvingTypeAliases.clear();
     m_currentPackage.clear();
     m_currentModule.clear();
+    m_currentStruct.clear();
     m_currentImports.clear();
     m_currentImportAliases.clear();
     m_backendRegistry = BackendRegistry();
@@ -866,6 +886,7 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
+    CurrentStructGuard structGuard(m_currentStruct, selfValue.type().spelling);
     RuntimeFrameGuard frame(*m_ctx, true, methodFrameSymbol(fn), span);
     m_ctx->defineVariable(QStringLiteral("this"), self, fn.isConstMethod || self->isReadOnly, false, span);
     auto object = selfValue.asStruct();
@@ -1264,6 +1285,7 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
                              function->moduleName,
                              function->importedModules,
                              function->importedModuleAliases);
+    CurrentStructGuard structGuard(m_currentStruct, function->currentStruct);
     RuntimeFrameGuard frame(*m_ctx, true, lambdaFrameSymbol(), span);
     for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
         m_ctx->defineValueVariable(it.key(), it.value(), true, lambda.span);
@@ -1364,6 +1386,7 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
                              function->moduleName,
                              function->importedModules,
                              function->importedModuleAliases);
+    CurrentStructGuard structGuard(m_currentStruct, function->currentStruct);
     RuntimeFrameGuard frame(*m_ctx, true, lambdaFrameSymbol(), span);
     for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
         m_ctx->defineValueVariable(it.key(), it.value(), true, lambda.span);
@@ -1658,7 +1681,8 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
             error(QStringLiteral("E0570"), QStringLiteral("this is not available here"), expr.span);
             return AbelValue::makeUnknown();
         }
-        return slot->location->read();
+        AbelValue self = slot->location->read();
+        return AbelValue::makePointer(self.type(), slot->location);
     }
     if (auto* e = dynamic_cast<const UnaryExprNode*>(&expr))
         return evalUnary(*e);
@@ -1749,6 +1773,10 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
         object = base.asStruct().get();
         if (!object->fields.contains(e->field)) {
             error(QStringLiteral("E0574"), QStringLiteral("unknown field '%1'").arg(e->field), e->span);
+            return nullptr;
+        }
+        if (structFieldPrivate(base.type(), e->field) && m_currentStruct != base.type().spelling) {
+            error(QStringLiteral("E0574"), QStringLiteral("field '%1' is private").arg(e->field), e->span);
             return nullptr;
         }
         const bool fieldReadOnly = baseReadOnly || base.type().isConst || structFieldReadOnly(base.type(), e->field);
@@ -2351,6 +2379,7 @@ AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)
     function->lambda = &expr;
     function->packageName = m_currentPackage;
     function->moduleName = m_currentModule;
+    function->currentStruct = m_currentStruct;
     function->importedModules = m_currentImports;
     function->importedModuleAliases = m_currentImportAliases;
 
@@ -2428,6 +2457,10 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
         }
         for (size_t i = 0; i < args.size(); ++i) {
             const auto& field = info.decl->fields[i];
+            if (field->isPrivate && !isCurrentStruct(info)) {
+                error(QStringLiteral("E0575"), QStringLiteral("field '%1' is private").arg(field->name), args[i]->span);
+                continue;
+            }
             order.push_back(field->name);
             AbelValue value = convertOrError(evalExpr(*args[i]), typeFromAstInCurrentPackage(*field->type), args[i]->span);
             fields.insert(field->name, value);
@@ -2437,6 +2470,10 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
         return AbelValue::makeStruct(structTypeName(*info.decl), order, std::move(fields));
     }
 
+    if (info.constructor->isPrivate && !isCurrentStruct(info)) {
+        error(QStringLiteral("E0576"), QStringLiteral("constructor '%1' is private").arg(name), span);
+        return AbelValue::makeUnknown();
+    }
     if (args.empty() && !info.constructor->params.empty()) {
         error(QStringLiteral("E0588"), QStringLiteral("constructor '%1' is not default-constructible").arg(name), span);
         return AbelValue::makeUnknown();
@@ -2492,6 +2529,7 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
     AbelValue object = AbelValue::makeStruct(structTypeName(*info.decl), order, std::move(fields));
     AbelLocation* self = m_ctx->createStorage(object);
 
+    CurrentStructGuard structGuard(m_currentStruct, structTypeName(*info.decl));
     RuntimeFrameGuard frame(*m_ctx, true, constructorFrameSymbol(name), span);
     m_ctx->defineVariable(QStringLiteral("this"), self, false, false, span);
     auto structValue = self->read().asStruct();
@@ -2541,6 +2579,10 @@ AbelValue Interpreter::evalStructMethod(const FieldAccessExprNode& callee,
     const FunctionDeclNode* method = info->methods.value(callee.field, nullptr);
     if (!method) {
         error(QStringLiteral("E0579"), QStringLiteral("unknown method '%1'").arg(callee.field), callee.span);
+        return AbelValue::makeUnknown();
+    }
+    if (method->isPrivate && !isCurrentStruct(*info)) {
+        error(QStringLiteral("E0579"), QStringLiteral("method '%1' is private").arg(callee.field), callee.span);
         return AbelValue::makeUnknown();
     }
     if (self->isReadOnly && !method->isConstMethod) {
@@ -2639,6 +2681,10 @@ AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceS
             error(QStringLiteral("E0588"), QStringLiteral("constructor '%1' is not default-constructible").arg(type.displayName()), span);
             return AbelValue::makeUnknown();
         }
+        if (info->constructor && info->constructor->isPrivate && !isCurrentStruct(*info)) {
+            error(QStringLiteral("E0588"), QStringLiteral("default constructor for %1 is private").arg(type.displayName()), span);
+            return AbelValue::makeUnknown();
+        }
 
         visiting.insert(type.spelling);
         QHash<QString, AbelValue> fields;
@@ -2659,6 +2705,7 @@ AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceS
         AbelValue object = AbelValue::makeStruct(type.spelling, order, std::move(fields));
         if (info->constructor) {
             AbelLocation* self = m_ctx->createStorage(object);
+            CurrentStructGuard structGuard(m_currentStruct, structTypeName(*info->decl));
             RuntimeFrameGuard frame(*m_ctx, true, constructorFrameSymbol(type.spelling), span);
             m_ctx->defineVariable(QStringLiteral("this"), self, false, false, span);
             auto structValue = self->read().asStruct();
@@ -2772,6 +2819,23 @@ bool Interpreter::structFieldReadOnly(const AbelType& structType, const QString&
         return isReadOnlyBinding(fieldType, field->type->isConst);
     }
     return false;
+}
+
+bool Interpreter::structFieldPrivate(const AbelType& structType, const QString& fieldName) const
+{
+    const StructRuntimeInfo* info = structInfoForType(structType);
+    if (!info || !info->decl)
+        return false;
+    for (const auto& field : info->decl->fields) {
+        if (field->name == fieldName)
+            return field->isPrivate;
+    }
+    return false;
+}
+
+bool Interpreter::isCurrentStruct(const StructRuntimeInfo& info) const
+{
+    return info.decl && m_currentStruct == structTypeName(*info.decl);
 }
 
 void Interpreter::attachStringifier(BuiltinFunctionCall& call)

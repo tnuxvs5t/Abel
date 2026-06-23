@@ -39,8 +39,8 @@ private:
     std::unique_ptr<StructDeclNode> parseStruct(bool exported);
     std::unique_ptr<EnumDeclNode> parseEnum(bool exported);
     std::unique_ptr<TypeAliasDeclNode> parseTypeAlias(bool exported);
-    std::unique_ptr<FieldDeclNode> parseStructField();
-    std::unique_ptr<ConstructorDeclNode> parseConstructor();
+    std::unique_ptr<FieldDeclNode> parseStructField(bool isPrivate);
+    std::unique_ptr<ConstructorDeclNode> parseConstructor(bool isPrivate);
     std::unique_ptr<BackendBlockNode> parseBackend(bool exported);
     std::unique_ptr<ParameterNode> parseParameter();
     std::unique_ptr<TypeNode> parseType();
