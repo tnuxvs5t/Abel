@@ -87,6 +87,7 @@ bool blockAlwaysReturns(const BlockStmtNode& block)
 TypeCheckResult TypeChecker::check(const ProgramNode& program)
 {
     m_functions.clear();
+    m_functionDecls.clear();
     m_backends.clear();
     m_scopes.clear();
     m_diagnostics.clear();
@@ -99,7 +100,7 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     collectFunctions(program);
     collectBackends(program);
 
-    const FunctionDeclNode* main = m_functions.value(QStringLiteral("main"), nullptr);
+    const FunctionDeclNode* main = findRootFunction(QStringLiteral("main"));
     if (!main) {
         error(program.span, QStringLiteral("missing fn int main() or fn void main()"));
     } else {
@@ -110,7 +111,7 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
             error(main->span, QStringLiteral("main must not take parameters in v0"));
     }
 
-    for (const auto& fn : m_functions)
+    for (const auto* fn : m_functionDecls)
         checkFunction(*fn);
     for (const auto& info : m_structs)
         checkStruct(*info.decl);
@@ -162,13 +163,68 @@ void TypeChecker::collectFunctions(const ProgramNode& program)
 {
     for (const auto& decl : program.declarations) {
         if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get())) {
-            if (m_functions.contains(fn->name)) {
-                error(fn->span, QStringLiteral("duplicate function '%1'").arg(fn->name));
-                continue;
+            const auto existing = m_functions.value(fn->name);
+            bool duplicateInPackage = false;
+            for (const FunctionDeclNode* other : existing) {
+                if (other->packageName == fn->packageName) {
+                    error(fn->span, QStringLiteral("duplicate function '%1' in package '%2'")
+                                        .arg(fn->name, fn->packageName));
+                    duplicateInPackage = true;
+                    break;
+                }
             }
-            m_functions.insert(fn->name, fn);
+            if (duplicateInPackage)
+                continue;
+            m_functions[fn->name].push_back(fn);
+            m_functionDecls.push_back(fn);
         }
     }
+}
+
+const FunctionDeclNode* TypeChecker::findRootFunction(const QString& name) const
+{
+    const auto candidates = m_functions.value(name);
+    for (const FunctionDeclNode* fn : candidates) {
+        if (!fn->fromDependency)
+            return fn;
+    }
+    return nullptr;
+}
+
+const FunctionDeclNode* TypeChecker::resolveFunction(const QString& name, const SourceSpan& span, bool diagnose)
+{
+    const auto candidates = m_functions.value(name);
+    if (candidates.isEmpty())
+        return nullptr;
+
+    for (const FunctionDeclNode* fn : candidates) {
+        if (fn->packageName == m_currentPackage)
+            return fn;
+    }
+
+    QList<const FunctionDeclNode*> visible;
+    QList<const FunctionDeclNode*> hidden;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (isFunctionVisible(*fn))
+            visible.push_back(fn);
+        else
+            hidden.push_back(fn);
+    }
+    if (visible.size() == 1)
+        return visible.front();
+    if (visible.size() > 1) {
+        if (diagnose)
+            error(span, QStringLiteral("function '%1' is ambiguous across dependency packages").arg(name));
+        return nullptr;
+    }
+    if (hidden.size() == 1) {
+        if (diagnose)
+            requireFunctionVisible(*hidden.front(), span);
+        return nullptr;
+    }
+    if (!hidden.isEmpty() && diagnose)
+        error(span, QStringLiteral("function '%1' exists only as non-exported dependency symbols").arg(name));
+    return nullptr;
 }
 
 void TypeChecker::collectBackends(const ProgramNode& program)
@@ -681,16 +737,16 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
         return checkFunctionValueCallShape(calleeType, lhs, args, span);
     }
 
-    if (const FunctionDeclNode* fn = m_functions.value(name, nullptr)) {
-        if (!requireFunctionVisible(*fn, nameSpan)) {
-            checkRestArgs();
-            return unknownExprType();
-        }
+    if (const FunctionDeclNode* fn = resolveFunction(name, nameSpan)) {
         if (isUnknownType(lhs.type)) {
             checkRestArgs();
             return unknownExprType();
         }
         return checkFunctionCallShape(name, *fn, lhs, args, span);
+    }
+    if (m_functions.contains(name)) {
+        checkRestArgs();
+        return unknownExprType();
     }
 
     if (m_builtins.hasFunction(name)) {
@@ -932,12 +988,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
         return {makeStructType(name->name), ValueCategory::PRValue, false};
     }
 
-    if (const FunctionDeclNode* fn = m_functions.value(name->name, nullptr)) {
-        if (!requireFunctionVisible(*fn, name->span)) {
-            for (const auto& argExpr : expr.args)
-                checkExpr(*argExpr);
-            return unknownExprType();
-        }
+    if (const FunctionDeclNode* fn = resolveFunction(name->name, name->span)) {
         const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
         const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
         if ((!variadic && expr.args.size() != fn->params.size()) || (variadic && expr.args.size() < fixedCount))
@@ -962,6 +1013,11 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
         for (size_t i = fixedCount; i < expr.args.size(); ++i)
             checkExpr(*expr.args[i]);
         return {typeFromAst(*fn->returnType), ValueCategory::PRValue, false};
+    }
+    if (m_functions.contains(name->name)) {
+        for (const auto& argExpr : expr.args)
+            checkExpr(*argExpr);
+        return unknownExprType();
     }
 
     if (m_builtins.hasFunction(name->name)) {
@@ -1501,14 +1557,18 @@ bool TypeChecker::hasUserToStrFor(const AbelType& type) const
 {
     if (type.kind != TypeKind::Struct)
         return false;
-    const FunctionDeclNode* fn = m_functions.value(QStringLiteral("to_str"), nullptr);
-    if (!fn || fn->params.size() != 1 || fn->params.front()->variadic)
-        return false;
-    const AbelType returnType = typeFromAst(*fn->returnType);
-    if (returnType.kind != TypeKind::Str)
-        return false;
-    const AbelType paramType = typeFromAst(*fn->params.front()->type);
-    return isAssignable(paramType, type);
+    const auto candidates = m_functions.value(QStringLiteral("to_str"));
+    for (const FunctionDeclNode* fn : candidates) {
+        if (!isFunctionVisible(*fn) || fn->params.size() != 1 || fn->params.front()->variadic)
+            continue;
+        const AbelType returnType = typeFromAst(*fn->returnType);
+        if (returnType.kind != TypeKind::Str)
+            continue;
+        const AbelType paramType = typeFromAst(*fn->params.front()->type);
+        if (isAssignable(paramType, type))
+            return true;
+    }
+    return false;
 }
 
 AbelType TypeChecker::valueTypeOfVariable(const AbelType& type) const

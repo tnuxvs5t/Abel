@@ -48,8 +48,12 @@ file(WRITE "${app_dir}/src/main.abel" [=[
 module app.main;
 use dep.lib.math;
 
+fn int private_value() {
+    return 1;
+}
+
 fn int main() {
-    return dep_value() + 1;
+    return dep_value() + private_value();
 }
 ]=])
 

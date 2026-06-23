@@ -52,7 +52,8 @@ private:
         QHash<QString, const FunctionDeclNode*> functions;
     };
 
-    QHash<QString, const FunctionDeclNode*> m_functions;
+    QHash<QString, QList<const FunctionDeclNode*>> m_functions;
+    QList<const FunctionDeclNode*> m_functionDecls;
     QHash<QString, StructInfo> m_structs;
     QHash<QString, BackendInfo> m_backends;
     QList<QHash<QString, VariableInfo>> m_scopes;
@@ -66,6 +67,8 @@ private:
     void collectStructs(const ProgramNode& program);
     void collectFunctions(const ProgramNode& program);
     void collectBackends(const ProgramNode& program);
+    const FunctionDeclNode* findRootFunction(const QString& name) const;
+    const FunctionDeclNode* resolveFunction(const QString& name, const SourceSpan& span, bool diagnose = true);
     void checkFunction(const FunctionDeclNode& fn);
     void checkStruct(const StructDeclNode& decl);
     void checkBackend(const BackendBlockNode& backend);

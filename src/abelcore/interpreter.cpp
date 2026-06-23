@@ -33,6 +33,24 @@ QString backendFrameSymbol(const QString& backendId, const QString& symbol)
     return QStringLiteral("backend %1::%2").arg(backendId, symbol);
 }
 
+class PackageGuard {
+public:
+    PackageGuard(QString& current, QString next)
+        : m_current(current), m_previous(current)
+    {
+        m_current = std::move(next);
+    }
+
+    ~PackageGuard()
+    {
+        m_current = m_previous;
+    }
+
+private:
+    QString& m_current;
+    QString m_previous;
+};
+
 bool isSourceLocationBuiltinName(const QString& name)
 {
     return name == QStringLiteral("__FILE__")
@@ -63,6 +81,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
     m_functions.clear();
     m_structs.clear();
     m_backends.clear();
+    m_currentPackage.clear();
     m_backendRegistry = BackendRegistry();
     m_activeBackendRegistry = backendRegistry ? backendRegistry : &m_backendRegistry;
 
@@ -89,7 +108,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
         return result;
     }
 
-    const FunctionDeclNode* main = m_functions.value(QStringLiteral("main"), nullptr);
+    const FunctionDeclNode* main = findRootFunction(QStringLiteral("main"));
     if (!main) {
         ctx.error(QStringLiteral("E0504"), QStringLiteral("missing fn int main() or fn void main()"), program.span);
         result.exitCode = 1;
@@ -152,15 +171,50 @@ bool Interpreter::collectFunctions(const ProgramNode& program, AbelRuntimeContex
     bool ok = true;
     for (const auto& decl : program.declarations) {
         if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get())) {
-            if (m_functions.contains(fn->name)) {
-                ctx.error(QStringLiteral("E0506"), QStringLiteral("duplicate function '%1'").arg(fn->name), fn->span);
-                ok = false;
-                continue;
+            const auto existing = m_functions.value(fn->name);
+            bool duplicateInPackage = false;
+            for (const FunctionDeclNode* other : existing) {
+                if (other->packageName == fn->packageName) {
+                    ctx.error(QStringLiteral("E0506"),
+                              QStringLiteral("duplicate function '%1' in package '%2'")
+                                  .arg(fn->name, fn->packageName),
+                              fn->span);
+                    ok = false;
+                    duplicateInPackage = true;
+                    break;
+                }
             }
-            m_functions.insert(fn->name, fn);
+            if (!duplicateInPackage)
+                m_functions[fn->name].push_back(fn);
         }
     }
     return ok;
+}
+
+const FunctionDeclNode* Interpreter::findRootFunction(const QString& name) const
+{
+    const auto candidates = m_functions.value(name);
+    for (const FunctionDeclNode* fn : candidates) {
+        if (!fn->fromDependency)
+            return fn;
+    }
+    return nullptr;
+}
+
+const FunctionDeclNode* Interpreter::resolveFunction(const QString& name) const
+{
+    const auto candidates = m_functions.value(name);
+    if (candidates.isEmpty())
+        return nullptr;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (fn->packageName == m_currentPackage)
+            return fn;
+    }
+    for (const FunctionDeclNode* fn : candidates) {
+        if (!fn->fromDependency || fn->exported)
+            return fn;
+    }
+    return nullptr;
 }
 
 bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx)
@@ -217,6 +271,7 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
                                            const std::vector<std::unique_ptr<ExprNode>>& args,
                                            const SourceSpan& span)
 {
+    PackageGuard package(m_currentPackage, fn.packageName);
     if (!self) {
         error(QStringLiteral("E0566"), QStringLiteral("missing struct receiver for '%1'").arg(fn.name), span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -309,6 +364,7 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
 
 ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args)
 {
+    PackageGuard package(m_currentPackage, fn.packageName);
     if (fn.debt || !fn.body) {
         error(QStringLiteral("E0507"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -357,6 +413,7 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
                                          const std::vector<std::unique_ptr<ExprNode>>& args,
                                          const SourceSpan& span)
 {
+    PackageGuard package(m_currentPackage, fn.packageName);
     if (fn.debt || !fn.body) {
         error(QStringLiteral("E0539"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -432,18 +489,22 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
     }
 
     ExecResult flow = execBlock(*fn.body);
-    if (m_ctx->hasError())
+    if (m_ctx->hasError()) {
         return ExecResult::returned(AbelValue::makeUnknown());
+    }
 
     const AbelType returnType = typeFromAst(*fn.returnType);
-    if (flow.kind == FlowKind::Return)
-        return ExecResult::returned(convertOrError(flow.value, returnType, flow.span), flow.span);
+    if (flow.kind == FlowKind::Return) {
+        ExecResult result = ExecResult::returned(convertOrError(flow.value, returnType, flow.span), flow.span);
+        return result;
+    }
     if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
         error(QStringLiteral("E0542"), QStringLiteral("break/continue cannot leave function '%1'").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
     }
-    if (returnType.kind == TypeKind::Void)
+    if (returnType.kind == TypeKind::Void) {
         return ExecResult::returned(AbelValue::makeVoid());
+    }
     error(QStringLiteral("E0543"), QStringLiteral("function '%1' ended without return").arg(fn.name), fn.span);
     return ExecResult::returned(AbelValue::makeUnknown());
 }
@@ -453,6 +514,7 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
                                              const std::vector<std::unique_ptr<ExprNode>>& restArgs,
                                              const SourceSpan& span)
 {
+    PackageGuard package(m_currentPackage, fn.packageName);
     if (fn.debt || !fn.body) {
         error(QStringLiteral("E0539"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -595,6 +657,7 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
         return AbelValue::makeUnknown();
 
     const LambdaExprNode& lambda = *function->lambda;
+    PackageGuard package(m_currentPackage, function->packageName);
     RuntimeFrameGuard frame(*m_ctx, true, lambdaFrameSymbol(), span);
     for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
         m_ctx->defineValueVariable(it.key(), it.value(), true, lambda.span);
@@ -681,6 +744,7 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
         return AbelValue::makeUnknown();
 
     const LambdaExprNode& lambda = *function->lambda;
+    PackageGuard package(m_currentPackage, function->packageName);
     RuntimeFrameGuard frame(*m_ctx, true, lambdaFrameSymbol(), span);
     for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
         m_ctx->defineValueVariable(it.key(), it.value(), true, lambda.span);
@@ -1273,7 +1337,7 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
         return AbelValue::makeUnknown();
     }
 
-    if (const FunctionDeclNode* fn = m_functions.value(targetName, nullptr))
+    if (const FunctionDeclNode* fn = resolveFunction(targetName))
         return callFunctionPipeExpr(*fn, *expr.lhs, args, expr.span).value;
 
     if (m_builtins.hasFunction(targetName)) {
@@ -1363,7 +1427,7 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         error(QStringLiteral("E0586"), QStringLiteral("variable '%1' is not a function value").arg(name->name), expr.span);
         return AbelValue::makeUnknown();
     }
-    const FunctionDeclNode* fn = m_functions.value(name->name, nullptr);
+    const FunctionDeclNode* fn = resolveFunction(name->name);
     if (!fn) {
         if (m_structs.contains(name->name))
             return evalStructConstructor(name->name, m_structs.value(name->name), expr.args, expr.span);
@@ -1468,6 +1532,7 @@ AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)
 
     auto function = std::make_shared<AbelFunctionValue>();
     function->lambda = &expr;
+    function->packageName = m_currentPackage;
 
     enum class CaptureMode {
         None,
@@ -1529,6 +1594,7 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
                                              const std::vector<std::unique_ptr<ExprNode>>& args,
                                              const SourceSpan& span)
 {
+    PackageGuard package(m_currentPackage, info.decl ? info.decl->packageName : QString());
     QHash<QString, AbelValue> fields;
     std::vector<QString> order;
     order.reserve(info.decl->fields.size());
@@ -1736,25 +1802,29 @@ std::optional<QString> Interpreter::stringifyValue(const AbelValue& value, const
     if (value.type().kind != TypeKind::Struct)
         return std::nullopt;
 
-    const FunctionDeclNode* fn = m_functions.value(QStringLiteral("to_str"), nullptr);
-    if (!fn || fn->params.size() != 1 || fn->params.front()->variadic)
-        return std::nullopt;
+    for (const FunctionDeclNode* fn : m_functions.value(QStringLiteral("to_str"))) {
+        if (fn->params.size() != 1 || fn->params.front()->variadic)
+            continue;
+        if (fn->fromDependency && !fn->exported && fn->packageName != m_currentPackage)
+            continue;
 
-    const AbelType returnType = typeFromAst(*fn->returnType);
-    if (returnType.kind != TypeKind::Str)
-        return std::nullopt;
+        const AbelType returnType = typeFromAst(*fn->returnType);
+        if (returnType.kind != TypeKind::Str)
+            continue;
 
-    const AbelType paramType = typeFromAst(*fn->params.front()->type);
-    if (!canAssignValue(paramType, value.type()))
-        return std::nullopt;
+        const AbelType paramType = typeFromAst(*fn->params.front()->type);
+        if (!canAssignValue(paramType, value.type()))
+            continue;
 
-    ExecResult result = callFunction(*fn, {value});
-    if (m_ctx->hasError())
-        return std::nullopt;
-    AbelValue text = convertOrError(result.value, makeType(TypeKind::Str), span);
-    if (m_ctx->hasError())
-        return std::nullopt;
-    return text.asString();
+        ExecResult result = callFunction(*fn, {value});
+        if (m_ctx->hasError())
+            return std::nullopt;
+        AbelValue text = convertOrError(result.value, makeType(TypeKind::Str), span);
+        if (m_ctx->hasError())
+            return std::nullopt;
+        return text.asString();
+    }
+    return std::nullopt;
 }
 
 void Interpreter::attachStringifier(BuiltinFunctionCall& call)

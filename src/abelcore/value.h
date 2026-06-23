@@ -84,6 +84,7 @@ struct AbelStructValue {
 
 struct AbelFunctionValue {
     const LambdaExprNode* lambda = nullptr;
+    QString packageName;
     QHash<QString, AbelValue> valueCaptures;
     QHash<QString, AbelLocation*> refCaptures;
     QHash<QString, bool> refConstness;

@@ -142,6 +142,18 @@ static void appendProgram(abel::ProgramNode& target, std::unique_ptr<abel::Progr
     }
 }
 
+static void tagDeclarationPackage(abel::DeclNode& decl, const abel::PackageSourceFile& sourceEntry)
+{
+    decl.packageName = sourceEntry.packageName;
+    decl.fromDependency = sourceEntry.fromDependency;
+    if (auto* s = dynamic_cast<abel::StructDeclNode*>(&decl)) {
+        for (auto& method : s->methods) {
+            method->packageName = sourceEntry.packageName;
+            method->fromDependency = sourceEntry.fromDependency;
+        }
+    }
+}
+
 static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& sourceFiles)
 {
     ParsedCliProgram result;
@@ -174,10 +186,8 @@ static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& s
         if (!parsed.diagnostics.isEmpty())
             continue;
 
-        for (auto& decl : parsed.program->declarations) {
-            decl->packageName = sourceEntry.packageName;
-            decl->fromDependency = sourceEntry.fromDependency;
-        }
+        for (auto& decl : parsed.program->declarations)
+            tagDeclarationPackage(*decl, sourceEntry);
         appendProgram(*result.program, std::move(parsed.program));
     }
 

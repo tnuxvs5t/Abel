@@ -35,7 +35,8 @@ private:
         QHash<QString, const FunctionDeclNode*> functions;
     };
 
-    QHash<QString, const FunctionDeclNode*> m_functions;
+    QHash<QString, QList<const FunctionDeclNode*>> m_functions;
+    QString m_currentPackage;
     QHash<QString, StructRuntimeInfo> m_structs;
     QHash<QString, BackendRuntimeInfo> m_backends;
     BackendRegistry m_backendRegistry;
@@ -46,6 +47,8 @@ private:
     bool collectFunctions(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectStructs(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx);
+    const FunctionDeclNode* findRootFunction(const QString& name) const;
+    const FunctionDeclNode* resolveFunction(const QString& name) const;
     ExecResult callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args);
     ExecResult callFunctionExpr(const FunctionDeclNode& fn, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExecResult callFunctionPipeExpr(const FunctionDeclNode& fn,
