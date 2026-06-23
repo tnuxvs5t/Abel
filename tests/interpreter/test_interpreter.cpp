@@ -492,19 +492,30 @@ private slots:
                     + round(3.5)
                     + trunc(3.9)
                     + pow(2, 3)
+                    + sin(0)
+                    + cos(0)
+                    + tan(0)
+                    + asin(0)
+                    + acos(1)
+                    + atan(0)
+                    + atan2(0, 1)
+                    + exp(0)
+                    + log(1)
+                    + log10(100)
                     + min(4, 5.5)
                     + max(2, 3)
                     + clamp(10, 0, 7)
                     + (4 |> max(9))
                     + (3 |> clamp(1, 9));
-                return a + cast<int>(score);
+                int divisors = gcd(54, 24) + lcm(6, 8) + (54 |> gcd(24));
+                return a + cast<int>(score) + divisors;
             }
         )");
         auto result = runSource(src);
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 58);
+        QCOMPARE(result.exitCode, 98);
     }
 
     void mathClampRejectsBadBoundsAtRuntime()

@@ -77,7 +77,19 @@ bool isMathBuiltinName(const QString& name)
         || name == QStringLiteral("ceil")
         || name == QStringLiteral("round")
         || name == QStringLiteral("trunc")
+        || name == QStringLiteral("sin")
+        || name == QStringLiteral("cos")
+        || name == QStringLiteral("tan")
+        || name == QStringLiteral("asin")
+        || name == QStringLiteral("acos")
+        || name == QStringLiteral("atan")
+        || name == QStringLiteral("atan2")
+        || name == QStringLiteral("exp")
+        || name == QStringLiteral("log")
+        || name == QStringLiteral("log10")
         || name == QStringLiteral("pow")
+        || name == QStringLiteral("gcd")
+        || name == QStringLiteral("lcm")
         || name == QStringLiteral("min")
         || name == QStringLiteral("max")
         || name == QStringLiteral("clamp");
@@ -86,6 +98,9 @@ bool isMathBuiltinName(const QString& name)
 int mathBuiltinArity(const QString& name)
 {
     if (name == QStringLiteral("pow")
+        || name == QStringLiteral("atan2")
+        || name == QStringLiteral("gcd")
+        || name == QStringLiteral("lcm")
         || name == QStringLiteral("min")
         || name == QStringLiteral("max")) {
         return 2;
@@ -102,7 +117,23 @@ bool mathBuiltinReturnsF64(const QString& name)
         || name == QStringLiteral("ceil")
         || name == QStringLiteral("round")
         || name == QStringLiteral("trunc")
+        || name == QStringLiteral("sin")
+        || name == QStringLiteral("cos")
+        || name == QStringLiteral("tan")
+        || name == QStringLiteral("asin")
+        || name == QStringLiteral("acos")
+        || name == QStringLiteral("atan")
+        || name == QStringLiteral("atan2")
+        || name == QStringLiteral("exp")
+        || name == QStringLiteral("log")
+        || name == QStringLiteral("log10")
         || name == QStringLiteral("pow");
+}
+
+bool mathBuiltinRequiresInteger(const QString& name)
+{
+    return name == QStringLiteral("gcd")
+        || name == QStringLiteral("lcm");
 }
 
 ExprType unknownExprType()
@@ -1697,14 +1728,20 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             checked.push_back(lhs);
             bool hasUnknown = isUnknownType(lhs.type);
             bool hasError = false;
-            if (!hasUnknown && !lhs.type.isNumeric()) {
+            if (!hasUnknown && mathBuiltinRequiresInteger(name) && !lhs.type.isInteger()) {
+                error(span, QStringLiteral("%1 expects integer argument, got %2").arg(name, lhs.type.displayName()));
+                hasError = true;
+            } else if (!hasUnknown && !mathBuiltinRequiresInteger(name) && !lhs.type.isNumeric()) {
                 error(span, QStringLiteral("%1 expects numeric argument, got %2").arg(name, lhs.type.displayName()));
                 hasError = true;
             }
             for (const auto& argExpr : args) {
                 ExprType arg = checkExpr(*argExpr);
                 hasUnknown = hasUnknown || isUnknownType(arg.type);
-                if (!isUnknownType(arg.type) && !arg.type.isNumeric()) {
+                if (!isUnknownType(arg.type) && mathBuiltinRequiresInteger(name) && !arg.type.isInteger()) {
+                    error(argExpr->span, QStringLiteral("%1 expects integer argument, got %2").arg(name, arg.type.displayName()));
+                    hasError = true;
+                } else if (!isUnknownType(arg.type) && !mathBuiltinRequiresInteger(name) && !arg.type.isNumeric()) {
                     error(argExpr->span, QStringLiteral("%1 expects numeric argument, got %2").arg(name, arg.type.displayName()));
                     hasError = true;
                 }
@@ -1716,6 +1753,8 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
                 return {checked[0].type, ValueCategory::PRValue, false};
             if (mathBuiltinReturnsF64(name))
                 return {makeType(TypeKind::F64), ValueCategory::PRValue, false};
+            if (mathBuiltinRequiresInteger(name))
+                return {numericBinaryResultType(checked[0].type, checked[1].type), ValueCategory::PRValue, false};
             if (name == QStringLiteral("clamp")) {
                 AbelType out = numericBinaryResultType(checked[0].type, checked[1].type);
                 out = numericBinaryResultType(out, checked[2].type);
@@ -2039,7 +2078,10 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             for (const auto& argExpr : expr.args) {
                 ExprType arg = checkExpr(*argExpr);
                 hasUnknown = hasUnknown || isUnknownType(arg.type);
-                if (!isUnknownType(arg.type) && !arg.type.isNumeric()) {
+                if (!isUnknownType(arg.type) && mathBuiltinRequiresInteger(name->name) && !arg.type.isInteger()) {
+                    error(argExpr->span, QStringLiteral("%1 expects integer argument, got %2").arg(name->name, arg.type.displayName()));
+                    hasError = true;
+                } else if (!isUnknownType(arg.type) && !mathBuiltinRequiresInteger(name->name) && !arg.type.isNumeric()) {
                     error(argExpr->span, QStringLiteral("%1 expects numeric argument, got %2").arg(name->name, arg.type.displayName()));
                     hasError = true;
                 }
@@ -2051,6 +2093,8 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                 return {checked[0].type, ValueCategory::PRValue, false};
             if (mathBuiltinReturnsF64(name->name))
                 return {makeType(TypeKind::F64), ValueCategory::PRValue, false};
+            if (mathBuiltinRequiresInteger(name->name))
+                return {numericBinaryResultType(checked[0].type, checked[1].type), ValueCategory::PRValue, false};
             if (name->name == QStringLiteral("clamp")) {
                 AbelType out = numericBinaryResultType(checked[0].type, checked[1].type);
                 out = numericBinaryResultType(out, checked[2].type);

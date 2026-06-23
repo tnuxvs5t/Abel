@@ -418,13 +418,16 @@ private slots:
                 int a = abs(-7);
                 double root = sqrt(9);
                 double shaped = floor(3.9) + ceil(3.1) + round(3.5) + trunc(3.9);
-                double powered = pow(2, 3);
+                double powered = pow(2, 3) + exp(0) + log(1) + log10(100);
+                double trig = sin(0) + cos(0) + tan(0) + asin(0) + acos(1) + atan(0) + atan2(0, 1);
+                int divisors = gcd(54, 24) + lcm(6, 8);
                 double lo = min(4, 5.5);
                 int hi = max(2, 3);
                 int bounded = clamp(10, 0, 7);
                 int pipeHi = 4 |> max(9);
                 int pipeBounded = 3 |> clamp(1, 9);
-                return a + cast<int>(root + shaped + powered + lo) + hi + bounded + pipeHi + pipeBounded;
+                int pipeGcd = 54 |> gcd(24);
+                return a + cast<int>(root + shaped + powered + trig + lo) + hi + bounded + pipeHi + pipeBounded + divisors + pipeGcd;
             }
         )");
         auto result = checkSource(src);
@@ -443,6 +446,12 @@ private slots:
 
         auto pipeBadArg = checkSource(QStringLiteral("fn int main() { int x = 3 |> clamp(\"x\", 9); return x; }"));
         QVERIFY(!pipeBadArg.diagnostics.isEmpty());
+
+        auto badGcdType = checkSource(QStringLiteral("fn int main() { int x = gcd(1.5, 2); return x; }"));
+        QVERIFY(!badGcdType.diagnostics.isEmpty());
+
+        auto badPipeGcdType = checkSource(QStringLiteral("fn int main() { int x = 1.5 |> gcd(2); return x; }"));
+        QVERIFY(!badPipeGcdType.diagnostics.isEmpty());
     }
 
     void rejectsScanBuiltinMisuse()

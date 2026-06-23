@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cmath>
 #include <exception>
+#include <numeric>
 
 namespace abel {
 
@@ -62,6 +63,20 @@ std::optional<AbelValue> requireNumericArg(BuiltinFunctionCall& call, int index)
         const SourceSpan span = index < static_cast<int>(call.argSpans.size()) ? call.argSpans[static_cast<size_t>(index)] : call.callSpan;
         call.ctx.error(QStringLiteral("E0431"),
                        QStringLiteral("%1 expects numeric argument, got %2")
+                           .arg(call.name, value.type().displayName()),
+                       span);
+        return std::nullopt;
+    }
+    return value;
+}
+
+std::optional<AbelValue> requireIntegerArg(BuiltinFunctionCall& call, int index)
+{
+    const AbelValue& value = call.args[static_cast<size_t>(index)];
+    if (!value.type().isInteger()) {
+        const SourceSpan span = index < static_cast<int>(call.argSpans.size()) ? call.argSpans[static_cast<size_t>(index)] : call.callSpan;
+        call.ctx.error(QStringLiteral("E0435"),
+                       QStringLiteral("%1 expects integer argument, got %2")
                            .arg(call.name, value.type().displayName()),
                        span);
         return std::nullopt;
@@ -269,7 +284,16 @@ AbelValue builtinMath(BuiltinFunctionCall& call)
         || name == QStringLiteral("floor")
         || name == QStringLiteral("ceil")
         || name == QStringLiteral("round")
-        || name == QStringLiteral("trunc")) {
+        || name == QStringLiteral("trunc")
+        || name == QStringLiteral("sin")
+        || name == QStringLiteral("cos")
+        || name == QStringLiteral("tan")
+        || name == QStringLiteral("asin")
+        || name == QStringLiteral("acos")
+        || name == QStringLiteral("atan")
+        || name == QStringLiteral("exp")
+        || name == QStringLiteral("log")
+        || name == QStringLiteral("log10")) {
         auto value = requireNumericArg(call, 0);
         if (!value.has_value())
             return AbelValue::makeUnknown();
@@ -282,15 +306,47 @@ AbelValue builtinMath(BuiltinFunctionCall& call)
             return AbelValue::makeDouble(std::ceil(x));
         if (name == QStringLiteral("round"))
             return AbelValue::makeDouble(std::round(x));
-        return AbelValue::makeDouble(std::trunc(x));
+        if (name == QStringLiteral("trunc"))
+            return AbelValue::makeDouble(std::trunc(x));
+        if (name == QStringLiteral("sin"))
+            return AbelValue::makeDouble(std::sin(x));
+        if (name == QStringLiteral("cos"))
+            return AbelValue::makeDouble(std::cos(x));
+        if (name == QStringLiteral("tan"))
+            return AbelValue::makeDouble(std::tan(x));
+        if (name == QStringLiteral("asin"))
+            return AbelValue::makeDouble(std::asin(x));
+        if (name == QStringLiteral("acos"))
+            return AbelValue::makeDouble(std::acos(x));
+        if (name == QStringLiteral("atan"))
+            return AbelValue::makeDouble(std::atan(x));
+        if (name == QStringLiteral("exp"))
+            return AbelValue::makeDouble(std::exp(x));
+        if (name == QStringLiteral("log"))
+            return AbelValue::makeDouble(std::log(x));
+        return AbelValue::makeDouble(std::log10(x));
     }
 
-    if (name == QStringLiteral("pow")) {
+    if (name == QStringLiteral("pow") || name == QStringLiteral("atan2")) {
         auto lhs = requireNumericArg(call, 0);
         auto rhs = requireNumericArg(call, 1);
         if (!lhs.has_value() || !rhs.has_value())
             return AbelValue::makeUnknown();
+        if (name == QStringLiteral("atan2"))
+            return AbelValue::makeDouble(std::atan2(lhs->asDouble(), rhs->asDouble()));
         return AbelValue::makeDouble(std::pow(lhs->asDouble(), rhs->asDouble()));
+    }
+
+    if (name == QStringLiteral("gcd") || name == QStringLiteral("lcm")) {
+        auto lhs = requireIntegerArg(call, 0);
+        auto rhs = requireIntegerArg(call, 1);
+        if (!lhs.has_value() || !rhs.has_value())
+            return AbelValue::makeUnknown();
+        const AbelType outType = numericResultType(lhs->type(), rhs->type());
+        const qint64 result = name == QStringLiteral("gcd")
+            ? std::gcd(lhs->asInt(), rhs->asInt())
+            : std::lcm(lhs->asInt(), rhs->asInt());
+        return AbelValue::makeInt(result, outType.kind);
     }
 
     if (name == QStringLiteral("min") || name == QStringLiteral("max")) {
@@ -955,7 +1011,19 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("ceil"), 1, 1, false, builtinMath, QStringLiteral("ceil as f64")});
     registry.registerFunction({QStringLiteral("round"), 1, 1, false, builtinMath, QStringLiteral("round as f64")});
     registry.registerFunction({QStringLiteral("trunc"), 1, 1, false, builtinMath, QStringLiteral("truncate as f64")});
+    registry.registerFunction({QStringLiteral("sin"), 1, 1, false, builtinMath, QStringLiteral("sine as f64")});
+    registry.registerFunction({QStringLiteral("cos"), 1, 1, false, builtinMath, QStringLiteral("cosine as f64")});
+    registry.registerFunction({QStringLiteral("tan"), 1, 1, false, builtinMath, QStringLiteral("tangent as f64")});
+    registry.registerFunction({QStringLiteral("asin"), 1, 1, false, builtinMath, QStringLiteral("arcsine as f64")});
+    registry.registerFunction({QStringLiteral("acos"), 1, 1, false, builtinMath, QStringLiteral("arccosine as f64")});
+    registry.registerFunction({QStringLiteral("atan"), 1, 1, false, builtinMath, QStringLiteral("arctangent as f64")});
+    registry.registerFunction({QStringLiteral("atan2"), 2, 2, false, builtinMath, QStringLiteral("two-argument arctangent as f64")});
+    registry.registerFunction({QStringLiteral("exp"), 1, 1, false, builtinMath, QStringLiteral("exponential as f64")});
+    registry.registerFunction({QStringLiteral("log"), 1, 1, false, builtinMath, QStringLiteral("natural logarithm as f64")});
+    registry.registerFunction({QStringLiteral("log10"), 1, 1, false, builtinMath, QStringLiteral("base-10 logarithm as f64")});
     registry.registerFunction({QStringLiteral("pow"), 2, 2, false, builtinMath, QStringLiteral("power as f64")});
+    registry.registerFunction({QStringLiteral("gcd"), 2, 2, false, builtinMath, QStringLiteral("greatest common divisor")});
+    registry.registerFunction({QStringLiteral("lcm"), 2, 2, false, builtinMath, QStringLiteral("least common multiple")});
     registry.registerFunction({QStringLiteral("min"), 2, 2, false, builtinMath, QStringLiteral("minimum numeric value")});
     registry.registerFunction({QStringLiteral("max"), 2, 2, false, builtinMath, QStringLiteral("maximum numeric value")});
     registry.registerFunction({QStringLiteral("clamp"), 3, 3, false, builtinMath, QStringLiteral("clamp numeric value")});
