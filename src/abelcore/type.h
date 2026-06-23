@@ -12,8 +12,14 @@ struct TypeNode;
 enum class TypeKind {
     Void,
     Bool,
+    I8,
+    I16,
     I32,
     I64,
+    U8,
+    U16,
+    U32,
+    U64,
     F64,
     Char,
     Str,
@@ -37,7 +43,10 @@ struct AbelType {
     bool operator==(const AbelType& other) const;
     bool operator!=(const AbelType& other) const { return !(*this == other); }
     bool isInteger() const;
+    bool isSignedInteger() const;
+    bool isUnsignedInteger() const;
     bool isNumeric() const;
+    int integerBitWidth() const;
     bool isBool() const;
     bool isVoid() const;
     bool isPointer() const;

@@ -4,6 +4,34 @@
 
 namespace abel {
 
+namespace {
+
+qint64 normalizeIntegerValue(qint64 value, TypeKind kind)
+{
+    switch (kind) {
+    case TypeKind::I8:
+        return static_cast<qint8>(value);
+    case TypeKind::I16:
+        return static_cast<qint16>(value);
+    case TypeKind::I32:
+        return static_cast<qint32>(value);
+    case TypeKind::I64:
+        return value;
+    case TypeKind::U8:
+        return static_cast<quint8>(value);
+    case TypeKind::U16:
+        return static_cast<quint16>(value);
+    case TypeKind::U32:
+        return static_cast<qint64>(static_cast<quint32>(value));
+    case TypeKind::U64:
+        return static_cast<qint64>(static_cast<quint64>(value));
+    default:
+        return value;
+    }
+}
+
+} // namespace
+
 AbelValue::AbelValue(AbelType type, Payload payload)
     : m_type(std::move(type))
     , m_payload(std::move(payload))
@@ -22,7 +50,7 @@ AbelValue AbelValue::makeBool(bool value)
 
 AbelValue AbelValue::makeInt(qint64 value, TypeKind kind)
 {
-    return AbelValue(makeType(kind), value);
+    return AbelValue(makeType(kind), normalizeIntegerValue(value, kind));
 }
 
 AbelValue AbelValue::makeDouble(double value)
@@ -146,8 +174,14 @@ QString AbelValue::debugString() const
     switch (m_type.kind) {
     case TypeKind::Void: return QStringLiteral("<void>");
     case TypeKind::Bool: return asBool() ? QStringLiteral("true") : QStringLiteral("false");
+    case TypeKind::I8:
+    case TypeKind::I16:
     case TypeKind::I32:
     case TypeKind::I64: return QString::number(asInt());
+    case TypeKind::U8:
+    case TypeKind::U16:
+    case TypeKind::U32:
+    case TypeKind::U64: return QString::number(static_cast<quint64>(asInt()));
     case TypeKind::F64: return QString::number(asDouble(), 'g', 16);
     case TypeKind::Char: return QString(asChar());
     case TypeKind::Str: return asString();
@@ -172,8 +206,14 @@ AbelValue defaultValueForType(const AbelType& type)
     switch (type.kind) {
     case TypeKind::Void: return AbelValue::makeVoid();
     case TypeKind::Bool: return AbelValue::makeBool(false);
+    case TypeKind::I8: return AbelValue::makeInt(0, TypeKind::I8);
+    case TypeKind::I16: return AbelValue::makeInt(0, TypeKind::I16);
     case TypeKind::I32: return AbelValue::makeInt(0, TypeKind::I32);
     case TypeKind::I64: return AbelValue::makeInt(0, TypeKind::I64);
+    case TypeKind::U8: return AbelValue::makeInt(0, TypeKind::U8);
+    case TypeKind::U16: return AbelValue::makeInt(0, TypeKind::U16);
+    case TypeKind::U32: return AbelValue::makeInt(0, TypeKind::U32);
+    case TypeKind::U64: return AbelValue::makeInt(0, TypeKind::U64);
     case TypeKind::F64: return AbelValue::makeDouble(0.0);
     case TypeKind::Char: return AbelValue::makeChar(QChar());
     case TypeKind::Str: return AbelValue::makeString(QString());
@@ -217,17 +257,11 @@ AbelValue convertValue(const AbelValue& value, const AbelType& target)
         return value;
     if (value.type().kind == target.kind)
         return value;
-    if (target.kind == TypeKind::I32 && value.type().isNumeric()) {
+    if (target.isInteger() && value.type().isNumeric()) {
         const qint64 converted = value.type().kind == TypeKind::F64
             ? static_cast<qint64>(value.asDouble())
             : value.asInt();
-        return AbelValue::makeInt(converted, TypeKind::I32);
-    }
-    if (target.kind == TypeKind::I64 && value.type().isNumeric()) {
-        const qint64 converted = value.type().kind == TypeKind::F64
-            ? static_cast<qint64>(value.asDouble())
-            : value.asInt();
-        return AbelValue::makeInt(converted, TypeKind::I64);
+        return AbelValue::makeInt(converted, target.kind);
     }
     if (target.kind == TypeKind::F64 && value.type().isNumeric())
         return AbelValue::makeDouble(value.asDouble());

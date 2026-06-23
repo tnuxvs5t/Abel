@@ -67,6 +67,26 @@ bool isReadOnlyBinding(const AbelType& type, bool syntacticConst)
     return syntacticConst || type.isConst || isConstReferenceType(type);
 }
 
+TypeKind integerTypeForWidth(int width, bool unsignedResult)
+{
+    if (width <= 8)
+        return unsignedResult ? TypeKind::U8 : TypeKind::I8;
+    if (width <= 16)
+        return unsignedResult ? TypeKind::U16 : TypeKind::I16;
+    if (width <= 32)
+        return unsignedResult ? TypeKind::U32 : TypeKind::I32;
+    return unsignedResult ? TypeKind::U64 : TypeKind::I64;
+}
+
+AbelType numericBinaryResultType(const AbelType& lhs, const AbelType& rhs)
+{
+    if (lhs.kind == TypeKind::F64 || rhs.kind == TypeKind::F64)
+        return makeType(TypeKind::F64);
+    const int width = std::max({32, lhs.integerBitWidth(), rhs.integerBitWidth()});
+    const bool unsignedResult = lhs.isUnsignedInteger() || rhs.isUnsignedInteger();
+    return makeType(integerTypeForWidth(width, unsignedResult));
+}
+
 ExprType callReturnExprType(const AbelType& returnType)
 {
     if (returnType.isReference() && returnType.pointee)
@@ -1235,11 +1255,7 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
     if (op == QStringLiteral("/") || op == QStringLiteral("*") || op == QStringLiteral("+") || op == QStringLiteral("-")
         || op == QStringLiteral("%") || op == QStringLiteral("%%") || op == QStringLiteral("**")
         || op == QStringLiteral("<?") || op == QStringLiteral(">?")) {
-        if (lhs.type.kind == TypeKind::F64 || rhs.type.kind == TypeKind::F64)
-            return {makeType(TypeKind::F64), ValueCategory::PRValue, false};
-        if (lhs.type.kind == TypeKind::I64 || rhs.type.kind == TypeKind::I64)
-            return {makeType(TypeKind::I64), ValueCategory::PRValue, false};
-        return {makeType(TypeKind::I32), ValueCategory::PRValue, false};
+        return {numericBinaryResultType(lhs.type, rhs.type), ValueCategory::PRValue, false};
     }
 
     return errorExpr(expr.span, QStringLiteral("unknown binary operator '%1'").arg(op));
@@ -2315,8 +2331,14 @@ bool TypeChecker::isDefaultConstructible(const AbelType& type, QSet<QString>& vi
     switch (type.kind) {
     case TypeKind::Void:
     case TypeKind::Bool:
+    case TypeKind::I8:
+    case TypeKind::I16:
     case TypeKind::I32:
     case TypeKind::I64:
+    case TypeKind::U8:
+    case TypeKind::U16:
+    case TypeKind::U32:
+    case TypeKind::U64:
     case TypeKind::F64:
     case TypeKind::Char:
     case TypeKind::Str:
@@ -2357,8 +2379,14 @@ bool TypeChecker::isStringifiable(const AbelType& type)
     switch (type.kind) {
     case TypeKind::Void:
     case TypeKind::Bool:
+    case TypeKind::I8:
+    case TypeKind::I16:
     case TypeKind::I32:
     case TypeKind::I64:
+    case TypeKind::U8:
+    case TypeKind::U16:
+    case TypeKind::U32:
+    case TypeKind::U64:
     case TypeKind::F64:
     case TypeKind::Char:
     case TypeKind::Str:

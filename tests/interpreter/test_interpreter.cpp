@@ -64,6 +64,36 @@ private slots:
         QCOMPARE(result.exitCode, 7);
     }
 
+    void runsFixedWidthIntegerTypes()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                i8 a = 127;
+                i8 wrapped = a + 1;
+                i16 b = wrapped + 130;
+                i32 c = cast<i32>(b);
+                i64 d = cast<i64>(c);
+
+                u8 e = 255;
+                u8 zero = e + 1;
+                u16 f = e + 10;
+                u32 g = cast<u32>(f);
+                u64 h = cast<u64>(g);
+
+                str text = build_string(wrapped, ":", zero, ":", h);
+                if (text == "-128:0:265") {
+                    return cast<int>(d + h);
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 267);
+    }
+
     void handlesVariablesAndLoops()
     {
         const QString src = QStringLiteral(R"(

@@ -46,9 +46,16 @@ std::optional<QString> stringifyValue(BuiltinFunctionCall& call, const AbelValue
         return QString();
     case TypeKind::Bool:
         return value.asBool() ? QStringLiteral("true") : QStringLiteral("false");
+    case TypeKind::I8:
+    case TypeKind::I16:
     case TypeKind::I32:
     case TypeKind::I64:
         return QString::number(value.asInt());
+    case TypeKind::U8:
+    case TypeKind::U16:
+    case TypeKind::U32:
+    case TypeKind::U64:
+        return QString::number(static_cast<quint64>(value.asInt()));
     case TypeKind::F64:
         return QString::number(value.asDouble(), 'g', 16);
     case TypeKind::Char:
@@ -114,9 +121,16 @@ bool valuesEqual(const AbelValue& lhs, const AbelValue& rhs)
         return true;
     case TypeKind::Bool:
         return lhs.asBool() == rhs.asBool();
+    case TypeKind::I8:
+    case TypeKind::I16:
     case TypeKind::I32:
     case TypeKind::I64:
         return lhs.asInt() == rhs.asInt();
+    case TypeKind::U8:
+    case TypeKind::U16:
+    case TypeKind::U32:
+    case TypeKind::U64:
+        return static_cast<quint64>(lhs.asInt()) == static_cast<quint64>(rhs.asInt());
     case TypeKind::F64:
         return lhs.asDouble() == rhs.asDouble();
     case TypeKind::Char:

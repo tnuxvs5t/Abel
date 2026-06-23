@@ -26,12 +26,48 @@ bool AbelType::operator==(const AbelType& other) const
 
 bool AbelType::isInteger() const
 {
-    return kind == TypeKind::I32 || kind == TypeKind::I64;
+    return isSignedInteger() || isUnsignedInteger();
+}
+
+bool AbelType::isSignedInteger() const
+{
+    return kind == TypeKind::I8
+        || kind == TypeKind::I16
+        || kind == TypeKind::I32
+        || kind == TypeKind::I64;
+}
+
+bool AbelType::isUnsignedInteger() const
+{
+    return kind == TypeKind::U8
+        || kind == TypeKind::U16
+        || kind == TypeKind::U32
+        || kind == TypeKind::U64;
 }
 
 bool AbelType::isNumeric() const
 {
     return isInteger() || kind == TypeKind::F64;
+}
+
+int AbelType::integerBitWidth() const
+{
+    switch (kind) {
+    case TypeKind::I8:
+    case TypeKind::U8:
+        return 8;
+    case TypeKind::I16:
+    case TypeKind::U16:
+        return 16;
+    case TypeKind::I32:
+    case TypeKind::U32:
+        return 32;
+    case TypeKind::I64:
+    case TypeKind::U64:
+        return 64;
+    default:
+        return 0;
+    }
 }
 
 bool AbelType::isBool() const
@@ -62,8 +98,14 @@ QString AbelType::displayName() const
     switch (kind) {
     case TypeKind::Void: out = QStringLiteral("void"); break;
     case TypeKind::Bool: out = QStringLiteral("bool"); break;
+    case TypeKind::I8: out = QStringLiteral("i8"); break;
+    case TypeKind::I16: out = QStringLiteral("i16"); break;
     case TypeKind::I32: out = QStringLiteral("i32"); break;
     case TypeKind::I64: out = QStringLiteral("i64"); break;
+    case TypeKind::U8: out = QStringLiteral("u8"); break;
+    case TypeKind::U16: out = QStringLiteral("u16"); break;
+    case TypeKind::U32: out = QStringLiteral("u32"); break;
+    case TypeKind::U64: out = QStringLiteral("u64"); break;
     case TypeKind::F64: out = QStringLiteral("f64"); break;
     case TypeKind::Char: out = QStringLiteral("char"); break;
     case TypeKind::Str: out = QStringLiteral("str"); break;
@@ -158,10 +200,22 @@ AbelType typeFromName(const QString& name)
         return makeType(TypeKind::Void, name);
     if (name == QStringLiteral("bool"))
         return makeType(TypeKind::Bool, name);
+    if (name == QStringLiteral("i8"))
+        return makeType(TypeKind::I8, name);
+    if (name == QStringLiteral("i16"))
+        return makeType(TypeKind::I16, name);
     if (name == QStringLiteral("int") || name == QStringLiteral("i32"))
         return makeType(TypeKind::I32, name);
     if (name == QStringLiteral("long") || name == QStringLiteral("ll") || name == QStringLiteral("i64"))
         return makeType(TypeKind::I64, name);
+    if (name == QStringLiteral("u8"))
+        return makeType(TypeKind::U8, name);
+    if (name == QStringLiteral("u16"))
+        return makeType(TypeKind::U16, name);
+    if (name == QStringLiteral("u32"))
+        return makeType(TypeKind::U32, name);
+    if (name == QStringLiteral("u64"))
+        return makeType(TypeKind::U64, name);
     if (name == QStringLiteral("double") || name == QStringLiteral("f64"))
         return makeType(TypeKind::F64, name);
     if (name == QStringLiteral("char"))

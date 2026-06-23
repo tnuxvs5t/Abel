@@ -2,6 +2,7 @@
 
 #include <QSet>
 
+#include <algorithm>
 #include <cmath>
 
 namespace abel {
@@ -121,6 +122,24 @@ bool vectorElementReadOnly(const AbelValue& vectorValue, bool receiverReadOnly)
     return receiverReadOnly
         || vectorValue.type().isConst
         || (vectorValue.type().pointee && vectorValue.type().pointee->isConst);
+}
+
+TypeKind integerTypeForWidth(int width, bool unsignedResult)
+{
+    if (width <= 8)
+        return unsignedResult ? TypeKind::U8 : TypeKind::I8;
+    if (width <= 16)
+        return unsignedResult ? TypeKind::U16 : TypeKind::I16;
+    if (width <= 32)
+        return unsignedResult ? TypeKind::U32 : TypeKind::I32;
+    return unsignedResult ? TypeKind::U64 : TypeKind::I64;
+}
+
+TypeKind numericBinaryResultKind(const AbelType& lhs, const AbelType& rhs)
+{
+    const int width = std::max({32, lhs.integerBitWidth(), rhs.integerBitWidth()});
+    const bool unsignedResult = lhs.isUnsignedInteger() || rhs.isUnsignedInteger();
+    return integerTypeForWidth(width, unsignedResult);
 }
 
 class DeclContextGuard {
@@ -1638,8 +1657,14 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
         bool eq = false;
         switch (lhs.type().kind) {
         case TypeKind::Bool: eq = lhs.asBool() == rhs.asBool(); break;
+        case TypeKind::I8:
+        case TypeKind::I16:
         case TypeKind::I32:
         case TypeKind::I64: eq = lhs.asInt() == rhs.asInt(); break;
+        case TypeKind::U8:
+        case TypeKind::U16:
+        case TypeKind::U32:
+        case TypeKind::U64: eq = static_cast<quint64>(lhs.asInt()) == static_cast<quint64>(rhs.asInt()); break;
         case TypeKind::F64: eq = lhs.asDouble() == rhs.asDouble(); break;
         case TypeKind::Char: eq = lhs.asChar() == rhs.asChar(); break;
         case TypeKind::Str: eq = lhs.asString() == rhs.asString(); break;
@@ -1668,7 +1693,12 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
 
     const bool useDouble = lhs.type().kind == TypeKind::F64 || rhs.type().kind == TypeKind::F64;
     if (op == QStringLiteral("==") || op == QStringLiteral("!=")) {
-        const bool eq = useDouble ? lhs.asDouble() == rhs.asDouble() : lhs.asInt() == rhs.asInt();
+        const bool useUnsigned = !useDouble && (lhs.type().isUnsignedInteger() || rhs.type().isUnsignedInteger());
+        const bool eq = useDouble
+            ? lhs.asDouble() == rhs.asDouble()
+            : useUnsigned
+                ? static_cast<quint64>(lhs.asInt()) == static_cast<quint64>(rhs.asInt())
+                : lhs.asInt() == rhs.asInt();
         return AbelValue::makeBool(op == QStringLiteral("==") ? eq : !eq);
     }
     if (useDouble) {
@@ -1686,11 +1716,43 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
         if (op == QStringLiteral("<?")) return AbelValue::makeDouble(a < b ? a : b);
         if (op == QStringLiteral(">?")) return AbelValue::makeDouble(a > b ? a : b);
     } else {
+        const TypeKind resultKind = numericBinaryResultKind(lhs.type(), rhs.type());
+        const bool useUnsigned = lhs.type().isUnsignedInteger() || rhs.type().isUnsignedInteger();
+        if (useUnsigned) {
+            const quint64 a = static_cast<quint64>(lhs.asInt());
+            const quint64 b = static_cast<quint64>(rhs.asInt());
+            if (op == QStringLiteral("+")) return AbelValue::makeInt(static_cast<qint64>(a + b), resultKind);
+            if (op == QStringLiteral("-")) return AbelValue::makeInt(static_cast<qint64>(a - b), resultKind);
+            if (op == QStringLiteral("*")) return AbelValue::makeInt(static_cast<qint64>(a * b), resultKind);
+            if (op == QStringLiteral("/")) {
+                if (b == 0) {
+                    error(QStringLiteral("E0517"), QStringLiteral("division by zero"), expr.span);
+                    return AbelValue::makeUnknown();
+                }
+                return AbelValue::makeInt(static_cast<qint64>(a / b), resultKind);
+            }
+            if (op == QStringLiteral("%") || op == QStringLiteral("%%")) {
+                if (b == 0) {
+                    error(QStringLiteral("E0518"), QStringLiteral("modulo by zero"), expr.span);
+                    return AbelValue::makeUnknown();
+                }
+                return AbelValue::makeInt(static_cast<qint64>(a % b), resultKind);
+            }
+            if (op == QStringLiteral("**")) {
+                quint64 out = 1;
+                for (quint64 i = 0; i < b; ++i)
+                    out *= a;
+                return AbelValue::makeInt(static_cast<qint64>(out), resultKind);
+            }
+            if (op == QStringLiteral("<")) return AbelValue::makeBool(a < b);
+            if (op == QStringLiteral("<=")) return AbelValue::makeBool(a <= b);
+            if (op == QStringLiteral(">")) return AbelValue::makeBool(a > b);
+            if (op == QStringLiteral(">=")) return AbelValue::makeBool(a >= b);
+            if (op == QStringLiteral("<?")) return AbelValue::makeInt(static_cast<qint64>(a < b ? a : b), resultKind);
+            if (op == QStringLiteral(">?")) return AbelValue::makeInt(static_cast<qint64>(a > b ? a : b), resultKind);
+        }
         const qint64 a = lhs.asInt();
         const qint64 b = rhs.asInt();
-        const TypeKind resultKind = lhs.type().kind == TypeKind::I64 || rhs.type().kind == TypeKind::I64
-            ? TypeKind::I64
-            : TypeKind::I32;
         if (op == QStringLiteral("+")) return AbelValue::makeInt(a + b, resultKind);
         if (op == QStringLiteral("-")) return AbelValue::makeInt(a - b, resultKind);
         if (op == QStringLiteral("*")) return AbelValue::makeInt(a * b, resultKind);

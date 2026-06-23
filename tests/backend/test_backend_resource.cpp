@@ -1,4 +1,5 @@
 #include "abelcore/backend_interface.h"
+#include "abelcore/backend_binder.h"
 #include "abelcore/backend_registry.h"
 #include "abelcore/interpreter.h"
 #include "abelcore/lexer.h"
@@ -135,6 +136,38 @@ private slots:
         QCOMPARE(seenSymbol, QStringLiteral("MathSystem.fast_add"));
         QCOMPARE(seenArgCount, static_cast<size_t>(2));
         QCOMPARE(value.asInt(), 9);
+    }
+
+    void backendBinderDescribesFixedWidthIntegers()
+    {
+        auto fn = [](qint8 a, qint16 b, quint8 c, quint16 d, quint32 e, quint64 f) -> quint64 {
+            return static_cast<quint64>(a) + static_cast<quint64>(b) + c + d + e + f;
+        };
+        auto desc = abel::AbelBackendBinder::describe(QStringLiteral("MathSystem.fixed"), fn);
+        QCOMPARE(desc.returnType.kind, abel::TypeKind::U64);
+        QCOMPARE(desc.params.size(), static_cast<size_t>(6));
+        QCOMPARE(desc.params[0].kind, abel::TypeKind::I8);
+        QCOMPARE(desc.params[1].kind, abel::TypeKind::I16);
+        QCOMPARE(desc.params[2].kind, abel::TypeKind::U8);
+        QCOMPARE(desc.params[3].kind, abel::TypeKind::U16);
+        QCOMPARE(desc.params[4].kind, abel::TypeKind::U32);
+        QCOMPARE(desc.params[5].kind, abel::TypeKind::U64);
+
+        abel::AbelRuntimeContext ctx;
+        auto runtime = abel::AbelBackendBinder::bind(fn);
+        auto value = runtime({
+            abel::AbelValue::makeInt(1, abel::TypeKind::I8),
+            abel::AbelValue::makeInt(2, abel::TypeKind::I16),
+            abel::AbelValue::makeInt(3, abel::TypeKind::U8),
+            abel::AbelValue::makeInt(4, abel::TypeKind::U16),
+            abel::AbelValue::makeInt(5, abel::TypeKind::U32),
+            abel::AbelValue::makeInt(6, abel::TypeKind::U64),
+        }, ctx);
+        for (const auto& d : ctx.diagnostics())
+            qWarning() << d.code << d.message;
+        QVERIFY(!ctx.hasError());
+        QCOMPARE(value.type().kind, abel::TypeKind::U64);
+        QCOMPARE(static_cast<quint64>(value.asInt()), quint64{21});
     }
 
     void parsesValidResourceNodeJson()

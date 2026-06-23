@@ -47,6 +47,35 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsFixedWidthIntegerTypes()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int take_i16(i16 x) {
+                return x;
+            }
+
+            fn int main() {
+                i8 a = -1;
+                i16 b = a + 2;
+                i32 c = b + 3;
+                i64 d = cast<i64>(c);
+
+                u8 e = 250;
+                u16 f = e + 10;
+                u32 g = cast<u32>(f);
+                u64 h = cast<u64>(g);
+
+                vector<u16> xs = {e, f};
+                str s = build_string(a, b, c, d, e, f, g, h, xs.len());
+                return take_i16(b) + cast<int>(h) + xs.len();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void rejectsIntegerIfCondition()
     {
         auto result = checkSource(QStringLiteral("fn int main() { if (1) { return 1; } return 0; }"));

@@ -4,6 +4,7 @@
 
 #include <QChar>
 #include <QList>
+#include <QtGlobal>
 
 #include <functional>
 #include <tuple>
@@ -247,10 +248,22 @@ private:
         using Bare = std::remove_cvref_t<T>;
         if constexpr (std::is_same_v<Bare, bool>) {
             return makeType(TypeKind::Bool);
+        } else if constexpr (std::is_same_v<Bare, qint8>) {
+            return makeType(TypeKind::I8);
+        } else if constexpr (std::is_same_v<Bare, qint16>) {
+            return makeType(TypeKind::I16);
         } else if constexpr (std::is_same_v<Bare, int>) {
             return makeType(TypeKind::I32);
         } else if constexpr (std::is_same_v<Bare, qint64>) {
             return makeType(TypeKind::I64);
+        } else if constexpr (std::is_same_v<Bare, quint8>) {
+            return makeType(TypeKind::U8);
+        } else if constexpr (std::is_same_v<Bare, quint16>) {
+            return makeType(TypeKind::U16);
+        } else if constexpr (std::is_same_v<Bare, quint32>) {
+            return makeType(TypeKind::U32);
+        } else if constexpr (std::is_same_v<Bare, quint64>) {
+            return makeType(TypeKind::U64);
         } else if constexpr (std::is_same_v<Bare, double>) {
             return makeType(TypeKind::F64);
         } else if constexpr (std::is_same_v<Bare, QChar> || std::is_same_v<Bare, char>) {
@@ -303,10 +316,22 @@ private:
         using Bare = std::remove_cvref_t<T>;
         if constexpr (std::is_same_v<Bare, bool>) {
             return value.asBool();
+        } else if constexpr (std::is_same_v<Bare, qint8>) {
+            return static_cast<qint8>(value.asInt());
+        } else if constexpr (std::is_same_v<Bare, qint16>) {
+            return static_cast<qint16>(value.asInt());
         } else if constexpr (std::is_same_v<Bare, int>) {
             return static_cast<int>(value.asInt());
         } else if constexpr (std::is_same_v<Bare, qint64>) {
             return value.asInt();
+        } else if constexpr (std::is_same_v<Bare, quint8>) {
+            return static_cast<quint8>(value.asInt());
+        } else if constexpr (std::is_same_v<Bare, quint16>) {
+            return static_cast<quint16>(value.asInt());
+        } else if constexpr (std::is_same_v<Bare, quint32>) {
+            return static_cast<quint32>(value.asInt());
+        } else if constexpr (std::is_same_v<Bare, quint64>) {
+            return static_cast<quint64>(value.asInt());
         } else if constexpr (std::is_same_v<Bare, double>) {
             return value.asDouble();
         } else if constexpr (std::is_same_v<Bare, QChar>) {
@@ -330,10 +355,22 @@ private:
             return std::forward<T>(value);
         } else if constexpr (std::is_same_v<Bare, bool>) {
             return AbelValue::makeBool(value);
+        } else if constexpr (std::is_same_v<Bare, qint8>) {
+            return AbelValue::makeInt(value, TypeKind::I8);
+        } else if constexpr (std::is_same_v<Bare, qint16>) {
+            return AbelValue::makeInt(value, TypeKind::I16);
         } else if constexpr (std::is_same_v<Bare, int>) {
             return AbelValue::makeInt(value, TypeKind::I32);
         } else if constexpr (std::is_same_v<Bare, qint64>) {
             return AbelValue::makeInt(value, TypeKind::I64);
+        } else if constexpr (std::is_same_v<Bare, quint8>) {
+            return AbelValue::makeInt(static_cast<qint64>(value), TypeKind::U8);
+        } else if constexpr (std::is_same_v<Bare, quint16>) {
+            return AbelValue::makeInt(static_cast<qint64>(value), TypeKind::U16);
+        } else if constexpr (std::is_same_v<Bare, quint32>) {
+            return AbelValue::makeInt(static_cast<qint64>(value), TypeKind::U32);
+        } else if constexpr (std::is_same_v<Bare, quint64>) {
+            return AbelValue::makeInt(static_cast<qint64>(value), TypeKind::U64);
         } else if constexpr (std::is_same_v<Bare, double>) {
             return AbelValue::makeDouble(value);
         } else if constexpr (std::is_same_v<Bare, QChar>) {
@@ -360,6 +397,18 @@ private:
                     return;
                 }
                 boolValue = value.asBool();
+            } else if constexpr (std::is_same_v<Bare, qint8>) {
+                if (!value.type().isInteger()) {
+                    ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects i8").arg(index), {});
+                    return;
+                }
+                i8Value = static_cast<qint8>(value.asInt());
+            } else if constexpr (std::is_same_v<Bare, qint16>) {
+                if (!value.type().isInteger()) {
+                    ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects i16").arg(index), {});
+                    return;
+                }
+                i16Value = static_cast<qint16>(value.asInt());
             } else if constexpr (std::is_same_v<Bare, int>) {
                 if (!value.type().isInteger()) {
                     ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects int").arg(index), {});
@@ -372,6 +421,30 @@ private:
                     return;
                 }
                 i64Value = value.asInt();
+            } else if constexpr (std::is_same_v<Bare, quint8>) {
+                if (!value.type().isInteger()) {
+                    ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects u8").arg(index), {});
+                    return;
+                }
+                u8Value = static_cast<quint8>(value.asInt());
+            } else if constexpr (std::is_same_v<Bare, quint16>) {
+                if (!value.type().isInteger()) {
+                    ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects u16").arg(index), {});
+                    return;
+                }
+                u16Value = static_cast<quint16>(value.asInt());
+            } else if constexpr (std::is_same_v<Bare, quint32>) {
+                if (!value.type().isInteger()) {
+                    ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects u32").arg(index), {});
+                    return;
+                }
+                u32Value = static_cast<quint32>(value.asInt());
+            } else if constexpr (std::is_same_v<Bare, quint64>) {
+                if (!value.type().isInteger()) {
+                    ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects u64").arg(index), {});
+                    return;
+                }
+                u64Value = static_cast<quint64>(value.asInt());
             } else if constexpr (std::is_same_v<Bare, double>) {
                 if (!value.type().isNumeric()) {
                     ctx.error(QStringLiteral("E0621"), QStringLiteral("backend argument %1 expects f64").arg(index), {});
@@ -423,10 +496,22 @@ private:
         {
             if constexpr (std::is_same_v<Bare, bool>) {
                 return static_cast<T>(boolValue);
+            } else if constexpr (std::is_same_v<Bare, qint8>) {
+                return static_cast<T>(i8Value);
+            } else if constexpr (std::is_same_v<Bare, qint16>) {
+                return static_cast<T>(i16Value);
             } else if constexpr (std::is_same_v<Bare, int>) {
                 return static_cast<T>(intValue);
             } else if constexpr (std::is_same_v<Bare, qint64>) {
                 return static_cast<T>(i64Value);
+            } else if constexpr (std::is_same_v<Bare, quint8>) {
+                return static_cast<T>(u8Value);
+            } else if constexpr (std::is_same_v<Bare, quint16>) {
+                return static_cast<T>(u16Value);
+            } else if constexpr (std::is_same_v<Bare, quint32>) {
+                return static_cast<T>(u32Value);
+            } else if constexpr (std::is_same_v<Bare, quint64>) {
+                return static_cast<T>(u64Value);
             } else if constexpr (std::is_same_v<Bare, double>) {
                 return static_cast<T>(doubleValue);
             } else if constexpr (std::is_same_v<Bare, QChar>) {
@@ -471,8 +556,14 @@ private:
         }
 
         bool boolValue = false;
+        qint8 i8Value = 0;
+        qint16 i16Value = 0;
         int intValue = 0;
         qint64 i64Value = 0;
+        quint8 u8Value = 0;
+        quint16 u16Value = 0;
+        quint32 u32Value = 0;
+        quint64 u64Value = 0;
         double doubleValue = 0.0;
         QChar charValue;
         char char8Value = '\0';
