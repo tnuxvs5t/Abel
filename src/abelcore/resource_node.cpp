@@ -8,6 +8,11 @@
 #include <QJsonDocument>
 #include <QJsonValue>
 #include <QPluginLoader>
+#include <QtGlobal>
+
+#ifndef ABEL_QT_KIT_NAME
+#define ABEL_QT_KIT_NAME "unknown"
+#endif
 
 namespace abel {
 
@@ -84,6 +89,16 @@ ResourceNodeState resourceNodeStateFromName(const QString& name, bool* ok)
     if (ok)
         *ok = false;
     return ResourceNodeState::Failed;
+}
+
+QString currentAbelQtVersion()
+{
+    return QString::fromLatin1(qVersion());
+}
+
+QString currentAbelQtKit()
+{
+    return QString::fromLatin1(ABEL_QT_KIT_NAME);
 }
 
 ResourceNodeParseResult resourceNodeFromJson(const QJsonObject& object, const SourceSpan& span)
@@ -181,6 +196,20 @@ ResourceNodeLoadResult loadBackendResourceNode(const ResourceNode& node,
     if (node.iid != QString::fromLatin1(kBackendIid)) {
         addLoadError(result.diagnostics,
                      QStringLiteral("resource node iid must be '%1'").arg(QString::fromLatin1(kBackendIid)));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+    if (node.qtVersion != currentAbelQtVersion()) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("resource node Qt version '%1' does not match Abel Qt version '%2'")
+                         .arg(node.qtVersion, currentAbelQtVersion()));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+    if (node.kit != currentAbelQtKit()) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("resource node Qt kit '%1' does not match Abel Qt kit '%2'")
+                         .arg(node.kit, currentAbelQtKit()));
         result.node.lastError = result.diagnostics.back().message;
         return result;
     }

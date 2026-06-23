@@ -14,6 +14,8 @@ Current implementation scope:
 
 Abel still does **not** implement split/JIT, a large VM, registry downloads, semantic-version solving, full versioned/ABI cache invalidation, a stable cross-Qt/cross-compiler ABI, a manifest/hash audit system, or a context exporter. Backend plugin auto-build currently exists only as a first CMake-based `backendArtifacts[].build` slice.
 
+Resource JSON `qtVersion` and `kit` are now load-time gates: `abel resources check` validates JSON shape only, while `abel run --resource` / package backend loading rejects resources whose Qt version or kit does not match the Abel runtime.
+
 `abel build <project-dir>` copies root/dependency backend artifacts into `.abel/cache/backend/...` and writes a neighboring `<plugin>.abel-cache.json` sidecar. `abel run <project-dir>` only prefers the cached plugin when that sidecar still matches the current source artifact path, size, mtime, ResourceNode fields, and symbol list; if metadata is missing or stale, it falls back to the source artifact path until `abel build` refreshes the cache.
 
 ## Build

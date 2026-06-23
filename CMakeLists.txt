@@ -70,6 +70,8 @@ target_link_libraries(abelcore
 target_compile_definitions(abelcore
     PRIVATE
         ABELCORE_LIBRARY
+    PUBLIC
+        ABEL_QT_KIT_NAME=\"gcc_64\"
 )
 
 set_target_properties(abelcore PROPERTIES

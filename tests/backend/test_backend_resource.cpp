@@ -10,6 +10,31 @@
 class AbelBackendResourceTests final : public QObject {
     Q_OBJECT
 
+    abel::ResourceNode mathResourceNode() const
+    {
+        abel::ResourceNode node;
+        node.id = QStringLiteral("math.backend");
+        node.kind = QStringLiteral("qt_plugin");
+        node.path = QStringLiteral("plugins/libmath_backend.so");
+        node.iid = QStringLiteral(IAbelBackend_iid);
+        node.backendId = QStringLiteral("MathSystem");
+        node.qtVersion = abel::currentAbelQtVersion();
+        node.kit = abel::currentAbelQtKit();
+        node.symbols = {
+            QStringLiteral("MathSystem.fast_add"),
+            QStringLiteral("MathSystem.sort"),
+            QStringLiteral("MathSystem.first_char"),
+            QStringLiteral("MathSystem.char_code"),
+            QStringLiteral("MathSystem.make_range"),
+            QStringLiteral("MathSystem.sum_f64"),
+            QStringLiteral("MathSystem.flip_bools"),
+            QStringLiteral("MathSystem.fail_if_negative"),
+            QStringLiteral("MathSystem.join_debug"),
+            QStringLiteral("MathSystem.count_variadic"),
+        };
+        return node;
+    }
+
 private slots:
     void registryStoresFunctionDescriptors()
     {
@@ -180,28 +205,59 @@ private slots:
         QVERIFY(!parsed.diagnostics.isEmpty());
     }
 
+    void resourceJsonCheckDoesNotRejectForeignQtKit()
+    {
+        const QString text = QStringLiteral(R"({
+            "id": "foreign.kit",
+            "kind": "qt_plugin",
+            "path": "plugins/libmath_backend.so",
+            "iid": "org.abel.IAbelBackend/1.0",
+            "backendId": "MathSystem",
+            "qtVersion": "0.0.0",
+            "kit": "foreign_kit",
+            "symbols": ["MathSystem.fast_add"]
+        })");
+        auto parsed = abel::resourceNodeFromJsonText(text, QStringLiteral("<test>"));
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.node.qtVersion, QStringLiteral("0.0.0"));
+        QCOMPARE(parsed.node.kit, QStringLiteral("foreign_kit"));
+    }
+
+    void resourceLoadRejectsQtVersionMismatch()
+    {
+        abel::ResourceNode node = mathResourceNode();
+        node.qtVersion = QStringLiteral("0.0.0");
+
+        abel::BackendRegistry registry;
+        auto loaded = abel::loadBackendResourceNode(node, registry, QCoreApplication::applicationDirPath());
+        QVERIFY(!loaded.ok());
+        QCOMPARE(loaded.node.state, abel::ResourceNodeState::Failed);
+        QCOMPARE(loaded.diagnostics.size(), 1);
+        QCOMPARE(loaded.diagnostics.front().code, QStringLiteral("E0613"));
+        QVERIFY(loaded.diagnostics.front().message.contains(QStringLiteral("Qt version")));
+        QVERIFY(!registry.hasBackend(QStringLiteral("MathSystem")));
+    }
+
+    void resourceLoadRejectsQtKitMismatch()
+    {
+        abel::ResourceNode node = mathResourceNode();
+        node.kit = QStringLiteral("foreign_kit");
+
+        abel::BackendRegistry registry;
+        auto loaded = abel::loadBackendResourceNode(node, registry, QCoreApplication::applicationDirPath());
+        QVERIFY(!loaded.ok());
+        QCOMPARE(loaded.node.state, abel::ResourceNodeState::Failed);
+        QCOMPARE(loaded.diagnostics.size(), 1);
+        QCOMPARE(loaded.diagnostics.front().code, QStringLiteral("E0613"));
+        QVERIFY(loaded.diagnostics.front().message.contains(QStringLiteral("Qt kit")));
+        QVERIFY(!registry.hasBackend(QStringLiteral("MathSystem")));
+    }
+
     void loadsMathBackendPluginAndCallsRegistry()
     {
-        abel::ResourceNode node;
-        node.id = QStringLiteral("math.backend");
-        node.kind = QStringLiteral("qt_plugin");
-        node.path = QStringLiteral("plugins/libmath_backend.so");
-        node.iid = QStringLiteral(IAbelBackend_iid);
-        node.backendId = QStringLiteral("MathSystem");
-        node.qtVersion = QStringLiteral("6.11.1");
-        node.kit = QStringLiteral("gcc_64");
-        node.symbols = {
-            QStringLiteral("MathSystem.fast_add"),
-            QStringLiteral("MathSystem.sort"),
-            QStringLiteral("MathSystem.first_char"),
-            QStringLiteral("MathSystem.char_code"),
-            QStringLiteral("MathSystem.make_range"),
-            QStringLiteral("MathSystem.sum_f64"),
-            QStringLiteral("MathSystem.flip_bools"),
-            QStringLiteral("MathSystem.fail_if_negative"),
-            QStringLiteral("MathSystem.join_debug"),
-            QStringLiteral("MathSystem.count_variadic"),
-        };
+        abel::ResourceNode node = mathResourceNode();
 
         abel::BackendRegistry registry;
         auto loaded = abel::loadBackendResourceNode(node, registry, QCoreApplication::applicationDirPath());
@@ -362,26 +418,7 @@ private slots:
 
     void loadedMathBackendRunsThroughInterpreter()
     {
-        abel::ResourceNode node;
-        node.id = QStringLiteral("math.backend");
-        node.kind = QStringLiteral("qt_plugin");
-        node.path = QStringLiteral("plugins/libmath_backend.so");
-        node.iid = QStringLiteral(IAbelBackend_iid);
-        node.backendId = QStringLiteral("MathSystem");
-        node.qtVersion = QStringLiteral("6.11.1");
-        node.kit = QStringLiteral("gcc_64");
-        node.symbols = {
-            QStringLiteral("MathSystem.fast_add"),
-            QStringLiteral("MathSystem.sort"),
-            QStringLiteral("MathSystem.first_char"),
-            QStringLiteral("MathSystem.char_code"),
-            QStringLiteral("MathSystem.make_range"),
-            QStringLiteral("MathSystem.sum_f64"),
-            QStringLiteral("MathSystem.flip_bools"),
-            QStringLiteral("MathSystem.fail_if_negative"),
-            QStringLiteral("MathSystem.join_debug"),
-            QStringLiteral("MathSystem.count_variadic"),
-        };
+        abel::ResourceNode node = mathResourceNode();
 
         abel::BackendRegistry registry;
         auto loaded = abel::loadBackendResourceNode(node, registry, QCoreApplication::applicationDirPath());

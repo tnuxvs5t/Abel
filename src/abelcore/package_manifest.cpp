@@ -497,8 +497,8 @@ ResourceNode parseBackendArtifact(const QJsonObject& object,
                                  : node.backendId.toLower() + QStringLiteral(".backend"));
     node.kind = optionalString(object, QStringLiteral("kind"), QStringLiteral("qt_plugin"));
     node.iid = optionalString(object, QStringLiteral("iid"), QStringLiteral(IAbelBackend_iid));
-    node.qtVersion = optionalString(object, QStringLiteral("qtVersion"), QString::fromLatin1(qVersion()));
-    node.kit = optionalString(object, QStringLiteral("kit"), QStringLiteral("gcc_64"));
+    node.qtVersion = optionalString(object, QStringLiteral("qtVersion"), currentAbelQtVersion());
+    node.kit = optionalString(object, QStringLiteral("kit"), currentAbelQtKit());
     node.symbols = parseSymbols(object, node.backendId, diagnostics, span);
     node.state = ResourceNodeState::Unloaded;
     if (build)

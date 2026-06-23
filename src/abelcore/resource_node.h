@@ -34,6 +34,8 @@ struct ResourceNode {
 
 QString resourceNodeStateName(ResourceNodeState state);
 ResourceNodeState resourceNodeStateFromName(const QString& name, bool* ok = nullptr);
+QString currentAbelQtVersion();
+QString currentAbelQtKit();
 
 struct ResourceNodeParseResult {
     ResourceNode node;
