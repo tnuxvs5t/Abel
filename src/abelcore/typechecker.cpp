@@ -44,9 +44,44 @@ QString structTypeName(const StructDeclNode& decl)
     return packageQualifiedName(decl.packageName, decl.name);
 }
 
-bool declVisibleFromPackage(const DeclNode& decl, const QString& packageName)
+class DeclContextGuard {
+public:
+    DeclContextGuard(QString& currentPackage,
+                     QString& currentModule,
+                     QList<QString>& currentImports,
+                     const DeclNode& decl)
+        : m_currentPackage(currentPackage)
+        , m_currentModule(currentModule)
+        , m_currentImports(currentImports)
+        , m_previousPackage(currentPackage)
+        , m_previousModule(currentModule)
+        , m_previousImports(currentImports)
+    {
+        m_currentPackage = decl.packageName;
+        m_currentModule = decl.moduleName;
+        m_currentImports = decl.importedModules;
+    }
+
+    ~DeclContextGuard()
+    {
+        m_currentPackage = m_previousPackage;
+        m_currentModule = m_previousModule;
+        m_currentImports = m_previousImports;
+    }
+
+private:
+    QString& m_currentPackage;
+    QString& m_currentModule;
+    QList<QString>& m_currentImports;
+    QString m_previousPackage;
+    QString m_previousModule;
+    QList<QString> m_previousImports;
+};
+
+bool sameDeclNamespace(const DeclNode& lhs, const DeclNode& rhs)
 {
-    return !decl.fromDependency || decl.packageName == packageName;
+    return lhs.packageName == rhs.packageName
+        && lhs.moduleName == rhs.moduleName;
 }
 
 bool exprIsLiteralTrue(const ExprNode& expr)
@@ -111,6 +146,8 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     m_currentReturnType = makeType(TypeKind::Void);
     m_currentStruct.clear();
     m_currentPackage.clear();
+    m_currentModule.clear();
+    m_currentImports.clear();
     m_loopDepth = 0;
 
     collectStructs(program);
@@ -121,7 +158,7 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     if (!main) {
         error(program.span, QStringLiteral("missing fn int main() or fn void main()"));
     } else {
-        const AbelType mainType = typeFromAstInPackage(*main->returnType, main->packageName);
+        const AbelType mainType = typeFromAstForDecl(*main->returnType, *main);
         if (mainType.kind != TypeKind::I32 && mainType.kind != TypeKind::Void)
             error(main->span, QStringLiteral("main must return int or void"));
         if (!main->params.empty())
@@ -187,7 +224,7 @@ void TypeChecker::collectStructs(const ProgramNode& program)
                     error(field->span, QStringLiteral("duplicate field '%1'").arg(field->name));
                     continue;
                 }
-                AbelType type = typeFromAstInPackage(*field->type, s->packageName, false);
+                AbelType type = typeFromAstForDecl(*field->type, *s, false);
                 if (type.isReference())
                     error(field->span, QStringLiteral("reference fields are not supported in v0"));
                 info.fields.insert(field->name, FieldInfo{type, field->type->isConst});
@@ -203,9 +240,9 @@ void TypeChecker::collectFunctions(const ProgramNode& program)
             const auto existing = m_functions.value(fn->name);
             bool duplicateInPackage = false;
             for (const FunctionDeclNode* other : existing) {
-                if (other->packageName == fn->packageName) {
-                    error(fn->span, QStringLiteral("duplicate function '%1' in package '%2'")
-                                        .arg(fn->name, fn->packageName));
+                if (sameDeclNamespace(*other, *fn)) {
+                    error(fn->span, QStringLiteral("duplicate function '%1' in package '%2' module '%3'")
+                                        .arg(fn->name, fn->packageName, fn->moduleName));
                     duplicateInPackage = true;
                     break;
                 }
@@ -221,7 +258,8 @@ void TypeChecker::collectFunctions(const ProgramNode& program)
 const FunctionDeclNode* TypeChecker::findRootFunction(const QString& name) const
 {
     const auto candidates = m_functions.value(name);
-    for (const FunctionDeclNode* fn : candidates) {
+    for (auto it = candidates.crbegin(); it != candidates.crend(); ++it) {
+        const FunctionDeclNode* fn = *it;
         if (!fn->fromDependency)
             return fn;
     }
@@ -234,24 +272,29 @@ const FunctionDeclNode* TypeChecker::resolveFunction(const QString& name, const 
     if (candidates.isEmpty())
         return nullptr;
 
-    for (const FunctionDeclNode* fn : candidates) {
-        if (fn->packageName == m_currentPackage)
-            return fn;
-    }
-
+    QList<const FunctionDeclNode*> current;
     QList<const FunctionDeclNode*> visible;
     QList<const FunctionDeclNode*> hidden;
     for (const FunctionDeclNode* fn : candidates) {
-        if (isFunctionVisible(*fn))
+        if (isDeclInCurrentModule(*fn))
+            current.push_back(fn);
+        else if (isFunctionVisible(*fn))
             visible.push_back(fn);
         else
             hidden.push_back(fn);
+    }
+    if (current.size() == 1)
+        return current.front();
+    if (current.size() > 1) {
+        if (diagnose)
+            error(span, QStringLiteral("function '%1' is ambiguous in current module").arg(name));
+        return nullptr;
     }
     if (visible.size() == 1)
         return visible.front();
     if (visible.size() > 1) {
         if (diagnose)
-            error(span, QStringLiteral("function '%1' is ambiguous across dependency packages").arg(name));
+            error(span, QStringLiteral("function '%1' is ambiguous across imported modules").arg(name));
         return nullptr;
     }
     if (hidden.size() == 1) {
@@ -260,7 +303,7 @@ const FunctionDeclNode* TypeChecker::resolveFunction(const QString& name, const 
         return nullptr;
     }
     if (!hidden.isEmpty() && diagnose)
-        error(span, QStringLiteral("function '%1' exists only as non-exported dependency symbols").arg(name));
+        error(span, QStringLiteral("function '%1' exists but is not visible from current module").arg(name));
     return nullptr;
 }
 
@@ -280,16 +323,15 @@ const TypeChecker::StructInfo* TypeChecker::resolveStructInPackage(const QString
     const auto& candidates = found.value();
 
     for (const auto& info : candidates) {
-        if (info.decl && info.decl->packageName == packageName)
+        if (info.decl && isDeclInCurrentModule(*info.decl, packageName))
             return &info;
     }
-
     QList<const StructInfo*> visible;
     QList<const StructInfo*> hidden;
     for (const auto& info : candidates) {
         if (!info.decl)
             continue;
-        if (declVisibleFromPackage(*info.decl, packageName) || info.decl->exported)
+        if (isStructVisible(*info.decl))
             visible.push_back(&info);
         else
             hidden.push_back(&info);
@@ -298,14 +340,12 @@ const TypeChecker::StructInfo* TypeChecker::resolveStructInPackage(const QString
         return visible.front();
     if (visible.size() > 1) {
         if (diagnose)
-            error(span, QStringLiteral("struct '%1' is ambiguous across dependency packages").arg(name));
+            error(span, QStringLiteral("struct '%1' is ambiguous across imported modules").arg(name));
         return nullptr;
     }
     if (hidden.size() == 1) {
         if (diagnose)
-            error(span,
-                  QStringLiteral("struct '%1' from dependency package '%2' is not exported")
-                      .arg(hidden.front()->decl->name, hidden.front()->decl->packageName));
+            requireStructVisible(*hidden.front()->decl, span);
         return nullptr;
     }
     if (!hidden.isEmpty() && diagnose)
@@ -345,16 +385,15 @@ const TypeChecker::BackendInfo* TypeChecker::resolveBackendInPackage(const QStri
     const auto& candidates = found.value();
 
     for (const auto& info : candidates) {
-        if (info.decl && info.decl->packageName == packageName)
+        if (info.decl && isDeclInCurrentModule(*info.decl, packageName))
             return &info;
     }
-
     QList<const BackendInfo*> visible;
     QList<const BackendInfo*> hidden;
     for (const auto& info : candidates) {
         if (!info.decl)
             continue;
-        if (declVisibleFromPackage(*info.decl, packageName) || info.decl->exported)
+        if (isBackendVisible(*info.decl))
             visible.push_back(&info);
         else
             hidden.push_back(&info);
@@ -363,14 +402,12 @@ const TypeChecker::BackendInfo* TypeChecker::resolveBackendInPackage(const QStri
         return visible.front();
     if (visible.size() > 1) {
         if (diagnose)
-            error(span, QStringLiteral("backend '%1' is ambiguous across dependency packages").arg(name));
+            error(span, QStringLiteral("backend '%1' is ambiguous across imported modules").arg(name));
         return nullptr;
     }
     if (hidden.size() == 1) {
         if (diagnose)
-            error(span,
-                  QStringLiteral("backend '%1' from dependency package '%2' is not exported")
-                      .arg(hidden.front()->decl->name, hidden.front()->decl->packageName));
+            requireBackendVisible(*hidden.front()->decl, span);
         return nullptr;
     }
     if (!hidden.isEmpty() && diagnose)
@@ -418,6 +455,12 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
     return base;
 }
 
+AbelType TypeChecker::typeFromAstForDecl(const TypeNode& node, const DeclNode& decl, bool diagnose)
+{
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, decl);
+    return typeFromAstInPackage(node, decl.packageName, diagnose);
+}
+
 void TypeChecker::collectBackends(const ProgramNode& program)
 {
     for (const auto& decl : program.declarations) {
@@ -451,8 +494,7 @@ void TypeChecker::collectBackends(const ProgramNode& program)
 
 void TypeChecker::checkStruct(const StructDeclNode& decl)
 {
-    const QString previousPackage = m_currentPackage;
-    m_currentPackage = decl.packageName;
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, decl);
     for (const auto& field : decl.fields) {
         AbelType type = typeFromAstInCurrentPackage(*field->type);
         if (!isSupportedType(type))
@@ -464,13 +506,11 @@ void TypeChecker::checkStruct(const StructDeclNode& decl)
         checkConstructor(decl, *ctor);
     for (const auto& method : decl.methods)
         checkMethod(decl, *method);
-    m_currentPackage = previousPackage;
 }
 
 void TypeChecker::checkBackend(const BackendBlockNode& backend)
 {
-    const QString previousPackage = m_currentPackage;
-    m_currentPackage = backend.packageName;
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, backend);
     for (const auto& fn : backend.functions) {
         const AbelType returnType = typeFromAstInCurrentPackage(*fn->returnType);
         if (!isSupportedType(returnType))
@@ -492,7 +532,6 @@ void TypeChecker::checkBackend(const BackendBlockNode& backend)
                 error(param.span, QStringLiteral("only any... variadic parameters are supported"));
         }
     }
-    m_currentPackage = previousPackage;
 }
 
 void TypeChecker::checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor)
@@ -550,13 +589,11 @@ void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNod
 
 void TypeChecker::checkFunction(const FunctionDeclNode& fn)
 {
-    const QString previousPackage = m_currentPackage;
-    m_currentPackage = fn.packageName;
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, fn);
     const qsizetype diagnosticsBeforeCallable = m_diagnostics.size();
     const AbelType returnType = typeFromAstInCurrentPackage(*fn.returnType);
     if (!isSupportedType(returnType)) {
         error(fn.returnType->span, QStringLiteral("unsupported return type '%1'").arg(fn.returnType->displayName()));
-        m_currentPackage = previousPackage;
         return;
     }
     m_currentReturnType = returnType;
@@ -596,7 +633,6 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
                   .arg(fn.name, returnType.displayName()));
     }
     popScope();
-    m_currentPackage = previousPackage;
 }
 
 void TypeChecker::checkBlock(const BlockStmtNode& block, bool push)
@@ -1029,7 +1065,7 @@ ExprType TypeChecker::checkFunctionCallShape(const QString& name,
         if (isUnknownType(arg.type))
             return;
         const ParameterNode& param = *fn.params[i];
-        const AbelType paramType = typeFromAstInPackage(*param.type, fn.packageName);
+        const AbelType paramType = typeFromAstForDecl(*param.type, fn);
         if (paramType.isReference()) {
             if (arg.category != ValueCategory::LValue)
                 error(argSpan, QStringLiteral("reference parameter '%1' requires lvalue").arg(param.name));
@@ -1054,7 +1090,7 @@ ExprType TypeChecker::checkFunctionCallShape(const QString& name,
         if (i > 0)
             checkExpr(*restArgs[i - 1]);
     }
-    return {typeFromAstInPackage(*fn.returnType, fn.packageName), ValueCategory::PRValue, false};
+    return {typeFromAstForDecl(*fn.returnType, fn), ValueCategory::PRValue, false};
 }
 
 ExprType TypeChecker::checkFunctionValueCallShape(const AbelType& functionType,
@@ -1134,12 +1170,12 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             if (expr.args.size() != method->params.size())
                 return errorExpr(expr.span, QStringLiteral("method '%1' called with wrong argument count").arg(field->field));
             for (size_t i = 0; i < expr.args.size(); ++i) {
-                AbelType paramType = typeFromAstInPackage(*method->params[i]->type, method->packageName);
+                AbelType paramType = typeFromAstForDecl(*method->params[i]->type, *method);
                 ExprType arg = checkExpr(*expr.args[i]);
                 if (!isUnknownType(arg.type) && !isAssignable(paramType, arg.type))
                     error(expr.args[i]->span, QStringLiteral("cannot pass %1 to method parameter %2").arg(arg.type.displayName(), paramType.displayName()));
             }
-            return {typeFromAstInPackage(*method->returnType, method->packageName), method->returnType->isReference ? ValueCategory::LValue : ValueCategory::PRValue, false};
+            return {typeFromAstForDecl(*method->returnType, *method), method->returnType->isReference ? ValueCategory::LValue : ValueCategory::PRValue, false};
         }
         return checkBuiltinMethodCall(*field, expr.args);
     }
@@ -1175,7 +1211,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             if (argc != info->constructor->params.size())
                 return errorExpr(expr.span, QStringLiteral("constructor '%1' called with wrong argument count").arg(name->name));
             for (size_t i = 0; i < argc; ++i) {
-                AbelType paramType = typeFromAstInPackage(*info->constructor->params[i]->type, info->decl->packageName);
+                AbelType paramType = typeFromAstForDecl(*info->constructor->params[i]->type, *info->decl);
                 ExprType arg = checkExpr(*expr.args[i]);
                 if (!isUnknownType(arg.type) && !isAssignable(paramType, arg.type))
                     error(expr.args[i]->span, QStringLiteral("cannot pass %1 to constructor parameter %2").arg(arg.type.displayName(), paramType.displayName()));
@@ -1196,7 +1232,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             return errorExpr(expr.span, QStringLiteral("function '%1' called with wrong argument count").arg(name->name));
         for (size_t i = 0; i < fixedCount; ++i) {
             const ParameterNode& param = *fn->params[i];
-            const AbelType paramType = typeFromAstInPackage(*param.type, fn->packageName);
+            const AbelType paramType = typeFromAstForDecl(*param.type, *fn);
             ExprType arg = checkExpr(*expr.args[i]);
             if (isUnknownType(arg.type))
                 continue;
@@ -1213,7 +1249,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
         }
         for (size_t i = fixedCount; i < expr.args.size(); ++i)
             checkExpr(*expr.args[i]);
-        return {typeFromAstInPackage(*fn->returnType, fn->packageName), ValueCategory::PRValue, false};
+        return {typeFromAstForDecl(*fn->returnType, *fn), ValueCategory::PRValue, false};
     }
     if (m_functions.contains(name->name)) {
         for (const auto& argExpr : expr.args)
@@ -1319,7 +1355,7 @@ ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
 
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& param = *fn->params[i];
-        const AbelType paramType = typeFromAstInPackage(*param.type, fn->packageName);
+        const AbelType paramType = typeFromAstForDecl(*param.type, *fn);
         ExprType arg = checkExpr(*args[i]);
         if (isUnknownType(arg.type))
             continue;
@@ -1337,7 +1373,7 @@ ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
     for (size_t i = fixedCount; i < args.size(); ++i)
         checkExpr(*args[i]);
 
-    const AbelType returnType = typeFromAstInPackage(*fn->returnType, fn->packageName);
+    const AbelType returnType = typeFromAstForDecl(*fn->returnType, *fn);
     return {returnType, returnType.isReference() ? ValueCategory::LValue : ValueCategory::PRValue, false};
 }
 
@@ -1634,22 +1670,53 @@ bool TypeChecker::isSupportedType(const AbelType& type)
 
 bool TypeChecker::isDeclVisible(const DeclNode& decl) const
 {
-    return !decl.fromDependency || decl.packageName == m_currentPackage;
+    return isDeclVisibleInCurrentContext(decl, false);
+}
+
+bool TypeChecker::isDeclInCurrentModule(const DeclNode& decl, const QString& packageName) const
+{
+    const QString package = packageName.isNull() ? m_currentPackage : packageName;
+    if (decl.packageName != package)
+        return false;
+    if (m_currentModule.isEmpty() || decl.moduleName.isEmpty())
+        return true;
+    return decl.moduleName == m_currentModule;
+}
+
+bool TypeChecker::isModuleImported(const QString& moduleName) const
+{
+    return !moduleName.isEmpty() && m_currentImports.contains(moduleName);
+}
+
+bool TypeChecker::isDeclVisibleInCurrentContext(const DeclNode& decl, bool exportedSymbol) const
+{
+    if (isDeclInCurrentModule(decl))
+        return true;
+    if (m_currentModule.isEmpty() || decl.moduleName.isEmpty()) {
+        if (decl.packageName == m_currentPackage)
+            return true;
+        return exportedSymbol && isModuleImported(decl.moduleName);
+    }
+    if (!isModuleImported(decl.moduleName))
+        return false;
+    if (decl.packageName == m_currentPackage)
+        return true;
+    return exportedSymbol;
 }
 
 bool TypeChecker::isFunctionVisible(const FunctionDeclNode& fn) const
 {
-    return isDeclVisible(fn) || fn.exported;
+    return isDeclVisibleInCurrentContext(fn, fn.exported);
 }
 
 bool TypeChecker::isStructVisible(const StructDeclNode& decl) const
 {
-    return isDeclVisible(decl) || decl.exported;
+    return isDeclVisibleInCurrentContext(decl, decl.exported);
 }
 
 bool TypeChecker::isBackendVisible(const BackendBlockNode& backend) const
 {
-    return isDeclVisible(backend) || backend.exported;
+    return isDeclVisibleInCurrentContext(backend, backend.exported);
 }
 
 bool TypeChecker::requireFunctionVisible(const FunctionDeclNode& fn, const SourceSpan& span)
@@ -1657,8 +1724,10 @@ bool TypeChecker::requireFunctionVisible(const FunctionDeclNode& fn, const Sourc
     if (isFunctionVisible(fn))
         return true;
     error(span,
-          QStringLiteral("function '%1' from dependency package '%2' is not exported")
-              .arg(fn.name, fn.packageName));
+          fn.fromDependency && isModuleImported(fn.moduleName)
+              ? QStringLiteral("function '%1' from dependency package '%2' is not exported")
+                    .arg(fn.name, fn.packageName)
+              : QStringLiteral("function '%1' is not visible from current module").arg(fn.name));
     return false;
 }
 
@@ -1667,8 +1736,10 @@ bool TypeChecker::requireStructVisible(const StructDeclNode& decl, const SourceS
     if (isStructVisible(decl))
         return true;
     error(span,
-          QStringLiteral("struct '%1' from dependency package '%2' is not exported")
-              .arg(decl.name, decl.packageName));
+          decl.fromDependency && isModuleImported(decl.moduleName)
+              ? QStringLiteral("struct '%1' from dependency package '%2' is not exported")
+                    .arg(decl.name, decl.packageName)
+              : QStringLiteral("struct '%1' is not visible from current module").arg(decl.name));
     return false;
 }
 
@@ -1677,8 +1748,10 @@ bool TypeChecker::requireBackendVisible(const BackendBlockNode& backend, const S
     if (isBackendVisible(backend))
         return true;
     error(span,
-          QStringLiteral("backend '%1' from dependency package '%2' is not exported")
-              .arg(backend.name, backend.packageName));
+          backend.fromDependency && isModuleImported(backend.moduleName)
+              ? QStringLiteral("backend '%1' from dependency package '%2' is not exported")
+                    .arg(backend.name, backend.packageName)
+              : QStringLiteral("backend '%1' is not visible from current module").arg(backend.name));
     return false;
 }
 
@@ -1723,7 +1796,7 @@ bool TypeChecker::isDefaultConstructible(const AbelType& type, QSet<QString>& vi
 
         visiting.insert(type.spelling);
         for (const auto& field : info->decl->fields) {
-            if (!isDefaultConstructible(typeFromAstInPackage(*field->type, info->decl->packageName), visiting)) {
+            if (!isDefaultConstructible(typeFromAstForDecl(*field->type, *info->decl), visiting)) {
                 visiting.remove(type.spelling);
                 return false;
             }
@@ -1770,10 +1843,10 @@ bool TypeChecker::hasUserToStrFor(const AbelType& type)
     for (const FunctionDeclNode* fn : candidates) {
         if (!isFunctionVisible(*fn) || fn->params.size() != 1 || fn->params.front()->variadic)
             continue;
-        const AbelType returnType = typeFromAstInPackage(*fn->returnType, fn->packageName);
+        const AbelType returnType = typeFromAstForDecl(*fn->returnType, *fn);
         if (returnType.kind != TypeKind::Str)
             continue;
-        const AbelType paramType = typeFromAstInPackage(*fn->params.front()->type, fn->packageName);
+        const AbelType paramType = typeFromAstForDecl(*fn->params.front()->type, *fn);
         if (isAssignable(paramType, type))
             return true;
     }

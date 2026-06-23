@@ -62,6 +62,8 @@ private:
     AbelType m_currentReturnType = makeType(TypeKind::Void);
     QString m_currentStruct;
     QString m_currentPackage;
+    QString m_currentModule;
+    QList<QString> m_currentImports;
     int m_loopDepth = 0;
 
     void collectStructs(const ProgramNode& program);
@@ -82,6 +84,7 @@ private:
                                                bool diagnose = true);
     AbelType typeFromAstInCurrentPackage(const TypeNode& node);
     AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName, bool diagnose = true);
+    AbelType typeFromAstForDecl(const TypeNode& node, const DeclNode& decl, bool diagnose = true);
     void checkFunction(const FunctionDeclNode& fn);
     void checkStruct(const StructDeclNode& decl);
     void checkBackend(const BackendBlockNode& backend);
@@ -129,7 +132,10 @@ private:
     const VariableInfo* lookupVariable(const QString& name) const;
 
     bool isSupportedType(const AbelType& type);
+    bool isDeclInCurrentModule(const DeclNode& decl, const QString& packageName = QString()) const;
     bool isDeclVisible(const DeclNode& decl) const;
+    bool isModuleImported(const QString& moduleName) const;
+    bool isDeclVisibleInCurrentContext(const DeclNode& decl, bool exportedSymbol) const;
     bool isFunctionVisible(const FunctionDeclNode& fn) const;
     bool isStructVisible(const StructDeclNode& decl) const;
     bool isBackendVisible(const BackendBlockNode& backend) const;

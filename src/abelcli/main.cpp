@@ -160,6 +160,24 @@ static void tagDeclarationPackage(abel::DeclNode& decl, const abel::PackageSourc
     }
 }
 
+static void tagDeclarationModule(abel::DeclNode& decl, const QString& moduleName, const QList<QString>& importedModules)
+{
+    decl.moduleName = moduleName;
+    decl.importedModules = importedModules;
+    if (auto* s = dynamic_cast<abel::StructDeclNode*>(&decl)) {
+        for (auto& method : s->methods) {
+            method->moduleName = moduleName;
+            method->importedModules = importedModules;
+        }
+    }
+    if (auto* backend = dynamic_cast<abel::BackendBlockNode*>(&decl)) {
+        for (auto& fn : backend->functions) {
+            fn->moduleName = moduleName;
+            fn->importedModules = importedModules;
+        }
+    }
+}
+
 static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& sourceFiles)
 {
     ParsedCliProgram result;
@@ -192,8 +210,19 @@ static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& s
         if (!parsed.diagnostics.isEmpty())
             continue;
 
-        for (auto& decl : parsed.program->declarations)
+        QString moduleName;
+        QList<QString> importedModules;
+        for (const auto& decl : parsed.program->declarations) {
+            if (auto* module = dynamic_cast<abel::ModuleDeclNode*>(decl.get()))
+                moduleName = module->name;
+            if (auto* use = dynamic_cast<abel::UseDeclNode*>(decl.get()))
+                importedModules.push_back(use->name);
+        }
+
+        for (auto& decl : parsed.program->declarations) {
             tagDeclarationPackage(*decl, sourceEntry);
+            tagDeclarationModule(*decl, moduleName, importedModules);
+        }
         appendProgram(*result.program, std::move(parsed.program));
     }
 

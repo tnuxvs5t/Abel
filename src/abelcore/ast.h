@@ -161,6 +161,8 @@ struct ParameterNode : AstNode {
 
 struct DeclNode : AstNode {
     QString packageName;
+    QString moduleName;
+    QList<QString> importedModules;
     bool fromDependency = false;
 
     virtual ~DeclNode() = default;

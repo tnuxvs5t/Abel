@@ -46,3 +46,45 @@ execute_process(
 if(NOT run_result EQUAL 42)
     message(FATAL_ERROR "abel run expected exit code 42, got ${run_result}:\n${run_stdout}\n${run_stderr}")
 endif()
+
+set(no_use_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-no-use")
+file(REMOVE_RECURSE "${no_use_project_dir}")
+file(MAKE_DIRECTORY "${no_use_project_dir}/src/lib")
+
+file(WRITE "${no_use_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-no-use",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${no_use_project_dir}/src/lib/math.abel" [=[
+module cli.lib.math;
+
+fn int hidden_helper() {
+    return 41;
+}
+]=])
+
+file(WRITE "${no_use_project_dir}/src/main.abel" [=[
+module cli.main;
+
+fn int main() {
+    return hidden_helper() + 1;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${no_use_project_dir}"
+    RESULT_VARIABLE no_use_check_result
+    OUTPUT_VARIABLE no_use_check_stdout
+    ERROR_VARIABLE no_use_check_stderr
+)
+if(no_use_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted same-package call without use:\n${no_use_check_stdout}\n${no_use_check_stderr}")
+endif()
+string(FIND "${no_use_check_stderr}" "not visible from current module" no_use_not_visible_pos)
+if(no_use_not_visible_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain missing use:\n${no_use_check_stdout}\n${no_use_check_stderr}")
+endif()

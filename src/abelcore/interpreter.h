@@ -37,6 +37,8 @@ private:
 
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
     QString m_currentPackage;
+    QString m_currentModule;
+    QList<QString> m_currentImports;
     QHash<QString, QList<StructRuntimeInfo>> m_structs;
     QHash<QString, QList<BackendRuntimeInfo>> m_backends;
     BackendRegistry m_backendRegistry;
@@ -56,6 +58,7 @@ private:
     const BackendRuntimeInfo* resolveBackendInPackage(const QString& name, const QString& packageName) const;
     AbelType typeFromAstInCurrentPackage(const TypeNode& node) const;
     AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName) const;
+    AbelType typeFromAstForDecl(const TypeNode& node, const DeclNode& decl);
     ExecResult callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args);
     ExecResult callFunctionExpr(const FunctionDeclNode& fn, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExecResult callFunctionPipeExpr(const FunctionDeclNode& fn,
@@ -90,6 +93,10 @@ private:
     AbelValue defaultConstructValue(const AbelType& type, const SourceSpan& span, QSet<QString>& visiting);
     std::optional<QString> stringifyValue(const AbelValue& value, const SourceSpan& span);
     void attachStringifier(BuiltinFunctionCall& call);
+
+    bool isDeclInCurrentModule(const DeclNode& decl, const QString& packageName = QString()) const;
+    bool isModuleImported(const QString& moduleName) const;
+    bool isDeclVisible(const DeclNode& decl, bool exportedSymbol) const;
 
     bool requireBool(const AbelValue& value, const SourceSpan& span, bool& out);
     bool requireInteger(const AbelValue& value, const SourceSpan& span, qint64& out);
