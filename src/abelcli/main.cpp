@@ -9,6 +9,7 @@
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QSet>
@@ -142,6 +143,18 @@ static CliInput readCliInput(const QString& path)
 
 struct ParsedCliProgram {
     std::unique_ptr<abel::ProgramNode> program;
+    QList<abel::Diagnostic> diagnostics;
+};
+
+struct LoadedCliResources {
+    abel::BackendRegistry registry;
+    std::vector<abel::ResourceNodeLoadResult> handles;
+    QList<abel::Diagnostic> diagnostics;
+    bool hasResources = false;
+};
+
+struct CliProgramRun {
+    int exitCode = 1;
     QList<abel::Diagnostic> diagnostics;
 };
 
@@ -292,6 +305,119 @@ static QList<abel::Diagnostic> checkSourceFiles(const QList<abel::PackageSourceF
     return diagnostics;
 }
 
+static LoadedCliResources loadCliResources(const QList<abel::PackageResolvedResource>& packageResources,
+                                           const QStringList& resourceFiles,
+                                           const QString& explicitResourceBaseDir)
+{
+    LoadedCliResources result;
+    result.hasResources = !packageResources.isEmpty() || !resourceFiles.isEmpty();
+    result.handles.reserve(static_cast<size_t>(packageResources.size() + resourceFiles.size()));
+    for (const auto& packageResource : packageResources) {
+        auto loaded = abel::loadBackendResourceNode(packageResource.node,
+                                                    result.registry,
+                                                    packageResource.packageRoot);
+        result.diagnostics.append(loaded.diagnostics);
+        if (loaded.ok())
+            result.handles.push_back(std::move(loaded));
+    }
+    if (!result.diagnostics.isEmpty())
+        return result;
+
+    for (const QString& resourceFile : resourceFiles) {
+        QFile rf(resourceFile);
+        if (!rf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            result.diagnostics.push_back(makeCliDiagnostic(QStringLiteral("E0006"),
+                                                           QStringLiteral("cannot open resource '%1'").arg(resourceFile),
+                                                           resourceFile));
+            continue;
+        }
+        auto resource = abel::resourceNodeFromJsonText(QString::fromUtf8(rf.readAll()), resourceFile);
+        result.diagnostics.append(resource.diagnostics);
+        if (!resource.diagnostics.isEmpty())
+            continue;
+        auto loaded = abel::loadBackendResourceNode(resource.node,
+                                                    result.registry,
+                                                    explicitResourceBaseDir);
+        result.diagnostics.append(loaded.diagnostics);
+        if (loaded.ok())
+            result.handles.push_back(std::move(loaded));
+    }
+    return result;
+}
+
+static CliProgramRun runSourceFiles(const QList<abel::PackageSourceFile>& sourceFiles,
+                                    const QList<abel::PackageResolvedResource>& packageResources,
+                                    const QStringList& resourceFiles,
+                                    const QString& explicitResourceBaseDir)
+{
+    CliProgramRun out;
+    auto parsed = parseSourceFiles(sourceFiles);
+    out.diagnostics.append(parsed.diagnostics);
+    if (!out.diagnostics.isEmpty())
+        return out;
+
+    auto loadedResources = loadCliResources(packageResources, resourceFiles, explicitResourceBaseDir);
+    out.diagnostics.append(loadedResources.diagnostics);
+    if (!out.diagnostics.isEmpty())
+        return out;
+
+    abel::Interpreter interpreter;
+    auto result = !loadedResources.hasResources
+        ? interpreter.run(*parsed.program)
+        : interpreter.run(*parsed.program, &loadedResources.registry);
+    out.exitCode = result.exitCode;
+    out.diagnostics.append(result.diagnostics);
+    return out;
+}
+
+static QStringList packageTestFiles(const abel::PackageManifest& root)
+{
+    QStringList files;
+    const QDir testDir(QDir(root.rootDir).absoluteFilePath(QStringLiteral("tests")));
+    if (!testDir.exists())
+        return files;
+    QDirIterator it(testDir.absolutePath(),
+                    QStringList{QStringLiteral("*.abel")},
+                    QDir::Files,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext())
+        files.push_back(QFileInfo(it.next()).absoluteFilePath());
+    files.sort();
+    return files;
+}
+
+static QList<abel::PackageSourceFile> packageGraphSourceFileEntriesForTest(const abel::PackageGraphResult& graph,
+                                                                           const QString& testFile)
+{
+    QList<abel::PackageSourceFile> entries;
+    for (const abel::PackageManifest& dependency : graph.dependencies) {
+        for (const QString& path : abel::packageSourceFiles(dependency, false)) {
+            abel::PackageSourceFile entry;
+            entry.packageName = dependency.name;
+            entry.path = path;
+            entry.fromDependency = true;
+            entry.entry = false;
+            entries.push_back(entry);
+        }
+    }
+    for (const QString& path : abel::packageSourceFiles(graph.root, false)) {
+        abel::PackageSourceFile entry;
+        entry.packageName = graph.root.name;
+        entry.path = path;
+        entry.fromDependency = false;
+        entry.entry = false;
+        entries.push_back(entry);
+    }
+
+    abel::PackageSourceFile test;
+    test.packageName = graph.root.name;
+    test.path = QFileInfo(testFile).absoluteFilePath();
+    test.fromDependency = false;
+    test.entry = true;
+    entries.push_back(test);
+    return entries;
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -306,12 +432,12 @@ int main(int argc, char** argv)
     QCommandLineOption toolchainOption(QStringLiteral("toolchain"),
                                        QStringLiteral("Print the locked Qt/C++ toolchain summary."));
     QCommandLineOption resourceOption({QStringLiteral("resource"), QStringLiteral("r")},
-                                      QStringLiteral("Load a backend ResourceNode JSON before `abel run`."),
+                                      QStringLiteral("Load an extra backend ResourceNode JSON before `abel run` or `abel test`."),
                                       QStringLiteral("resource.json"));
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
     parser.addPositionalArgument(QStringLiteral("command"),
-                                 QStringLiteral("Command: init | add | remove | update | build | check | run | package | resources | version"));
+                                 QStringLiteral("Command: init | add | remove | update | build | test | check | run | package | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
                                  QStringLiteral("Input file, resource subcommand, or entry."),
                                  QStringLiteral("[input]"));
@@ -517,6 +643,61 @@ int main(int argc, char** argv)
         return 0;
     }
 
+    if (command == QStringLiteral("test")) {
+        if (args.size() > 2) {
+            err << "E0013: test expects: abel test [project-dir]" << Qt::endl;
+            return 2;
+        }
+        const QString projectDir = args.size() == 2 ? args[1] : QStringLiteral(".");
+        auto graph = abel::packageGraphFromDirectory(projectDir);
+        for (const auto& d : graph.diagnostics)
+            printDiagnostic(d);
+        if (!graph.ok())
+            return 1;
+
+        const QStringList tests = packageTestFiles(graph.root);
+        if (tests.isEmpty()) {
+            out << "0/0 test(s) passed" << Qt::endl;
+            return 0;
+        }
+
+        const QList<abel::PackageResolvedResource> packageResources = abel::cachedPackageBackendArtifacts(graph);
+        const QStringList resourceFiles = parser.values(resourceOption);
+        int passed = 0;
+        int failed = 0;
+        for (const QString& testFile : tests) {
+            const QString display = QDir(graph.root.rootDir).relativeFilePath(testFile);
+            out << "test " << display << " ... " << Qt::flush;
+            const QList<abel::PackageSourceFile> sourceFiles = packageGraphSourceFileEntriesForTest(graph, testFile);
+            const QList<abel::Diagnostic> checkDiagnostics = checkSourceFiles(sourceFiles);
+            if (!checkDiagnostics.isEmpty()) {
+                out << "FAILED" << Qt::endl;
+                for (const auto& d : checkDiagnostics)
+                    printDiagnostic(d);
+                ++failed;
+                continue;
+            }
+
+            const CliProgramRun run = runSourceFiles(sourceFiles,
+                                                     packageResources,
+                                                     resourceFiles,
+                                                     QCoreApplication::applicationDirPath());
+            if (!run.diagnostics.isEmpty() || run.exitCode != 0) {
+                out << "FAILED" << Qt::endl;
+                for (const auto& d : run.diagnostics)
+                    printDiagnostic(d);
+                if (run.diagnostics.isEmpty())
+                    err << "test " << display << " failed with exit code " << run.exitCode << Qt::endl;
+                ++failed;
+                continue;
+            }
+            out << "ok" << Qt::endl;
+            ++passed;
+        }
+        out << passed << "/" << tests.size() << " test(s) passed" << Qt::endl;
+        return failed == 0 ? 0 : 1;
+    }
+
     if (command == QStringLiteral("check") || command == QStringLiteral("run")) {
         if (args.size() < 2) {
             err << "E0003: " << command << " expects an input file or project directory" << Qt::endl;
@@ -533,50 +714,10 @@ int main(int argc, char** argv)
         if (!checkDiagnostics.isEmpty())
             return 1;
         if (command == QStringLiteral("run")) {
-            auto parsed = parseSourceFiles(input.sourceFiles);
-            for (const auto& d : parsed.diagnostics)
-                printDiagnostic(d);
-            if (!parsed.diagnostics.isEmpty())
-                return 1;
-            abel::BackendRegistry backendRegistry;
-            std::vector<abel::ResourceNodeLoadResult> loadedResources;
-            const QStringList resourceFiles = parser.values(resourceOption);
-            loadedResources.reserve(static_cast<size_t>(resourceFiles.size() + input.packageResources.size()));
-            for (const auto& packageResource : input.packageResources) {
-                auto loaded = abel::loadBackendResourceNode(packageResource.node,
-                                                            backendRegistry,
-                                                            packageResource.packageRoot);
-                for (const auto& d : loaded.diagnostics)
-                    printDiagnostic(d);
-                if (!loaded.ok())
-                    return 1;
-                loadedResources.push_back(std::move(loaded));
-            }
-            for (const QString& resourceFile : resourceFiles) {
-                QFile rf(resourceFile);
-                if (!rf.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    err << "E0006: cannot open resource '" << resourceFile << "'" << Qt::endl;
-                    return 2;
-                }
-                auto resource = abel::resourceNodeFromJsonText(QString::fromUtf8(rf.readAll()), resourceFile);
-                for (const auto& d : resource.diagnostics)
-                    printDiagnostic(d);
-                if (!resource.diagnostics.isEmpty())
-                    return 1;
-                auto loaded = abel::loadBackendResourceNode(resource.node,
-                                                            backendRegistry,
-                                                            QCoreApplication::applicationDirPath());
-                for (const auto& d : loaded.diagnostics)
-                    printDiagnostic(d);
-                if (!loaded.ok())
-                    return 1;
-                loadedResources.push_back(std::move(loaded));
-            }
-            abel::Interpreter interpreter;
-            const bool hasBackendResources = !resourceFiles.isEmpty() || !input.packageResources.isEmpty();
-            auto result = !hasBackendResources
-                ? interpreter.run(*parsed.program)
-                : interpreter.run(*parsed.program, &backendRegistry);
+            const CliProgramRun result = runSourceFiles(input.sourceFiles,
+                                                        input.packageResources,
+                                                        parser.values(resourceOption),
+                                                        QCoreApplication::applicationDirPath());
             for (const auto& d : result.diagnostics)
                 printDiagnostic(d);
             return result.exitCode;

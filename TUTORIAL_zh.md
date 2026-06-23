@@ -1147,7 +1147,7 @@ my_abel_project/
       math.abel
 ```
 
-当前 v1 包管理已经支持项目级入口、本地 path 依赖、以及本地 registry 目录依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作依赖并生成 `abel.lock.json`，path/registry dependency 已支持 SemVer 版本要求检查，并会拒绝同一个包名在依赖图中解析到不同版本或不同来源；registry dependency 会把选中的版本复制到 `.abel/cache/packages`，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run <project-dir>` 会读取 package graph。
+当前 v1 包管理已经支持项目级入口、本地 path 依赖、以及本地 registry 目录依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作依赖并生成 `abel.lock.json`，path/registry dependency 已支持 SemVer 版本要求检查，并会拒绝同一个包名在依赖图中解析到不同版本或不同来源；registry dependency 会把选中的版本复制到 `.abel/cache/packages`，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run/test <project-dir>` 会读取 package graph。
 
 当前项目源码加载规则是 v1 多文件第一片：如果输入是 package 目录，`abel check/run/build` 会读取根项目 `src/**/*.abel`，读取依赖包的非 entry `src/**/*.abel` 作为库源码，并把根项目 manifest `entry` 文件放到最后合并为一个 Program。依赖包 entry 默认排除，避免依赖包自己的 `main` 污染根项目。每个文件保留自己的 SourceSpan，所以诊断仍能指向真实文件/行/列。`module xxx;` 与 `use yyy;` 现在参与可见性：同包跨模块访问必须显式 `use`，跨包访问依赖包顶层 `fn/struct/backend` 还要求目标声明带 `export`。函数、struct、backend 解析会优先使用当前 package/module 上下文；`module.path::symbol` 与 `use module.path as Alias; Alias::symbol` 可用于限定函数、限定 struct 类型/构造和限定 backend 调用解歧。re-export、模块内完整 private/public 与完整模块系统仍未完成。
 
@@ -1177,6 +1177,36 @@ $ABEL update .
 $ABEL build .
 $ABEL check .
 $ABEL run .
+```
+
+项目级测试：
+
+```text
+my_abel_project/
+  tests/
+    pass.abel
+```
+
+每个 `tests/**/*.abel` 文件都是一个独立测试入口。`abel test .` 会把依赖包库源码、根项目 `src/**/*.abel` 非 entry 源码和当前测试文件合并，先执行同一套 `abel check`，再运行测试 `main`。退出码为 `0` 表示该测试通过；非 0 或诊断错误表示失败。
+
+示例测试：
+
+```abel
+module my.tests.pass;
+use my.lib.math as M;
+
+fn int main() {
+    if (M::helper() == 41) {
+        return 0;
+    }
+    return 1;
+}
+```
+
+运行：
+
+```bash
+$ABEL test .
 ```
 
 多文件示例：

@@ -40,7 +40,7 @@ C/C++ 值模型
 + backendArtifacts[].build 的 CMake 自动构建第一片
 + .abel/cache/backend 项目级 backend artifact 缓存与 .abel-cache.json sidecar
 + abel add/remove/update/build
-+ abel check / abel run
++ abel check / abel run / abel test
 ```
 
 ---
@@ -162,6 +162,12 @@ $ABEL_BIN update .
 $ABEL_BIN build .
 $ABEL_BIN check .
 $ABEL_BIN run .
+```
+
+如果项目存在 `tests/**/*.abel`，再运行：
+
+```bash
+$ABEL_BIN test .
 ```
 
 ---
@@ -1032,6 +1038,7 @@ $ABEL_BIN package check .
 $ABEL_BIN build .
 $ABEL_BIN check .
 $ABEL_BIN run .
+$ABEL_BIN test .
 ```
 
 backend 项目：
@@ -1041,6 +1048,7 @@ $ABEL_BIN package check .
 $ABEL_BIN build .
 $ABEL_BIN check .
 $ABEL_BIN run .
+$ABEL_BIN test .
 ```
 
 如果在 Abel 编译器仓库内跑测试，必须卡 4GB：

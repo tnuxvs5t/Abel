@@ -721,3 +721,109 @@ string(FIND "${ambiguous_struct_check_stderr}" "related:" ambiguous_struct_relat
 if(ambiguous_struct_related_pos EQUAL -1)
     message(FATAL_ERROR "abel check did not print related spans for ambiguous struct:\n${ambiguous_struct_check_stdout}\n${ambiguous_struct_check_stderr}")
 endif()
+
+set(test_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-test-command")
+file(REMOVE_RECURSE "${test_project_dir}")
+file(MAKE_DIRECTORY "${test_project_dir}/src/lib")
+file(MAKE_DIRECTORY "${test_project_dir}/tests")
+
+file(WRITE "${test_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-test-command",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${test_project_dir}/src/lib/math.abel" [=[
+module cli.testlib.math;
+
+fn int helper() {
+    return 41;
+}
+]=])
+
+file(WRITE "${test_project_dir}/src/main.abel" [=[
+module cli.testapp;
+
+fn int main() {
+    return 99;
+}
+]=])
+
+file(WRITE "${test_project_dir}/tests/pass.abel" [=[
+module cli.tests.pass;
+use cli.testlib.math as M;
+
+fn int main() {
+    if (M::helper() == 41) {
+        return 0;
+    }
+    return 1;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test "${test_project_dir}"
+    RESULT_VARIABLE test_command_result
+    OUTPUT_VARIABLE test_command_stdout
+    ERROR_VARIABLE test_command_stderr
+)
+if(NOT test_command_result EQUAL 0)
+    message(FATAL_ERROR "abel test unexpectedly failed:\n${test_command_stdout}\n${test_command_stderr}")
+endif()
+string(FIND "${test_command_stdout}" "test tests/pass.abel ... ok" test_command_ok_pos)
+if(test_command_ok_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not report passing test file:\n${test_command_stdout}\n${test_command_stderr}")
+endif()
+string(FIND "${test_command_stdout}" "1/1 test(s) passed" test_command_summary_pos)
+if(test_command_summary_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not report passing summary:\n${test_command_stdout}\n${test_command_stderr}")
+endif()
+
+set(failing_test_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-test-command-fail")
+file(REMOVE_RECURSE "${failing_test_project_dir}")
+file(MAKE_DIRECTORY "${failing_test_project_dir}/src")
+file(MAKE_DIRECTORY "${failing_test_project_dir}/tests")
+
+file(WRITE "${failing_test_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-test-command-fail",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${failing_test_project_dir}/src/main.abel" [=[
+fn int main() {
+    return 0;
+}
+]=])
+
+file(WRITE "${failing_test_project_dir}/tests/fail.abel" [=[
+fn int main() {
+    return 3;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test "${failing_test_project_dir}"
+    RESULT_VARIABLE failing_test_command_result
+    OUTPUT_VARIABLE failing_test_command_stdout
+    ERROR_VARIABLE failing_test_command_stderr
+)
+if(failing_test_command_result EQUAL 0)
+    message(FATAL_ERROR "abel test unexpectedly accepted failing test:\n${failing_test_command_stdout}\n${failing_test_command_stderr}")
+endif()
+string(FIND "${failing_test_command_stdout}" "test tests/fail.abel ... FAILED" failing_test_command_failed_pos)
+if(failing_test_command_failed_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not report failing test file:\n${failing_test_command_stdout}\n${failing_test_command_stderr}")
+endif()
+string(FIND "${failing_test_command_stderr}" "failed with exit code 3" failing_test_command_exit_pos)
+if(failing_test_command_exit_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not report failing exit code:\n${failing_test_command_stdout}\n${failing_test_command_stderr}")
+endif()
+string(FIND "${failing_test_command_stdout}" "0/1 test(s) passed" failing_test_command_summary_pos)
+if(failing_test_command_summary_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not report failing summary:\n${failing_test_command_stdout}\n${failing_test_command_stderr}")
+endif()

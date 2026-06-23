@@ -14,7 +14,7 @@ Current implementation scope:
 - module/use/export syntax first slice and package multi-file entry: project `abel check/run/build` now parses root-package `src/**/*.abel`, also consumes dependency package non-entry `src/**/*.abel` library sources, keeps the root manifest entry file last, typechecks/runs the merged program while preserving per-file source spans, enforces explicit `use` for cross-module lookup, supports module-qualified and import-alias-qualified function/struct/backend lookup, and rejects root-package access to non-exported dependency functions/structs/backends;
 - v1 package skeleton with `abel init [project-dir]`, `abel.package.json`, `abel add/remove/update/build`, local path dependencies, local registry dependencies that pick the highest satisfying SemVer version into `.abel/cache/packages`, `abel.lock.json`, package graph consumption, same-package-name conflict diagnostics, CMake backend artifact auto-build metadata, and project-local backend artifact cache under `.abel/cache/backend` with `.abel-cache.json` sidecar validation;
 - installable Abel SDK first slice: headers, `libabelcore.so`, `abel` CLI, `AbelConfig.cmake`, `AbelTargets.cmake`, external backend fixture coverage for `find_package(Abel REQUIRED)`, and a backend binder matrix for common scalar/vector types plus `AbelRuntimeContext&` diagnostics and `bindVariadic` / `AbelVariadicArgs` for Abel `any...`;
-- CLI commands: `abel init`, `abel add`, `abel remove`, `abel update`, `abel build`, `abel check`, `abel run`, `abel package check`, `abel resources check`, and `abel run --resource`.
+- CLI commands: `abel init`, `abel add`, `abel remove`, `abel update`, `abel build`, `abel test`, `abel check`, `abel run`, `abel package check`, `abel resources check`, and `abel run --resource`.
 
 Abel still does **not** implement split/JIT, a large VM, remote registry downloads, a full registry SemVer solver, full versioned/ABI cache invalidation, a stable cross-Qt/cross-compiler ABI, a manifest/hash audit system, or a context exporter. `module` / `use` are now enforced for same-package cross-module lookup; dependency `export` is enforced for cross-package top-level functions/structs/backends; module-qualified lookup and `use some.module as Alias;` work for functions, struct types/constructors, and backend calls. Re-export, a complete public/private module system, and a full import/export surface remain v1 follow-up work. Local path and local registry dependencies now support SemVer requirement checks and reject a graph that resolves the same package name to different versions/sources; registry support is currently a local directory cache first slice, and backend plugin auto-build currently exists only as a first CMake-based `backendArtifacts[].build` slice.
 
@@ -38,6 +38,8 @@ build/abel add registry dep '^1.0.0' ../registry <project-dir>
 Resource JSON `qtVersion` and `kit` are now load-time gates: `abel resources check` validates JSON shape only, while `abel run --resource` / package backend loading rejects resources whose Qt version or kit does not match the Abel runtime.
 
 `abel build <project-dir>` copies root/dependency backend artifacts into `.abel/cache/backend/...` and writes a neighboring `<plugin>.abel-cache.json` sidecar. `abel run <project-dir>` only prefers the cached plugin when that sidecar still matches the current source artifact path, size, mtime, ResourceNode fields, and symbol list; if metadata is missing or stale, it falls back to the source artifact path until `abel build` refreshes the cache.
+
+`abel test <project-dir>` runs every `tests/**/*.abel` file in a package project. Each test is checked with the same package graph as `abel check`, gets root/dependency library sources, uses the test file as its own entry `main`, auto-loads package backend artifacts, and passes only when it exits with code `0`.
 
 ## Build
 
@@ -90,6 +92,7 @@ build/abel build build/abel_init_smoke/project
 build/abel package check examples/project
 build/abel check examples/project
 build/abel run examples/project
+build/abel test examples/project
 build/abel package check examples/project_backend
 build/abel build examples/project_backend
 build/abel run examples/project_backend
