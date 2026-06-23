@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QDirIterator>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
@@ -12,6 +13,8 @@
 #include <QSet>
 #include <QTextStream>
 #include <QtGlobal>
+
+#include <optional>
 
 namespace abel {
 
@@ -21,6 +24,7 @@ constexpr auto kPackageManifestFileName = "abel.package.json";
 constexpr auto kPackageLockFileName = "abel.lock.json";
 constexpr auto kPackageCacheDirName = ".abel";
 constexpr auto kPackageCacheBackendDir = "cache/backend";
+constexpr auto kPackageCachePackagesDir = "cache/packages";
 
 void addPackageError(QList<Diagnostic>& diagnostics, const QString& message, const SourceSpan& span)
 {
@@ -139,6 +143,13 @@ QString backendArtifactCachedPath(const QString& rootDir, const PackageResolvedR
     return cacheDir.absoluteFilePath(packagePart + QStringLiteral("/")
                                      + backendPart + QStringLiteral("/")
                                      + fileName);
+}
+
+QString registryPackageCachePath(const QString& rootDir, const QString& name, const QString& version)
+{
+    QDir cacheDir(packageRegistryCacheDir(rootDir));
+    return cacheDir.absoluteFilePath(sanitizeCacheSegment(name) + QStringLiteral("/")
+                                     + sanitizeCacheSegment(version));
 }
 
 QString backendArtifactCacheMetadataPath(const QString& cachedPath)
@@ -670,15 +681,146 @@ PackageDependency parseDependency(const QJsonObject& object,
                             .arg(dependency.name, dependency.version, versionRequirementError),
                         span);
     }
-    if (dependency.kind != QStringLiteral("path")) {
+    if (dependency.kind == QStringLiteral("path")) {
+        dependency.path = requiredString(object, QStringLiteral("path"), diagnostics, span);
+        return dependency;
+    }
+    if (dependency.kind == QStringLiteral("registry")) {
+        dependency.registry = requiredString(object, QStringLiteral("registry"), diagnostics, span);
+        return dependency;
+    }
+    {
         addPackageError(diagnostics,
-                        QStringLiteral("dependency '%1' kind '%2' is not supported yet; only 'path' is supported")
+                        QStringLiteral("dependency '%1' kind '%2' is not supported yet; expected 'path' or 'registry'")
                             .arg(dependency.name, dependency.kind),
                         span);
         return dependency;
     }
-    dependency.path = requiredString(object, QStringLiteral("path"), diagnostics, span);
-    return dependency;
+}
+
+bool copyDirectoryRecursively(const QString& sourceDir, const QString& targetDir, QList<Diagnostic>& diagnostics, const SourceSpan& span)
+{
+    const QFileInfo sourceInfo(sourceDir);
+    const QFileInfo targetInfo(targetDir);
+    const QString sourceRoot = canonicalOrAbsoluteFilePath(sourceInfo);
+    const QString targetRoot = targetInfo.exists() ? canonicalOrAbsoluteFilePath(targetInfo) : targetInfo.absoluteFilePath();
+    if (sourceRoot == targetRoot)
+        return true;
+    if (QFileInfo::exists(targetDir) && !QDir(targetDir).removeRecursively()) {
+        addPackageError(diagnostics, QStringLiteral("cannot refresh cached package directory '%1'").arg(targetDir), span);
+        return false;
+    }
+    if (!QDir().mkpath(targetDir)) {
+        addPackageError(diagnostics, QStringLiteral("cannot create cached package directory '%1'").arg(targetDir), span);
+        return false;
+    }
+
+    QDirIterator it(sourceDir,
+                    QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        const QFileInfo info = it.fileInfo();
+        const QString relative = QDir(sourceDir).relativeFilePath(info.absoluteFilePath());
+        if (relative == QStringLiteral(".abel") || relative.startsWith(QStringLiteral(".abel/")))
+            continue;
+        const QString target = QDir(targetDir).absoluteFilePath(relative);
+        if (info.isDir()) {
+            if (!QDir().mkpath(target)) {
+                addPackageError(diagnostics, QStringLiteral("cannot create cached package subdirectory '%1'").arg(target), span);
+                return false;
+            }
+            continue;
+        }
+        if (info.isFile()) {
+            if (!QDir().mkpath(QFileInfo(target).dir().absolutePath())) {
+                addPackageError(diagnostics, QStringLiteral("cannot create cached package file directory '%1'").arg(QFileInfo(target).dir().absolutePath()), span);
+                return false;
+            }
+            if (QFileInfo::exists(target) && !QFile::remove(target)) {
+                addPackageError(diagnostics, QStringLiteral("cannot replace cached package file '%1'").arg(target), span);
+                return false;
+            }
+            if (!QFile::copy(info.absoluteFilePath(), target)) {
+                addPackageError(diagnostics,
+                                QStringLiteral("cannot copy registry package file '%1' to cache '%2'")
+                                    .arg(info.absoluteFilePath(), target),
+                                span);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+struct RegistryCandidate {
+    PackageManifest package;
+    QString sourceRoot;
+    SemVer version;
+};
+
+std::optional<RegistryCandidate> findRegistryCandidate(const PackageDependency& dependency,
+                                                       const QString& packageRoot,
+                                                       const QString& projectRoot,
+                                                       QList<Diagnostic>& diagnostics,
+                                                       const SourceSpan& span)
+{
+    const QString registryRoot = absolutePathFrom(packageRoot, dependency.registry);
+    const QString packageDir = QDir(registryRoot).absoluteFilePath(dependency.name);
+    const QFileInfo packageInfo(packageDir);
+    if (!packageInfo.isDir()) {
+        addPackageError(diagnostics,
+                        QStringLiteral("registry dependency '%1' was not found under registry '%2'")
+                            .arg(dependency.name, dependency.registry),
+                        span);
+        return std::nullopt;
+    }
+
+    std::optional<RegistryCandidate> best;
+    const auto versionDirs = QDir(packageDir).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo& versionDir : versionDirs) {
+        if (!isPackageDirectory(versionDir.absoluteFilePath()))
+            continue;
+        auto parsed = packageManifestFromDirectory(versionDir.absoluteFilePath());
+        diagnostics.append(parsed.diagnostics);
+        if (!parsed.ok())
+            continue;
+        if (parsed.package.name != dependency.name)
+            continue;
+        QString versionError;
+        if (!versionSatisfiesRequirement(parsed.package.version, dependency.version, &versionError))
+            continue;
+        SemVer semver;
+        if (!parseSemVerCore(parsed.package.version, semver))
+            continue;
+        if (!best.has_value() || compareSemVer(semver, best->version) > 0) {
+            best = RegistryCandidate{parsed.package, versionDir.absoluteFilePath(), semver};
+        }
+    }
+
+    if (!best.has_value()) {
+        addPackageError(diagnostics,
+                        dependency.version.isEmpty()
+                            ? QStringLiteral("registry dependency '%1' has no usable versions in '%2'")
+                                  .arg(dependency.name, dependency.registry)
+                            : QStringLiteral("registry dependency '%1' has no version satisfying '%2' in '%3'")
+                                  .arg(dependency.name, dependency.version, dependency.registry),
+                        span);
+        return std::nullopt;
+    }
+
+    const QString cachedRoot = registryPackageCachePath(projectRoot, best->package.name, best->package.version);
+    if (!copyDirectoryRecursively(best->sourceRoot, cachedRoot, diagnostics, span))
+        return std::nullopt;
+
+    auto cached = packageManifestFromDirectory(cachedRoot);
+    diagnostics.append(cached.diagnostics);
+    if (!cached.ok())
+        return std::nullopt;
+
+    best->package = cached.package;
+    best->sourceRoot = cachedRoot;
+    return best;
 }
 
 QStringList parseSymbols(const QJsonObject& object,
@@ -751,7 +893,7 @@ void resolvePackageDependencies(const PackageManifest& package,
     for (const PackageDependency& dependency : package.dependencies) {
         SourceSpan span;
         span.file = package.filePath;
-        if (dependency.kind != QStringLiteral("path")) {
+        if (dependency.kind != QStringLiteral("path") && dependency.kind != QStringLiteral("registry")) {
             addPackageError(result.diagnostics,
                             QStringLiteral("dependency '%1' kind '%2' is not supported yet")
                                 .arg(dependency.name, dependency.kind),
@@ -759,43 +901,64 @@ void resolvePackageDependencies(const PackageManifest& package,
             continue;
         }
 
-        const QString resolvedPath = absolutePathFrom(package.rootDir, dependency.path);
-        const QFileInfo depInfo(resolvedPath);
-        if (!depInfo.isDir() || !isPackageDirectory(resolvedPath)) {
-            addPackageError(result.diagnostics,
-                            QStringLiteral("path dependency '%1' does not point to an Abel package: %2")
-                                .arg(dependency.name, dependency.path),
-                            span);
-            continue;
+        QString resolvedPath;
+        PackageManifest resolvedPackage;
+        if (dependency.kind == QStringLiteral("path")) {
+            resolvedPath = absolutePathFrom(package.rootDir, dependency.path);
+            const QFileInfo depInfo(resolvedPath);
+            if (!depInfo.isDir() || !isPackageDirectory(resolvedPath)) {
+                addPackageError(result.diagnostics,
+                                QStringLiteral("path dependency '%1' does not point to an Abel package: %2")
+                                    .arg(dependency.name, dependency.path),
+                                span);
+                continue;
+            }
+
+            auto parsed = packageManifestFromDirectory(resolvedPath);
+            result.diagnostics.append(parsed.diagnostics);
+            if (!parsed.ok())
+                continue;
+            resolvedPackage = parsed.package;
+        } else {
+            auto candidate = findRegistryCandidate(dependency, package.rootDir, result.rootDir, result.diagnostics, span);
+            if (!candidate.has_value())
+                continue;
+            resolvedPath = candidate->sourceRoot;
+            resolvedPackage = candidate->package;
         }
 
-        const QString key = absolutePathFrom(QString(), resolvedPath);
+        const QFileInfo depInfo(resolvedPath);
+
+        const QString key = dependency.kind == QStringLiteral("registry")
+            ? QStringLiteral("registry:%1@%2").arg(resolvedPackage.name, resolvedPackage.version)
+            : absolutePathFrom(QString(), resolvedPath);
         if (resolving.contains(key)) {
             addPackageError(result.diagnostics,
-                            QStringLiteral("circular path dependency involving '%1' at %2")
-                                .arg(dependency.name, resolvedPath),
+                            QStringLiteral("circular %1 dependency involving '%2' at %3")
+                                .arg(dependency.kind,
+                                     dependency.name,
+                                     resolvedPath),
                             span);
             continue;
         }
-        auto parsed = packageManifestFromDirectory(resolvedPath);
-        result.diagnostics.append(parsed.diagnostics);
-        if (!parsed.ok())
-            continue;
-        if (!dependency.name.isEmpty() && parsed.package.name != dependency.name) {
+        if (!dependency.name.isEmpty() && resolvedPackage.name != dependency.name) {
             addPackageError(result.diagnostics,
-                            QStringLiteral("path dependency name mismatch: manifest asks for '%1' but package is '%2'")
-                                .arg(dependency.name, parsed.package.name),
+                            dependency.kind == QStringLiteral("path")
+                                ? QStringLiteral("path dependency name mismatch: manifest asks for '%1' but package is '%2'")
+                                      .arg(dependency.name, resolvedPackage.name)
+                                : QStringLiteral("registry dependency name mismatch: manifest asks for '%1' but package is '%2'")
+                                      .arg(dependency.name, resolvedPackage.name),
                             span);
             continue;
         }
         QString versionError;
-        if (!versionSatisfiesRequirement(parsed.package.version, dependency.version, &versionError)) {
+        if (!versionSatisfiesRequirement(resolvedPackage.version, dependency.version, &versionError)) {
             addPackageError(result.diagnostics,
                             versionError.isEmpty()
-                                ? QStringLiteral("path dependency '%1' requires version '%2' but package is '%3'")
-                                      .arg(dependency.name, dependency.version, parsed.package.version)
-                                : QStringLiteral("path dependency '%1' version check failed: %2")
-                                      .arg(dependency.name, versionError),
+                                ? QStringLiteral("%1 dependency '%2' requires version '%3' but package is '%4'")
+                                      .arg(dependency.kind, dependency.name, dependency.version, resolvedPackage.version)
+                                : QStringLiteral("%1 dependency '%2' version check failed: %3")
+                                      .arg(dependency.kind, dependency.name, versionError),
                             span);
             continue;
         }
@@ -803,17 +966,17 @@ void resolvePackageDependencies(const PackageManifest& package,
             continue;
 
         PackageLockEntry entry;
-        entry.name = parsed.package.name;
-        entry.version = parsed.package.version;
+        entry.name = resolvedPackage.name;
+        entry.version = resolvedPackage.version;
         entry.versionRequirement = dependency.version;
         entry.kind = dependency.kind;
-        entry.source = dependency.path;
-        entry.resolvedPath = key;
+        entry.source = dependency.kind == QStringLiteral("registry") ? dependency.registry : dependency.path;
+        entry.resolvedPath = dependency.kind == QStringLiteral("registry") ? resolvedPath : absolutePathFrom(QString(), resolvedPath);
         result.entries.push_back(entry);
 
         seen.insert(key);
         resolving.insert(key);
-        resolvePackageDependencies(parsed.package, result, seen, resolving);
+        resolvePackageDependencies(resolvedPackage, result, seen, resolving);
         resolving.remove(key);
     }
 }
@@ -838,6 +1001,8 @@ QJsonObject dependencyToJson(const PackageDependency& dependency)
     object.insert(QStringLiteral("kind"), dependency.kind);
     if (!dependency.path.isEmpty())
         object.insert(QStringLiteral("path"), dependency.path);
+    if (!dependency.registry.isEmpty())
+        object.insert(QStringLiteral("registry"), dependency.registry);
     if (!dependency.version.isEmpty())
         object.insert(QStringLiteral("version"), dependency.version);
     return object;
@@ -984,6 +1149,52 @@ void copyLockResultIntoChange(PackageDependencyChangeResult& result, const Packa
     result.diagnostics.append(lock.diagnostics);
 }
 
+bool upsertPackageDependency(QJsonObject& manifestObject,
+                             const QString& manifestFile,
+                             const PackageDependency& dependency,
+                             bool& changed,
+                             QList<Diagnostic>& diagnostics)
+{
+    QJsonArray dependencies;
+    const QJsonValue existingValue = manifestObject.value(QStringLiteral("dependencies"));
+    if (!existingValue.isUndefined()) {
+        if (!existingValue.isArray()) {
+            SourceSpan span;
+            span.file = manifestFile;
+            addPackageError(diagnostics, QStringLiteral("package manifest field 'dependencies' must be an array"), span);
+            return false;
+        }
+        dependencies = existingValue.toArray();
+    }
+
+    const QJsonObject dependencyObject = dependencyToJson(dependency);
+    bool replaced = false;
+    for (qsizetype i = 0; i < dependencies.size(); ++i) {
+        const QJsonValue raw = dependencies.at(i);
+        if (!raw.isObject())
+            continue;
+        const QJsonObject object = raw.toObject();
+        if (object.value(QStringLiteral("name")).toString() != dependency.name)
+            continue;
+        if (object == dependencyObject) {
+            replaced = true;
+            break;
+        }
+        dependencies.replace(i, dependencyObject);
+        changed = true;
+        replaced = true;
+        break;
+    }
+    if (!replaced) {
+        dependencies.push_back(dependencyObject);
+        changed = true;
+    }
+
+    if (changed)
+        manifestObject.insert(QStringLiteral("dependencies"), dependencies);
+    return true;
+}
+
 } // namespace
 
 QString PackageManifest::entryFilePath() const
@@ -1015,6 +1226,13 @@ QString packageBackendCacheDir(const QString& rootDir)
     return QDir(QFileInfo(rootDir).absoluteFilePath()).absoluteFilePath(QString::fromLatin1(kPackageCacheDirName)
                                                                        + QStringLiteral("/")
                                                                        + QString::fromLatin1(kPackageCacheBackendDir));
+}
+
+QString packageRegistryCacheDir(const QString& rootDir)
+{
+    return QDir(QFileInfo(rootDir).absoluteFilePath()).absoluteFilePath(QString::fromLatin1(kPackageCacheDirName)
+                                                                       + QStringLiteral("/")
+                                                                       + QString::fromLatin1(kPackageCachePackagesDir));
 }
 
 bool isPackageDirectory(const QString& path)
@@ -1250,7 +1468,7 @@ PackageGraphResult packageGraphFromDirectory(const QString& dir)
     for (const PackageLockEntry& entry : lock.entries) {
         SourceSpan span;
         span.file = graph.lockFile;
-        if (entry.kind != QStringLiteral("path")) {
+        if (entry.kind != QStringLiteral("path") && entry.kind != QStringLiteral("registry")) {
             addPackageError(graph.diagnostics,
                             QStringLiteral("lockfile package '%1' kind '%2' is not supported yet")
                                 .arg(entry.name, entry.kind),
@@ -1446,42 +1664,88 @@ PackageDependencyChangeResult addPathPackageDependency(const QString& dir, const
     dependency.version = dependencyPackage.package.version;
     result.dependency = dependency;
 
-    QJsonArray dependencies;
-    const QJsonValue existingValue = manifestObject.value(QStringLiteral("dependencies"));
-    if (!existingValue.isUndefined()) {
-        if (!existingValue.isArray()) {
-            SourceSpan span;
-            span.file = result.manifestFile;
-            addPackageError(result.diagnostics, QStringLiteral("package manifest field 'dependencies' must be an array"), span);
-            return result;
-        }
-        dependencies = existingValue.toArray();
-    }
-
-    bool replaced = false;
-    for (qsizetype i = 0; i < dependencies.size(); ++i) {
-        const QJsonValue raw = dependencies.at(i);
-        if (!raw.isObject())
-            continue;
-        const QJsonObject object = raw.toObject();
-        if (object.value(QStringLiteral("name")).toString() != dependency.name)
-            continue;
-        if (object == dependencyToJson(dependency)) {
-            replaced = true;
-            break;
-        }
-        dependencies.replace(i, dependencyToJson(dependency));
-        result.changed = true;
-        replaced = true;
-        break;
-    }
-    if (!replaced) {
-        dependencies.push_back(dependencyToJson(dependency));
-        result.changed = true;
+    if (!upsertPackageDependency(manifestObject,
+                                 result.manifestFile,
+                                 dependency,
+                                 result.changed,
+                                 result.diagnostics)) {
+        return result;
     }
 
     if (result.changed) {
-        manifestObject.insert(QStringLiteral("dependencies"), dependencies);
+        if (!writeManifestObject(result.manifestFile, manifestObject, result.diagnostics))
+            return result;
+    }
+
+    const auto lock = updatePackageLock(result.rootDir);
+    copyLockResultIntoChange(result, lock);
+    return result;
+}
+
+PackageDependencyChangeResult addRegistryPackageDependency(const QString& dir,
+                                                          const QString& packageName,
+                                                          const QString& versionRequirement,
+                                                          const QString& registryDir)
+{
+    PackageDependencyChangeResult result;
+    QJsonObject manifestObject;
+    if (!readManifestObjectForUpdate(dir, manifestObject, result.manifestFile, result.rootDir, result.diagnostics))
+        return result;
+
+    auto rootPackage = packageManifestFromJson(manifestObject, result.rootDir, SourceSpan{result.manifestFile});
+    result.diagnostics.append(rootPackage.diagnostics);
+    if (!rootPackage.ok())
+        return result;
+
+    const QString name = packageName.trimmed();
+    if (name.isEmpty()) {
+        SourceSpan span;
+        span.file = result.manifestFile;
+        addPackageError(result.diagnostics, QStringLiteral("registry dependency name must not be empty"), span);
+        return result;
+    }
+
+    const QString requirement = versionRequirement.trimmed();
+    QString requirementError;
+    if (!validateVersionRequirementSyntax(requirement, &requirementError)) {
+        SourceSpan span;
+        span.file = result.manifestFile;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("registry dependency '%1' has invalid version requirement '%2': %3")
+                            .arg(name, requirement, requirementError),
+                        span);
+        return result;
+    }
+
+    QFileInfo registryInfo(registryDir);
+    if (!registryInfo.isAbsolute())
+        registryInfo = QFileInfo(QDir::current().absoluteFilePath(registryDir));
+    const QString registryRoot = canonicalOrAbsoluteFilePath(registryInfo);
+    if (!QFileInfo(registryRoot).isDir()) {
+        SourceSpan span;
+        span.file = registryRoot;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("registry directory '%1' does not exist").arg(registryDir),
+                        span);
+        return result;
+    }
+
+    PackageDependency dependency;
+    dependency.name = name;
+    dependency.kind = QStringLiteral("registry");
+    dependency.registry = QDir(result.rootDir).relativeFilePath(registryRoot);
+    dependency.version = requirement;
+    result.dependency = dependency;
+
+    if (!upsertPackageDependency(manifestObject,
+                                 result.manifestFile,
+                                 dependency,
+                                 result.changed,
+                                 result.diagnostics)) {
+        return result;
+    }
+
+    if (result.changed) {
         if (!writeManifestObject(result.manifestFile, manifestObject, result.diagnostics))
             return result;
     }
@@ -1526,6 +1790,7 @@ PackageDependencyChangeResult removePackageDependency(const QString& dir, const 
             result.dependency.name = object.value(QStringLiteral("name")).toString();
             result.dependency.kind = object.value(QStringLiteral("kind")).toString();
             result.dependency.path = object.value(QStringLiteral("path")).toString();
+            result.dependency.registry = object.value(QStringLiteral("registry")).toString();
             result.dependency.version = object.value(QStringLiteral("version")).toString();
             removed = true;
             continue;

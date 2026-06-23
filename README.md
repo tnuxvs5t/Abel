@@ -10,11 +10,28 @@ Current implementation scope:
 - backend blocks, resource-node JSON, `QPluginLoader` loading, and Qt/C++ plugin dispatch through `libabelcore.so`;
 - runtime diagnostics with Abel stack frames, `file:line:column`, source-line excerpts, and caret lines for the primary error and stack call sites;
 - `std.debug` first slice through builtins `debug_break()` and `debug_assert(bool, any...)`, both reporting through the same runtime diagnostic/stack/source-location path;
-- v1 package skeleton with `abel init [project-dir]`, `abel.package.json`, `abel add/remove/update/build`, local path dependencies with SemVer version requirements, `abel.lock.json`, package graph consumption, CMake backend artifact auto-build metadata, and project-local backend artifact cache under `.abel/cache/backend` with `.abel-cache.json` sidecar validation;
+- v1 package skeleton with `abel init [project-dir]`, `abel.package.json`, `abel add/remove/update/build`, local path dependencies, local registry dependencies that pick the highest satisfying SemVer version into `.abel/cache/packages`, `abel.lock.json`, package graph consumption, CMake backend artifact auto-build metadata, and project-local backend artifact cache under `.abel/cache/backend` with `.abel-cache.json` sidecar validation;
 - installable Abel SDK first slice: headers, `libabelcore.so`, `abel` CLI, `AbelConfig.cmake`, `AbelTargets.cmake`, external backend fixture coverage for `find_package(Abel REQUIRED)`, and a backend binder matrix for common scalar/vector types plus `AbelRuntimeContext&` diagnostics and `bindVariadic` / `AbelVariadicArgs` for Abel `any...`;
 - CLI commands: `abel init`, `abel add`, `abel remove`, `abel update`, `abel build`, `abel check`, `abel run`, `abel package check`, `abel resources check`, and `abel run --resource`.
 
-Abel still does **not** implement split/JIT, a large VM, registry downloads, a full registry SemVer solver, full versioned/ABI cache invalidation, a stable cross-Qt/cross-compiler ABI, a manifest/hash audit system, or a context exporter. Local path dependencies now support SemVer requirement checks, but backend plugin auto-build currently exists only as a first CMake-based `backendArtifacts[].build` slice.
+Abel still does **not** implement split/JIT, a large VM, remote registry downloads, a full registry SemVer solver, full versioned/ABI cache invalidation, a stable cross-Qt/cross-compiler ABI, a manifest/hash audit system, or a context exporter. Local path and local registry dependencies now support SemVer requirement checks; registry support is currently a local directory cache first slice, and backend plugin auto-build currently exists only as a first CMake-based `backendArtifacts[].build` slice.
+
+Local registry layout:
+
+```text
+registry/
+  dep/
+    1.0.0/abel.package.json
+    1.2.0/abel.package.json
+```
+
+Add a registry dependency:
+
+```bash
+build/abel add registry dep '^1.0.0' ../registry <project-dir>
+```
+
+`abel update/build` copies the selected version into `<project-dir>/.abel/cache/packages/dep/<version>` and records the cached path in `abel.lock.json`.
 
 Resource JSON `qtVersion` and `kit` are now load-time gates: `abel resources check` validates JSON shape only, while `abel run --resource` / package backend loading rejects resources whose Qt version or kit does not match the Abel runtime.
 

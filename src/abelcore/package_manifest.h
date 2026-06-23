@@ -13,6 +13,7 @@ struct PackageDependency {
     QString name;
     QString kind;
     QString path;
+    QString registry;
     QString version;
 };
 
@@ -134,6 +135,7 @@ QString packageManifestFileName();
 QString packageLockFileName();
 QString packageCacheRoot(const QString& rootDir);
 QString packageBackendCacheDir(const QString& rootDir);
+QString packageRegistryCacheDir(const QString& rootDir);
 bool isPackageDirectory(const QString& path);
 
 PackageInitResult initPackageProject(const PackageInitOptions& options);
@@ -145,6 +147,10 @@ PackageGraphResult updatePackageGraph(const QString& dir);
 PackageBackendCacheResult updatePackageBackendCache(const PackageGraphResult& graph);
 QList<PackageResolvedResource> cachedPackageBackendArtifacts(const PackageGraphResult& graph);
 PackageDependencyChangeResult addPathPackageDependency(const QString& dir, const QString& dependencyDir);
+PackageDependencyChangeResult addRegistryPackageDependency(const QString& dir,
+                                                          const QString& packageName,
+                                                          const QString& versionRequirement,
+                                                          const QString& registryDir);
 PackageDependencyChangeResult removePackageDependency(const QString& dir, const QString& dependencyName);
 PackageManifestParseResult packageManifestFromJson(const QJsonObject& object,
                                                    const QString& rootDir = {},

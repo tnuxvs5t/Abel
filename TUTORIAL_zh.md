@@ -1145,7 +1145,7 @@ my_abel_project/
     main.abel
 ```
 
-当前 v1 包管理已经支持项目级入口与本地 path 依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作本地依赖并生成 `abel.lock.json`，本地 path dependency 已支持 SemVer 版本要求检查，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run <project-dir>` 会读取 package graph。
+当前 v1 包管理已经支持项目级入口、本地 path 依赖、以及本地 registry 目录依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作依赖并生成 `abel.lock.json`，path/registry dependency 已支持 SemVer 版本要求检查，registry dependency 会把选中的版本复制到 `.abel/cache/packages`，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run <project-dir>` 会读取 package graph。
 
 从空目录创建：
 
@@ -1185,13 +1185,52 @@ $ABEL remove some_dep .
 
 `abel add path` 会读取依赖项目的 `abel.package.json`，自动推断依赖名，把依赖写入当前项目 manifest，并刷新 `abel.lock.json`。`abel remove` 按依赖名删除 manifest 中的依赖，并刷新 lockfile。这样普通用户不需要手动编辑 dependencies JSON。
 
-如果手动写依赖，当前本地 path dependency 的 `version` 字段是版本要求，不是锁定结果。支持的第一片 SemVer 语法：
+本地 registry 依赖操作：
+
+```bash
+$ABEL add registry dep '^1.0.0' ../registry .
+$ABEL update .
+```
+
+当前 registry 是本地目录，不是远程服务。布局约定：
+
+```text
+registry/
+  dep/
+    1.0.0/
+      abel.package.json
+      src/main.abel
+    1.2.0/
+      abel.package.json
+      src/main.abel
+```
+
+`abel add registry dep '^1.0.0' ../registry .` 会写入：
+
+```json
+{
+  "dependencies": [
+    {"name": "dep", "kind": "registry", "registry": "../registry", "version": "^1.0.0"}
+  ]
+}
+```
+
+`abel update/build` 会在 registry 中选择满足 requirement 的最高 SemVer 版本，例如 `1.2.0`，复制到：
+
+```text
+.abel/cache/packages/dep/1.2.0
+```
+
+lockfile 会记录实际解析版本、声明要求、registry source 与缓存后的 `resolvedPath`。后续 `abel check/run <project-dir>` 从 lockfile 的 cached `resolvedPath` 消费依赖图。
+
+如果手动写依赖，当前 path/registry dependency 的 `version` 字段是版本要求，不是锁定结果。支持的第一片 SemVer 语法：
 
 ```json
 {
   "dependencies": [
     {"name": "some-dep", "kind": "path", "path": "../some_dep", "version": "^0.2.0"},
-    {"name": "other", "kind": "path", "path": "../other", "version": ">=1.1.0 <2.0.0"}
+    {"name": "other", "kind": "path", "path": "../other", "version": ">=1.1.0 <2.0.0"},
+    {"name": "dep", "kind": "registry", "registry": "../registry", "version": "^1.0.0"}
   ]
 }
 ```
@@ -1218,7 +1257,7 @@ abel update/build 会把实际解析到的包版本和 versionRequirement 写入
 
 `abel run <project-dir>` 会读取 package graph；如果依赖包在 `backendArtifacts` 声明了 Qt plugin，根项目只要通过 `abel add path` 依赖它，运行时也会自动加载这个依赖 backend。若已经运行过 `abel build`，`run` 只会在缓存 `.so` 存在且 sidecar 元数据仍匹配当前源 artifact 的路径、大小、mtime、ResourceNode 字段与 symbols 时，优先加载 `.abel/cache/backend/...` 下的缓存 artifact；若缓存不存在、元数据缺失或已经失效，则回退到依赖包声明的源 artifact 路径，直到重新运行 `abel build` 刷新缓存。lockfile 若已经过期，`abel check/run` 会提示先运行 `abel update` 或 `abel build`，避免悄悄使用旧依赖图。
 
-注意：这仍只是 v1 包管理引擎的早期闭环。本地 path dependency 已有 SemVer requirement 检查，但 registry、远程下载、完整 resolver 冲突求解、download cache、安装版 SDK 成熟化、ABI 校验与完整版本化缓存失效仍是后续 v1 工作。
+注意：这仍只是 v1 包管理引擎的早期闭环。path dependency 与本地 registry dependency 已有 SemVer requirement 检查和本地 package cache，但远程 registry 下载、完整 resolver 冲突求解、网络 download cache、安装版 SDK 成熟化、ABI 校验与完整版本化缓存失效仍是后续 v1 工作。
 
 若项目需要 C++ backend，当前可以在根包或依赖包描述里写 `backendArtifacts`。如果 plugin 已经存在，`abel build` 会直接复制；如果写了 `build` 字段，`abel build` 会先调用 CMake 构建 plugin。运行时 `abel run <project-dir>` 自动加载 plugin，不用在普通运行命令里手动传 `--resource`：
 

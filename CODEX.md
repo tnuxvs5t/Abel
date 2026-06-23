@@ -22,7 +22,7 @@
 
 不要默认修改 Abel 编译器/解释器源码。
 不要把用户项目扩成大型框架。
-不要幻想 Abel 已经有 registry、完整 semver solver、远程 download cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、SemVer version requirement 第一片、lockfile、package graph consumption、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、add/remove/update/build 做成早期闭环。
+不要幻想 Abel 已经有远程 registry、完整 semver solver、网络 download cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、本地 registry 目录依赖、SemVer version requirement 第一片、lockfile、package graph consumption、`.abel/cache/packages` 本地包缓存、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、add/remove/update/build 做成早期闭环。
 
 当前 Abel 的正确定位：
 
@@ -34,8 +34,9 @@ C/C++ 值模型
 + builtin print / println / build_string
 + backend block 调 Qt/C++ plugin
 + abel.package.json 项目入口骨架
-+ 本地 path dependency + SemVer version requirement + abel.lock.json
++ 本地 path dependency / 本地 registry dependency + SemVer version requirement + abel.lock.json
 + package graph 消费依赖 backendArtifacts
++ .abel/cache/packages 项目级 registry package 缓存
 + backendArtifacts[].build 的 CMake 自动构建第一片
 + .abel/cache/backend 项目级 backend artifact 缓存与 .abel-cache.json sidecar
 + abel add/remove/update/build
@@ -193,7 +194,7 @@ $ABEL_BIN run .
 - `fn int main()` 的返回值会成为进程退出码；
 - 普通成功建议 `return 0;`；
 - 如果要观察计算结果，优先用 `println(...)` 输出，不要只依赖退出码；
-- 当前项目入口、本地 path dependency、SemVer version requirement、lockfile、backend artifact 项目缓存、sidecar 失效检测与 CMake backend artifact 自动构建只是早期包管理闭环；不要假设已有成熟模块系统、registry、完整 semver solver、远程下载缓存或完整 ABI/版本化缓存失效。
+- 当前项目入口、本地 path dependency、本地 registry dependency、SemVer version requirement、lockfile、`.abel/cache/packages`、backend artifact 项目缓存、sidecar 失效检测与 CMake backend artifact 自动构建只是早期包管理闭环；不要假设已有成熟模块系统、远程 registry、完整 semver solver、网络下载缓存或完整 ABI/版本化缓存失效。
 
 ---
 
@@ -554,10 +555,12 @@ fn int main() {
 3. 优先运行 abel init . 生成最小骨架。
 4. 若当前 CLI 没有 init，再手动创建 src/、examples/、src/main.abel、abel.package.json、README.md、.gitignore。
 5. 运行 abel package check .。
-6. 运行 abel check .。
-7. 运行 abel run .。
-8. 如果成功，提交或建议提交。
-9. 告诉用户下一步可扩展方向。
+6. 运行 abel update .。
+7. 运行 abel build .。
+8. 运行 abel check .。
+9. 运行 abel run .。
+10. 如果成功，提交或建议提交。
+11. 告诉用户下一步可扩展方向。
 ```
 
 默认 `.gitignore`：
@@ -684,7 +687,7 @@ add_library(abelcore SHARED IMPORTED GLOBAL)
 ```text
 不承诺跨 Qt 版本 ABI。
 不承诺跨编译器 ABI。
-不包含 registry/semver/download。
+只包含本地 registry/package cache 第一片，不包含远程 registry、完整 solver 或网络 download cache。
 backend binder 覆盖常用 Abel 标量/vector，但不是任意 C++ 类型宇宙。
 ```
 

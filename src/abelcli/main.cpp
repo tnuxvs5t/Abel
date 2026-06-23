@@ -220,26 +220,67 @@ int main(int argc, char** argv)
     }
 
     if (command == QStringLiteral("add")) {
-        if (args.size() < 3 || args.size() > 4 || args[1] != QStringLiteral("path")) {
-            err << "E0010: add expects: abel add path <dependency-dir> [project-dir]" << Qt::endl;
+        if (args.size() < 2) {
+            err << "E0010: add expects: abel add path <dependency-dir> [project-dir] "
+                   "or abel add registry <package-name> <version-requirement> <registry-dir> [project-dir]"
+                << Qt::endl;
             return 2;
         }
-        const QString dependencyDir = args[2];
-        const QString projectDir = args.size() == 4 ? args[3] : QStringLiteral(".");
-        auto changed = abel::addPathPackageDependency(projectDir, dependencyDir);
-        for (const auto& d : changed.diagnostics)
-            printDiagnostic(d);
-        if (!changed.ok())
-            return 1;
-        out << (changed.changed ? "added " : "already present ")
-            << changed.dependency.name
-            << " path "
-            << changed.dependency.path
+        if (args[1] == QStringLiteral("path")) {
+            if (args.size() < 3 || args.size() > 4) {
+                err << "E0010: add expects: abel add path <dependency-dir> [project-dir]" << Qt::endl;
+                return 2;
+            }
+            const QString dependencyDir = args[2];
+            const QString projectDir = args.size() == 4 ? args[3] : QStringLiteral(".");
+            auto changed = abel::addPathPackageDependency(projectDir, dependencyDir);
+            for (const auto& d : changed.diagnostics)
+                printDiagnostic(d);
+            if (!changed.ok())
+                return 1;
+            out << (changed.changed ? "added " : "already present ")
+                << changed.dependency.name
+                << " path "
+                << changed.dependency.path
+                << Qt::endl;
+            out << "wrote " << changed.manifestFile << Qt::endl;
+            out << "wrote " << changed.lockFile << Qt::endl;
+            out << "locked " << changed.lockedPackages << " package(s)" << Qt::endl;
+            return 0;
+        }
+        if (args[1] == QStringLiteral("registry")) {
+            if (args.size() < 5 || args.size() > 6) {
+                err << "E0010: add expects: abel add registry <package-name> <version-requirement> <registry-dir> [project-dir]" << Qt::endl;
+                return 2;
+            }
+            const QString packageName = args[2];
+            const QString versionRequirement = args[3];
+            const QString registryDir = args[4];
+            const QString projectDir = args.size() == 6 ? args[5] : QStringLiteral(".");
+            auto changed = abel::addRegistryPackageDependency(projectDir,
+                                                              packageName,
+                                                              versionRequirement,
+                                                              registryDir);
+            for (const auto& d : changed.diagnostics)
+                printDiagnostic(d);
+            if (!changed.ok())
+                return 1;
+            out << (changed.changed ? "added " : "already present ")
+                << changed.dependency.name
+                << " registry "
+                << changed.dependency.registry
+                << " "
+                << changed.dependency.version
+                << Qt::endl;
+            out << "wrote " << changed.manifestFile << Qt::endl;
+            out << "wrote " << changed.lockFile << Qt::endl;
+            out << "locked " << changed.lockedPackages << " package(s)" << Qt::endl;
+            return 0;
+        }
+        err << "E0010: add expects: abel add path <dependency-dir> [project-dir] "
+               "or abel add registry <package-name> <version-requirement> <registry-dir> [project-dir]"
             << Qt::endl;
-        out << "wrote " << changed.manifestFile << Qt::endl;
-        out << "wrote " << changed.lockFile << Qt::endl;
-        out << "locked " << changed.lockedPackages << " package(s)" << Qt::endl;
-        return 0;
+        return 2;
     }
 
     if (command == QStringLiteral("remove")) {
