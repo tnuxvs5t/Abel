@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
 #include <QTextStream>
 
 #include <vector>
@@ -66,6 +67,7 @@ static void printDiagnostic(const abel::Diagnostic& d)
 struct CliInput {
     QString sourceFile;
     QString sourceText;
+    QStringList sourceFiles;
     QString packageRoot;
     QList<abel::PackageResolvedResource> packageResources;
     QList<abel::Diagnostic> diagnostics;
@@ -95,11 +97,13 @@ static CliInput readCliInput(const QString& path)
         if (!graph.ok())
             return input;
         input.sourceFile = graph.root.entryFilePath();
+        input.sourceFiles = abel::packageSourceFiles(graph.root);
         input.packageRoot = graph.root.rootDir;
         input.packageResources = abel::cachedPackageBackendArtifacts(graph);
         filePath = input.sourceFile;
     } else {
         input.sourceFile = info.absoluteFilePath();
+        input.sourceFiles.push_back(input.sourceFile);
     }
 
     QFile file(filePath);
@@ -116,21 +120,71 @@ static CliInput readCliInput(const QString& path)
     return input;
 }
 
-static QList<abel::Diagnostic> checkSourceText(const QString& sourceFile, const QString& sourceText)
+struct ParsedCliProgram {
+    std::unique_ptr<abel::ProgramNode> program;
+    QList<abel::Diagnostic> diagnostics;
+};
+
+static void appendProgram(abel::ProgramNode& target, std::unique_ptr<abel::ProgramNode> source)
+{
+    if (!source)
+        return;
+    for (auto& decl : source->declarations)
+        target.declarations.push_back(std::move(decl));
+    if (!target.declarations.empty()) {
+        target.span = target.declarations.front()->span;
+        const auto& last = target.declarations.back()->span;
+        target.span.endOffset = last.endOffset;
+        target.span.endLine = last.endLine;
+        target.span.endColumn = last.endColumn;
+    }
+}
+
+static ParsedCliProgram parseSourceFiles(const QStringList& sourceFiles)
+{
+    ParsedCliProgram result;
+    result.program = std::make_unique<abel::ProgramNode>();
+    QSet<QString> seen;
+
+    for (const QString& rawPath : sourceFiles) {
+        const QString sourceFile = QFileInfo(rawPath).absoluteFilePath();
+        if (seen.contains(sourceFile))
+            continue;
+        seen.insert(sourceFile);
+
+        QFile file(sourceFile);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            result.diagnostics.push_back(makeCliDiagnostic(QStringLiteral("E0004"),
+                                                           QStringLiteral("cannot open '%1'").arg(sourceFile),
+                                                           sourceFile));
+            continue;
+        }
+
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(sourceFile, QString::fromUtf8(file.readAll()));
+        result.diagnostics.append(lexed.diagnostics);
+        if (!lexed.diagnostics.isEmpty())
+            continue;
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        result.diagnostics.append(parsed.diagnostics);
+        if (!parsed.diagnostics.isEmpty())
+            continue;
+
+        appendProgram(*result.program, std::move(parsed.program));
+    }
+
+    return result;
+}
+
+static QList<abel::Diagnostic> checkSourceFiles(const QStringList& sourceFiles)
 {
     QList<abel::Diagnostic> diagnostics;
-    abel::Lexer lexer;
-    auto lexed = lexer.lex(sourceFile, sourceText);
-    diagnostics.append(lexed.diagnostics);
-    if (!diagnostics.isEmpty())
-        return diagnostics;
-
-    abel::Parser parser;
-    auto parsed = parser.parse(lexed.tokens);
+    auto parsed = parseSourceFiles(sourceFiles);
     diagnostics.append(parsed.diagnostics);
     if (!diagnostics.isEmpty())
         return diagnostics;
-
     abel::TypeChecker typechecker;
     auto checked = typechecker.check(*parsed.program);
     diagnostics.append(checked.diagnostics);
@@ -191,15 +245,7 @@ int main(int argc, char** argv)
         if (!graph.ok())
             return 1;
 
-        QFile file(graph.root.entryFilePath());
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            printDiagnostic(makeCliDiagnostic(QStringLiteral("E0004"),
-                                              QStringLiteral("cannot open '%1'").arg(graph.root.entryFilePath()),
-                                              graph.root.entryFilePath()));
-            return 1;
-        }
-        const QList<abel::Diagnostic> diagnostics = checkSourceText(graph.root.entryFilePath(),
-                                                                    QString::fromUtf8(file.readAll()));
+        const QList<abel::Diagnostic> diagnostics = checkSourceFiles(abel::packageSourceFiles(graph.root));
         for (const auto& d : diagnostics)
             printDiagnostic(d);
         if (!diagnostics.isEmpty())
@@ -380,16 +426,17 @@ int main(int argc, char** argv)
             printDiagnostic(d);
         if (!input.diagnostics.isEmpty())
             return 1;
-        const QList<abel::Diagnostic> checkDiagnostics = checkSourceText(input.sourceFile, input.sourceText);
+        const QList<abel::Diagnostic> checkDiagnostics = checkSourceFiles(input.sourceFiles);
         for (const auto& d : checkDiagnostics)
             printDiagnostic(d);
         if (!checkDiagnostics.isEmpty())
             return 1;
         if (command == QStringLiteral("run")) {
-            abel::Lexer lexer;
-            auto lexed = lexer.lex(input.sourceFile, input.sourceText);
-            abel::Parser p;
-            auto parsed = p.parse(lexed.tokens);
+            auto parsed = parseSourceFiles(input.sourceFiles);
+            for (const auto& d : parsed.diagnostics)
+                printDiagnostic(d);
+            if (!parsed.diagnostics.isEmpty())
+                return 1;
             abel::BackendRegistry backendRegistry;
             std::vector<abel::ResourceNodeLoadResult> loadedResources;
             const QStringList resourceFiles = parser.values(resourceOption);

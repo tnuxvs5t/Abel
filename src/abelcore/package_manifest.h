@@ -144,6 +144,7 @@ PackageLockResult updatePackageLock(const QString& dir);
 PackageLockResult packageLockFromFile(const QString& lockFile);
 PackageGraphResult packageGraphFromDirectory(const QString& dir);
 PackageGraphResult updatePackageGraph(const QString& dir);
+QStringList packageSourceFiles(const PackageManifest& package);
 PackageBackendCacheResult updatePackageBackendCache(const PackageGraphResult& graph);
 QList<PackageResolvedResource> cachedPackageBackendArtifacts(const PackageGraphResult& graph);
 PackageDependencyChangeResult addPathPackageDependency(const QString& dir, const QString& dependencyDir);

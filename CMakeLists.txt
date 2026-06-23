@@ -243,6 +243,16 @@ target_compile_definitions(abel_package_manifest_tests
 
 add_test(NAME abel_package_manifest_tests COMMAND abel_package_manifest_tests)
 
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_multifile_project.cmake.in"
+    "${CMAKE_BINARY_DIR}/cli_multifile_project.cmake"
+    @ONLY
+)
+
+add_test(NAME abel_cli_multifile_project_tests
+    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_BINARY_DIR}/cli_multifile_project.cmake"
+)
+
 set(ABEL_SDK_TEST_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/sdk-test-install")
 set(ABEL_SDK_TEST_BUILD_DIR "${CMAKE_BINARY_DIR}/sdk-backend-fixture")
 

@@ -1,0 +1,48 @@
+set(project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project")
+file(REMOVE_RECURSE "${project_dir}")
+file(MAKE_DIRECTORY "${project_dir}/src/lib")
+
+file(WRITE "${project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${project_dir}/src/lib/math.abel" [=[
+module cli.lib.math;
+
+fn int helper() {
+    return 41;
+}
+]=])
+
+file(WRITE "${project_dir}/src/main.abel" [=[
+module cli.main;
+use cli.lib.math;
+
+fn int main() {
+    return helper() + 1;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${project_dir}"
+    RESULT_VARIABLE check_result
+    OUTPUT_VARIABLE check_stdout
+    ERROR_VARIABLE check_stderr
+)
+if(NOT check_result EQUAL 0)
+    message(FATAL_ERROR "abel check failed:\n${check_stdout}\n${check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${project_dir}"
+    RESULT_VARIABLE run_result
+    OUTPUT_VARIABLE run_stdout
+    ERROR_VARIABLE run_stderr
+)
+if(NOT run_result EQUAL 42)
+    message(FATAL_ERROR "abel run expected exit code 42, got ${run_result}:\n${run_stdout}\n${run_stderr}")
+endif()

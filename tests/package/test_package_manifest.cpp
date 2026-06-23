@@ -70,6 +70,34 @@ private slots:
         QCOMPARE(parsed.package.backendArtifacts.front().symbols[1], QStringLiteral("MathSystem.sort"));
     }
 
+    void packageSourceFilesIncludeSrcTreeWithEntryLast()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("src/lib")));
+        writeText(root.absoluteFilePath(QStringLiteral("src/main.abel")),
+                  QStringLiteral("module app.main; fn int main() { return helper(); }"));
+        writeText(root.absoluteFilePath(QStringLiteral("src/lib/math.abel")),
+                  QStringLiteral("module app.lib.math; fn int helper() { return 7; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("src/extra.abel")),
+                  QStringLiteral("module app.extra; fn int extra() { return 1; }"));
+        writeText(root.absoluteFilePath(abel::packageManifestFileName()),
+                  QStringLiteral(R"({
+                      "name": "demo",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel"
+                  })"));
+
+        auto parsed = abel::packageManifestFromDirectory(dir.path());
+        QVERIFY(parsed.diagnostics.isEmpty());
+        const QStringList sources = abel::packageSourceFiles(parsed.package);
+        QCOMPARE(sources.size(), 3);
+        QCOMPARE(sources.back(), parsed.package.entryFilePath());
+        QVERIFY(sources.contains(root.absoluteFilePath(QStringLiteral("src/lib/math.abel"))));
+        QVERIFY(sources.contains(root.absoluteFilePath(QStringLiteral("src/extra.abel"))));
+    }
+
     void rejectsMissingEntryFile()
     {
         QTemporaryDir dir;

@@ -32,6 +32,9 @@ private:
     void errorAtSpan(const SourceSpan& span, const QString& message);
 
     std::unique_ptr<DeclNode> parseDeclaration();
+    std::unique_ptr<ModuleDeclNode> parseModule();
+    std::unique_ptr<UseDeclNode> parseUse();
+    QString parseQualifiedName(const QString& what);
     std::unique_ptr<FunctionDeclNode> parseFunction(bool exported, bool debt);
     std::unique_ptr<StructDeclNode> parseStruct(bool exported);
     std::unique_ptr<FieldDeclNode> parseStructField();

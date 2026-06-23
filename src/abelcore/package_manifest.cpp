@@ -1523,6 +1523,28 @@ PackageGraphResult updatePackageGraph(const QString& dir)
     return graph;
 }
 
+QStringList packageSourceFiles(const PackageManifest& package)
+{
+    QStringList files;
+    const QString entry = package.entryFilePath();
+    const QDir srcDir(QDir(package.rootDir).absoluteFilePath(QStringLiteral("src")));
+    if (srcDir.exists()) {
+        QDirIterator it(srcDir.absolutePath(),
+                        QStringList{QStringLiteral("*.abel")},
+                        QDir::Files,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = QFileInfo(it.next()).absoluteFilePath();
+            if (path != entry)
+                files.push_back(path);
+        }
+    }
+    files.sort();
+    if (!entry.isEmpty())
+        files.push_back(entry);
+    return files;
+}
+
 PackageBackendCacheResult updatePackageBackendCache(const PackageGraphResult& graph)
 {
     PackageBackendCacheResult result;

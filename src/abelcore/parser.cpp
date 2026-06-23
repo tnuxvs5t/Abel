@@ -84,6 +84,11 @@ void Parser::errorAtSpan(const SourceSpan& span, const QString& message)
 
 std::unique_ptr<DeclNode> Parser::parseDeclaration()
 {
+    if (match(TokenKind::KwModule))
+        return parseModule();
+    if (match(TokenKind::KwUse))
+        return parseUse();
+
     bool exported = match(TokenKind::KwExport);
     if (match(TokenKind::KwDebt)) {
         consume(TokenKind::KwFn, QStringLiteral("expected fn after debt"));
@@ -97,6 +102,35 @@ std::unique_ptr<DeclNode> Parser::parseDeclaration()
         return parseFunction(exported, false);
     errorAt(peek(), QStringLiteral("expected top-level declaration"));
     return nullptr;
+}
+
+std::unique_ptr<ModuleDeclNode> Parser::parseModule()
+{
+    auto module = std::make_unique<ModuleDeclNode>();
+    const SourceSpan startSpan = previous().span;
+    module->name = parseQualifiedName(QStringLiteral("module name"));
+    const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';' after module declaration"));
+    module->span = mergeSpans(startSpan, semi.span);
+    return module;
+}
+
+std::unique_ptr<UseDeclNode> Parser::parseUse()
+{
+    auto use = std::make_unique<UseDeclNode>();
+    const SourceSpan startSpan = previous().span;
+    use->name = parseQualifiedName(QStringLiteral("use target"));
+    const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';' after use declaration"));
+    use->span = mergeSpans(startSpan, semi.span);
+    return use;
+}
+
+QString Parser::parseQualifiedName(const QString& what)
+{
+    QStringList parts;
+    parts.push_back(consume(TokenKind::Identifier, QStringLiteral("expected %1").arg(what)).text);
+    while (match(TokenKind::Dot))
+        parts.push_back(consume(TokenKind::Identifier, QStringLiteral("expected identifier after '.' in %1").arg(what)).text);
+    return parts.join(QLatin1Char('.'));
 }
 
 std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt)

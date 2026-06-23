@@ -163,6 +163,14 @@ struct DeclNode : AstNode {
     virtual ~DeclNode() = default;
 };
 
+struct ModuleDeclNode final : DeclNode {
+    QString name;
+};
+
+struct UseDeclNode final : DeclNode {
+    QString name;
+};
+
 struct FunctionDeclNode final : DeclNode {
     bool exported = false;
     bool debt = false;

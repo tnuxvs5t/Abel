@@ -1143,9 +1143,13 @@ my_abel_project/
   abel.package.json
   src/
     main.abel
+    lib/
+      math.abel
 ```
 
 当前 v1 包管理已经支持项目级入口、本地 path 依赖、以及本地 registry 目录依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作依赖并生成 `abel.lock.json`，path/registry dependency 已支持 SemVer 版本要求检查，registry dependency 会把选中的版本复制到 `.abel/cache/packages`，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run <project-dir>` 会读取 package graph。
+
+当前项目源码加载规则是 v1 多文件第一片：如果输入是 package 目录，`abel check/run/build` 会读取根项目 `src/**/*.abel`，并把 manifest `entry` 文件放到最后合并为一个 Program。每个文件保留自己的 SourceSpan，所以诊断仍能指向真实文件/行/列。`module xxx;` 与 `use yyy;` 现在可解析并作为 AST 声明保存，但还没有真正的模块可见性、import 过滤、限定名查找或依赖包源码编译；当前仍近似“同一包 src 下的顶层符号合并”。
 
 从空目录创建：
 
@@ -1174,6 +1178,29 @@ $ABEL build .
 $ABEL check .
 $ABEL run .
 ```
+
+多文件示例：
+
+```abel
+// src/lib/math.abel
+module my.lib.math;
+
+fn int helper() {
+    return 41;
+}
+```
+
+```abel
+// src/main.abel
+module my.main;
+use my.lib.math;
+
+fn int main() {
+    return helper() + 1;
+}
+```
+
+当前 `use` 不负责导入过滤；它先作为源码结构和未来模块系统的声明进入 AST。只要两个文件都在根项目 `src/` 下，`helper()` 会在合并后的同包顶层符号表里被找到。
 
 本地 path 依赖操作：
 

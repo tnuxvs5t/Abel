@@ -21,6 +21,35 @@ private slots:
         QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
     }
 
+    void parsesModuleAndUseDeclarations()
+    {
+        const QString src = QStringLiteral(R"(
+            module app.main;
+            use app.math;
+
+            export fn int main() {
+                return helper();
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QVERIFY(parsed.program != nullptr);
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(3));
+        auto* module = dynamic_cast<abel::ModuleDeclNode*>(parsed.program->declarations[0].get());
+        auto* use = dynamic_cast<abel::UseDeclNode*>(parsed.program->declarations[1].get());
+        QVERIFY(module != nullptr);
+        QVERIFY(use != nullptr);
+        QCOMPARE(module->name, QStringLiteral("app.main"));
+        QCOMPARE(use->name, QStringLiteral("app.math"));
+    }
+
     void parsesVectorAndBackend()
     {
         const QString src = QStringLiteral(R"(
