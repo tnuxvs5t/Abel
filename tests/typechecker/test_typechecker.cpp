@@ -365,6 +365,52 @@ private slots:
         QVERIFY(!badBreakArg.diagnostics.isEmpty());
     }
 
+    void acceptsScanBuiltin()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x;
+                str s;
+                double d;
+                bool ok;
+                char c;
+                any a;
+                scan(&x, &s, &d, &ok, &c, &a);
+                &x |> scan(&s);
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsScanBuiltinMisuse()
+    {
+        auto nonPointer = checkSource(QStringLiteral("fn int main() { int x; scan(x); return 0; }"));
+        QVERIFY(!nonPointer.diagnostics.isEmpty());
+
+        auto constPointer = checkSource(QStringLiteral("fn int main() { const int x = 0; scan(&x); return 0; }"));
+        QVERIFY(!constPointer.diagnostics.isEmpty());
+
+        auto pipeNonPointer = checkSource(QStringLiteral("fn int main() { int x; x |> scan(); return 0; }"));
+        QVERIFY(!pipeNonPointer.diagnostics.isEmpty());
+
+        auto unsupported = checkSource(QStringLiteral(R"(
+            struct Box {
+                int value;
+            }
+
+            fn int main() {
+                Box b = Box(1);
+                scan(&b);
+                return 0;
+            }
+        )"));
+        QVERIFY(!unsupported.diagnostics.isEmpty());
+    }
+
     void acceptsTestBuiltins()
     {
         const QString src = QStringLiteral(R"(

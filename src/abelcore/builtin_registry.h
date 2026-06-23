@@ -15,6 +15,7 @@ struct BuiltinFunctionCall {
     std::vector<SourceSpan> argSpans;
     SourceSpan callSpan;
     std::function<std::optional<QString>(const AbelValue&, const SourceSpan&)> stringify;
+    std::function<std::optional<QString>(const SourceSpan&)> readToken;
 };
 
 struct BuiltinMethodCall {

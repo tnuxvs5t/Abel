@@ -299,6 +299,106 @@ AbelValue builtinCharsToStr(BuiltinFunctionCall& call)
     return AbelValue::makeString(out);
 }
 
+std::optional<AbelValue> scanTokenToValue(BuiltinFunctionCall& call, const AbelType& target, const SourceSpan& span)
+{
+    if (!call.readToken) {
+        call.ctx.error(QStringLiteral("E0423"), QStringLiteral("scan input is not configured"), span);
+        return std::nullopt;
+    }
+
+    auto token = call.readToken(span);
+    if (!token.has_value())
+        return std::nullopt;
+
+    bool ok = false;
+    switch (target.kind) {
+    case TypeKind::Bool:
+        if (*token == QStringLiteral("true") || *token == QStringLiteral("1"))
+            return AbelValue::makeBool(true);
+        if (*token == QStringLiteral("false") || *token == QStringLiteral("0"))
+            return AbelValue::makeBool(false);
+        call.ctx.error(QStringLiteral("E0424"),
+                       QStringLiteral("scan cannot parse bool from '%1'").arg(*token),
+                       span);
+        return std::nullopt;
+    case TypeKind::I8:
+    case TypeKind::I16:
+    case TypeKind::I32:
+    case TypeKind::I64:
+    case TypeKind::U8:
+    case TypeKind::U16:
+    case TypeKind::U32:
+    case TypeKind::U64: {
+        const qint64 value = target.isUnsignedInteger()
+            ? static_cast<qint64>(token->toULongLong(&ok, 10))
+            : token->toLongLong(&ok, 10);
+        if (!ok) {
+            call.ctx.error(QStringLiteral("E0424"),
+                           QStringLiteral("scan cannot parse %1 from '%2'")
+                               .arg(target.displayName(), *token),
+                           span);
+            return std::nullopt;
+        }
+        return AbelValue::makeInt(value, target.kind);
+    }
+    case TypeKind::F64: {
+        const double value = token->toDouble(&ok);
+        if (!ok) {
+            call.ctx.error(QStringLiteral("E0424"),
+                           QStringLiteral("scan cannot parse f64 from '%1'").arg(*token),
+                           span);
+            return std::nullopt;
+        }
+        return AbelValue::makeDouble(value);
+    }
+    case TypeKind::Char:
+        if (token->size() != 1) {
+            call.ctx.error(QStringLiteral("E0424"),
+                           QStringLiteral("scan cannot parse char from '%1'").arg(*token),
+                           span);
+            return std::nullopt;
+        }
+        return AbelValue::makeChar(token->front());
+    case TypeKind::Str:
+        return AbelValue::makeString(*token);
+    case TypeKind::Any:
+        return AbelValue::makeAny(AbelValue::makeString(*token));
+    default:
+        call.ctx.error(QStringLiteral("E0425"),
+                       QStringLiteral("scan does not support target type %1").arg(target.displayName()),
+                       span);
+        return std::nullopt;
+    }
+}
+
+AbelValue builtinScan(BuiltinFunctionCall& call)
+{
+    for (size_t i = 0; i < call.args.size(); ++i) {
+        const AbelValue& pointer = call.args[i];
+        const SourceSpan span = i < call.argSpans.size() ? call.argSpans[i] : call.callSpan;
+        if (!pointer.type().isPointer() || !pointer.type().pointee) {
+            call.ctx.error(QStringLiteral("E0426"),
+                           QStringLiteral("scan argument must be pointer, got %1").arg(pointer.type().displayName()),
+                           span);
+            return AbelValue::makeUnknown();
+        }
+        AbelLocation* target = pointer.asPointer();
+        if (!target) {
+            call.ctx.error(QStringLiteral("E0427"), QStringLiteral("scan cannot write through nullptr"), span);
+            return AbelValue::makeUnknown();
+        }
+        if (target->isReadOnly || pointer.type().pointee->isConst) {
+            call.ctx.error(QStringLiteral("E0428"), QStringLiteral("scan cannot write through readonly pointer"), span);
+            return AbelValue::makeUnknown();
+        }
+        auto value = scanTokenToValue(call, *pointer.type().pointee, span);
+        if (!value.has_value())
+            return AbelValue::makeUnknown();
+        target->write(convertValue(*value, *pointer.type().pointee));
+    }
+    return AbelValue::makeVoid();
+}
+
 AbelValue builtinDebugBreak(BuiltinFunctionCall& call)
 {
     call.ctx.error(QStringLiteral("E0596"), QStringLiteral("debug breakpoint"), call.callSpan);
@@ -675,6 +775,7 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("build_string"), 0, -1, true, builtinBuildString, QStringLiteral("concatenate stringified values")});
     registry.registerFunction({QStringLiteral("print"), 0, -1, true, builtinPrint, QStringLiteral("print stringified values")});
     registry.registerFunction({QStringLiteral("println"), 0, -1, true, builtinPrintln, QStringLiteral("print stringified values plus newline")});
+    registry.registerFunction({QStringLiteral("scan"), 0, -1, true, builtinScan, QStringLiteral("scan whitespace tokens into pointer targets")});
     registry.registerFunction({QStringLiteral("str_to_chars"), 1, 1, false, builtinStrToChars, QStringLiteral("convert str to vector<char>")});
     registry.registerFunction({QStringLiteral("chars_to_str"), 1, 1, false, builtinCharsToStr, QStringLiteral("convert vector<char> to str")});
     registry.registerFunction({QStringLiteral("debug_break"), 0, 0, false, builtinDebugBreak, QStringLiteral("emit a debug breakpoint diagnostic")});

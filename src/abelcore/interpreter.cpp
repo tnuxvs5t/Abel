@@ -1,6 +1,7 @@
 #include "abelcore/interpreter.h"
 
 #include <QSet>
+#include <QTextStream>
 
 #include <algorithm>
 #include <cmath>
@@ -2843,6 +2844,21 @@ void Interpreter::attachStringifier(BuiltinFunctionCall& call)
     call.stringify = [this](const AbelValue& value, const SourceSpan& span) {
         return stringifyValue(value, span);
     };
+    call.readToken = [this](const SourceSpan& span) {
+        return readScanToken(span);
+    };
+}
+
+std::optional<QString> Interpreter::readScanToken(const SourceSpan& span)
+{
+    static QTextStream in(stdin);
+    QString token;
+    in >> token;
+    if (token.isNull()) {
+        error(QStringLiteral("E0429"), QStringLiteral("scan reached end of input"), span);
+        return std::nullopt;
+    }
+    return token;
 }
 
 bool Interpreter::requireBool(const AbelValue& value, const SourceSpan& span, bool& out)

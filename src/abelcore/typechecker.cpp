@@ -60,6 +60,15 @@ bool isBuiltinOrderable(const AbelType& type)
         || type.kind == TypeKind::Str;
 }
 
+bool isScannableType(const AbelType& type)
+{
+    return type.kind == TypeKind::Bool
+        || type.isNumeric()
+        || type.kind == TypeKind::Char
+        || type.kind == TypeKind::Str
+        || type.kind == TypeKind::Any;
+}
+
 ExprType unknownExprType()
 {
     return {makeType(TypeKind::Unknown), ValueCategory::PRValue, false};
@@ -1434,7 +1443,10 @@ ExprType TypeChecker::checkUnary(const UnaryExprNode& expr)
             return unknownExprType();
         if (inner.category != ValueCategory::LValue)
             return errorExpr(expr.span, QStringLiteral("address-of requires lvalue"));
-        return {makePointerType(inner.type), ValueCategory::PRValue, false};
+        AbelType pointee = inner.type;
+        if (!inner.isMutable)
+            pointee = makeConstType(pointee);
+        return {makePointerType(pointee), ValueCategory::PRValue, false};
     }
     if (expr.op == QStringLiteral("*")) {
         ExprType inner = checkExpr(*expr.expr);
@@ -1617,6 +1629,26 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
                 ExprType arg = checkExpr(*argExpr);
                 if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
                     error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (name == QStringLiteral("scan")) {
+            if (!lhs.type.isPointer())
+                error(span, QStringLiteral("scan argument must be pointer, got %1").arg(lhs.type.displayName()));
+            else if (lhs.type.pointee && lhs.type.pointee->isConst)
+                error(span, QStringLiteral("scan cannot write through pointer to const %1").arg(lhs.type.pointee->displayName()));
+            else if (lhs.type.pointee && !isScannableType(*lhs.type.pointee))
+                error(span, QStringLiteral("scan does not support target type %1").arg(lhs.type.pointee->displayName()));
+            for (const auto& argExpr : args) {
+                ExprType arg = checkExpr(*argExpr);
+                if (!isUnknownType(arg.type)) {
+                    if (!arg.type.isPointer())
+                        error(argExpr->span, QStringLiteral("scan argument must be pointer, got %1").arg(arg.type.displayName()));
+                    else if (arg.type.pointee && arg.type.pointee->isConst)
+                        error(argExpr->span, QStringLiteral("scan cannot write through pointer to const %1").arg(arg.type.pointee->displayName()));
+                    else if (arg.type.pointee && !isScannableType(*arg.type.pointee))
+                        error(argExpr->span, QStringLiteral("scan does not support target type %1").arg(arg.type.pointee->displayName()));
+                }
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
@@ -1908,6 +1940,20 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                 ExprType arg = checkExpr(*argExpr);
                 if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
                     error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (name->name == QStringLiteral("scan")) {
+            for (const auto& argExpr : expr.args) {
+                ExprType arg = checkExpr(*argExpr);
+                if (!isUnknownType(arg.type)) {
+                    if (!arg.type.isPointer())
+                        error(argExpr->span, QStringLiteral("scan argument must be pointer, got %1").arg(arg.type.displayName()));
+                    else if (arg.type.pointee && arg.type.pointee->isConst)
+                        error(argExpr->span, QStringLiteral("scan cannot write through pointer to const %1").arg(arg.type.pointee->displayName()));
+                    else if (arg.type.pointee && !isScannableType(*arg.type.pointee))
+                        error(argExpr->span, QStringLiteral("scan does not support target type %1").arg(arg.type.pointee->displayName()));
+                }
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }

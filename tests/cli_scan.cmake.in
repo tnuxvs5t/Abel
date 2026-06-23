@@ -1,0 +1,65 @@
+set(scan_dir "@CMAKE_BINARY_DIR@/cli-scan")
+file(REMOVE_RECURSE "${scan_dir}")
+file(MAKE_DIRECTORY "${scan_dir}")
+
+file(WRITE "${scan_dir}/scan.abel" [=[
+fn int main() {
+    int x;
+    str s;
+    double d;
+    bool ok;
+    char c;
+    scan(&x, &s, &d, &ok, &c);
+    if (s == "hakurei" && ok && c == 'z') {
+        return x + cast<int>(d);
+    }
+    return 1;
+}
+]=])
+
+file(WRITE "${scan_dir}/input.txt" "40 hakurei 2.9 true z\n")
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${scan_dir}/scan.abel"
+    RESULT_VARIABLE check_result
+    OUTPUT_VARIABLE check_stdout
+    ERROR_VARIABLE check_stderr
+)
+if(NOT check_result EQUAL 0)
+    message(FATAL_ERROR "abel check scan failed:\n${check_stdout}\n${check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${scan_dir}/scan.abel"
+    INPUT_FILE "${scan_dir}/input.txt"
+    RESULT_VARIABLE run_result
+    OUTPUT_VARIABLE run_stdout
+    ERROR_VARIABLE run_stderr
+)
+if(NOT run_result EQUAL 42)
+    message(FATAL_ERROR "abel run scan expected exit 42, got ${run_result}:\n${run_stdout}\n${run_stderr}")
+endif()
+
+file(WRITE "${scan_dir}/bad.abel" [=[
+fn int main() {
+    int x;
+    scan(&x);
+    return x;
+}
+]=])
+file(WRITE "${scan_dir}/bad_input.txt" "bad\n")
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${scan_dir}/bad.abel"
+    INPUT_FILE "${scan_dir}/bad_input.txt"
+    RESULT_VARIABLE bad_result
+    OUTPUT_VARIABLE bad_stdout
+    ERROR_VARIABLE bad_stderr
+)
+if(bad_result EQUAL 0)
+    message(FATAL_ERROR "abel run scan unexpectedly accepted bad input:\n${bad_stdout}\n${bad_stderr}")
+endif()
+string(FIND "${bad_stderr}" "scan cannot parse" parse_error_pos)
+if(parse_error_pos EQUAL -1)
+    message(FATAL_ERROR "bad scan did not report parse diagnostic:\n${bad_stdout}\n${bad_stderr}")
+endif()

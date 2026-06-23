@@ -127,6 +127,7 @@ private:
     AbelValue defaultConstructValue(const AbelType& type, const SourceSpan& span, QSet<QString>& visiting);
     std::optional<QString> stringifyValue(const AbelValue& value, const SourceSpan& span);
     void attachStringifier(BuiltinFunctionCall& call);
+    std::optional<QString> readScanToken(const SourceSpan& span);
 
     bool isDeclInCurrentModule(const DeclNode& decl, const QString& packageName = QString()) const;
     bool isModuleImported(const QString& moduleName) const;

@@ -212,6 +212,7 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("build_string")));
         QVERIFY(registry.hasFunction(QStringLiteral("print")));
         QVERIFY(registry.hasFunction(QStringLiteral("println")));
+        QVERIFY(registry.hasFunction(QStringLiteral("scan")));
         QVERIFY(registry.hasFunction(QStringLiteral("str_to_chars")));
         QVERIFY(registry.hasFunction(QStringLiteral("chars_to_str")));
         QVERIFY(registry.hasFunction(QStringLiteral("debug_break")));
@@ -244,6 +245,69 @@ private slots:
 
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(value.asString(), QStringLiteral("x=7, ok=true"));
+    }
+
+    void scanWritesPointerTargetsThroughRegistry()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+        auto* intLoc = ctx.createStorage(abel::AbelValue::makeInt(0));
+        auto* strLoc = ctx.createStorage(abel::AbelValue::makeString(QString()));
+        auto* boolLoc = ctx.createStorage(abel::AbelValue::makeBool(false));
+        auto* charLoc = ctx.createStorage(abel::AbelValue::makeChar(QChar()));
+        auto* doubleLoc = ctx.createStorage(abel::AbelValue::makeDouble(0.0));
+        QStringList tokens{QStringLiteral("42"), QStringLiteral("hakurei"), QStringLiteral("true"), QStringLiteral("z"), QStringLiteral("3.5")};
+
+        abel::BuiltinFunctionCall call{
+            ctx,
+            QStringLiteral("scan"),
+            {
+                abel::AbelValue::makePointer(intLoc->read().type(), intLoc),
+                abel::AbelValue::makePointer(strLoc->read().type(), strLoc),
+                abel::AbelValue::makePointer(boolLoc->read().type(), boolLoc),
+                abel::AbelValue::makePointer(charLoc->read().type(), charLoc),
+                abel::AbelValue::makePointer(doubleLoc->read().type(), doubleLoc),
+            },
+            {},
+            {},
+        };
+        call.readToken = [&tokens](const abel::SourceSpan&) -> std::optional<QString> {
+            if (tokens.isEmpty())
+                return std::nullopt;
+            return tokens.takeFirst();
+        };
+        auto value = registry.callFunction(std::move(call));
+
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(value.type().kind, abel::TypeKind::Void);
+        QCOMPARE(intLoc->read().asInt(), 42);
+        QCOMPARE(strLoc->read().asString(), QStringLiteral("hakurei"));
+        QCOMPARE(boolLoc->read().asBool(), true);
+        QCOMPARE(charLoc->read().asChar(), QChar('z'));
+        QCOMPARE(doubleLoc->read().asDouble(), 3.5);
+    }
+
+    void scanReportsBadToken()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+        auto* intLoc = ctx.createStorage(abel::AbelValue::makeInt(0));
+
+        abel::BuiltinFunctionCall call{
+            ctx,
+            QStringLiteral("scan"),
+            {abel::AbelValue::makePointer(intLoc->read().type(), intLoc)},
+            {},
+            {},
+        };
+        call.readToken = [](const abel::SourceSpan&) -> std::optional<QString> {
+            return QStringLiteral("bad");
+        };
+        auto value = registry.callFunction(std::move(call));
+
+        QVERIFY(!ctx.diagnostics().isEmpty());
+        QCOMPARE(ctx.diagnostics().back().code, QStringLiteral("E0424"));
+        QCOMPARE(value.type().kind, abel::TypeKind::Unknown);
     }
 
     void stringMethodsRunThroughRegistry()
