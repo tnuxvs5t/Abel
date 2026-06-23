@@ -458,18 +458,23 @@ private slots:
     {
         const QString src = QStringLiteral(R"(
             fn int main() {
-                vector<int> xs = {3, 1};
-                xs.insert(1, 2);
-                int at = xs.find(2);
+                vector<int> xs = {3, 1, 2};
+                xs.insert(2, 2);
                 int missing = xs.find(9);
                 xs.sort();
+                int lb = xs.lower_bound(2);
+                int ub = xs.upper_bound(2);
+                bool has = xs.binary_search(2);
+                bool miss = xs.binary_search(9);
+                xs.unique();
+                xs.reverse();
                 int removed = xs.erase(1);
 
                 vector<str> names = {"moriya", "hakurei"};
                 names.sort();
 
-                if (names[0] == "hakurei") {
-                    return at + missing + removed + xs[0] * 10 + xs[1];
+                if (names[0] == "hakurei" && has && !miss) {
+                    return missing + lb + ub + removed + xs[0] * 10 + xs[1];
                 }
                 return 0;
             }
@@ -478,7 +483,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 15);
+        QCOMPARE(result.exitCode, 36);
     }
 
     void mathBuiltinsWork()

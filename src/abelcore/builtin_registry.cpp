@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cmath>
 #include <exception>
+#include <iterator>
 #include <numeric>
 
 namespace abel {
@@ -857,6 +858,66 @@ AbelValue vectorSort(BuiltinMethodCall& call)
     return AbelValue::makeVoid();
 }
 
+AbelValue vectorReverse(BuiltinMethodCall& call)
+{
+    auto vector = call.receiver.asVector();
+    std::reverse(vector->elements.begin(), vector->elements.end());
+    return AbelValue::makeVoid();
+}
+
+AbelValue vectorUnique(BuiltinMethodCall& call)
+{
+    auto vector = call.receiver.asVector();
+    auto last = std::unique(vector->elements.begin(), vector->elements.end(), valuesEqual);
+    vector->elements.erase(last, vector->elements.end());
+    return AbelValue::makeVoid();
+}
+
+std::optional<AbelValue> vectorOrderableNeedle(BuiltinMethodCall& call)
+{
+    auto vector = call.receiver.asVector();
+    if (!isOrderableType(vector->elementType)) {
+        call.ctx.error(QStringLiteral("E0422"),
+                       QStringLiteral("vector.%1 requires orderable element type, got %2")
+                           .arg(call.name, vector->elementType.displayName()),
+                       call.callSpan);
+        return std::nullopt;
+    }
+    AbelValue needle = convertBuiltinArg(call, 0, vector->elementType);
+    if (call.ctx.hasError())
+        return std::nullopt;
+    return needle;
+}
+
+AbelValue vectorLowerBound(BuiltinMethodCall& call)
+{
+    auto needle = vectorOrderableNeedle(call);
+    if (!needle.has_value())
+        return AbelValue::makeUnknown();
+    const auto vector = call.receiver.asVector();
+    const auto it = std::lower_bound(vector->elements.begin(), vector->elements.end(), *needle, valuesLess);
+    return AbelValue::makeInt(static_cast<qint64>(std::distance(vector->elements.begin(), it)), TypeKind::I32);
+}
+
+AbelValue vectorUpperBound(BuiltinMethodCall& call)
+{
+    auto needle = vectorOrderableNeedle(call);
+    if (!needle.has_value())
+        return AbelValue::makeUnknown();
+    const auto vector = call.receiver.asVector();
+    const auto it = std::upper_bound(vector->elements.begin(), vector->elements.end(), *needle, valuesLess);
+    return AbelValue::makeInt(static_cast<qint64>(std::distance(vector->elements.begin(), it)), TypeKind::I32);
+}
+
+AbelValue vectorBinarySearch(BuiltinMethodCall& call)
+{
+    auto needle = vectorOrderableNeedle(call);
+    if (!needle.has_value())
+        return AbelValue::makeUnknown();
+    const auto vector = call.receiver.asVector();
+    return AbelValue::makeBool(std::binary_search(vector->elements.begin(), vector->elements.end(), *needle, valuesLess));
+}
+
 AbelValue stringLen(BuiltinMethodCall& call)
 {
     return AbelValue::makeInt(call.receiver.asString().size(), TypeKind::I32);
@@ -983,6 +1044,11 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerMethod({TypeKind::Vector, QStringLiteral("erase"), 1, 1, true, vectorErase, QStringLiteral("vector erase at index and return removed value")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("find"), 1, 1, false, vectorFind, QStringLiteral("vector find, -1 when absent")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("sort"), 0, 0, true, vectorSort, QStringLiteral("vector sort orderable elements")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("reverse"), 0, 0, true, vectorReverse, QStringLiteral("vector reverse in place")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("unique"), 0, 0, true, vectorUnique, QStringLiteral("remove adjacent equal elements")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("binary_search"), 1, 1, false, vectorBinarySearch, QStringLiteral("binary search sorted vector")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("lower_bound"), 1, 1, false, vectorLowerBound, QStringLiteral("lower bound in sorted vector")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("upper_bound"), 1, 1, false, vectorUpperBound, QStringLiteral("upper bound in sorted vector")});
 
     registry.registerMethod({TypeKind::Str, QStringLiteral("len"), 0, 0, false, stringLen, QStringLiteral("string length")});
     registry.registerMethod({TypeKind::Str, QStringLiteral("empty"), 0, 0, false, stringEmpty, QStringLiteral("string empty test")});

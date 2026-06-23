@@ -2645,6 +2645,31 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
                       .arg(element.displayName()));
         return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
     }
+    if (callee.field == QStringLiteral("reverse") || callee.field == QStringLiteral("unique")) {
+        if (!args.empty())
+            return errorExpr(callee.span, QStringLiteral("vector.%1 expects no arguments").arg(callee.field));
+        if (receiver.category == ValueCategory::LValue && !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.%1 requires mutable vector receiver").arg(callee.field));
+        return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+    }
+    if (callee.field == QStringLiteral("binary_search")
+        || callee.field == QStringLiteral("lower_bound")
+        || callee.field == QStringLiteral("upper_bound")) {
+        if (args.size() != 1)
+            return errorExpr(callee.span, QStringLiteral("vector.%1 expects one argument").arg(callee.field));
+        ExprType value = checkExpr(*args[0]);
+        if (!isUnknownType(value.type) && !isAssignable(element, value.type))
+            error(args[0]->span,
+                  QStringLiteral("cannot search %1 in vector<%2>")
+                      .arg(value.type.displayName(), element.displayName()));
+        if (!isBuiltinOrderable(element))
+            error(callee.span,
+                  QStringLiteral("vector.%1 requires orderable element type, got %2")
+                      .arg(callee.field, element.displayName()));
+        return callee.field == QStringLiteral("binary_search")
+            ? ExprType{makeType(TypeKind::Bool), ValueCategory::PRValue, false}
+            : ExprType{makeType(TypeKind::I32), ValueCategory::PRValue, false};
+    }
     return errorExpr(callee.span, QStringLiteral("unsupported builtin method '%1'").arg(callee.field));
 }
 

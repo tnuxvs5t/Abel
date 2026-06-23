@@ -790,12 +790,17 @@ private slots:
     {
         const QString src = QStringLiteral(R"(
             fn int main() {
-                vector<int> xs = {3, 1};
+                vector<int> xs = {3, 1, 2, 2};
                 xs.insert(1, 2);
                 int at = xs.find(2);
-                int removed = xs.erase(0);
                 xs.sort();
-                return at + removed + xs[0];
+                int lb = xs.lower_bound(2);
+                int ub = xs.upper_bound(2);
+                bool has = xs.binary_search(2);
+                xs.unique();
+                xs.reverse();
+                int removed = xs.erase(0);
+                return at + lb + ub + removed + xs[0];
             }
         )");
         auto result = checkSource(src);
@@ -829,6 +834,14 @@ private slots:
         )"));
         QVERIFY(!badFind.diagnostics.isEmpty());
 
+        auto badLowerBound = checkSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                return xs.lower_bound("bad");
+            }
+        )"));
+        QVERIFY(!badLowerBound.diagnostics.isEmpty());
+
         auto badSort = checkSource(QStringLiteral(R"(
             struct Box {
                 int x;
@@ -842,6 +855,20 @@ private slots:
         )"));
         QVERIFY(!badSort.diagnostics.isEmpty());
 
+        auto badBinarySearch = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+
+            fn int main() {
+                vector<Box> xs;
+                Box b;
+                bool has = xs.binary_search(b);
+                return 0;
+            }
+        )"));
+        QVERIFY(!badBinarySearch.diagnostics.isEmpty());
+
         auto constInsert = checkSource(QStringLiteral(R"(
             fn int main() {
                 const vector<int> xs = {1};
@@ -850,6 +877,15 @@ private slots:
             }
         )"));
         QVERIFY(!constInsert.diagnostics.isEmpty());
+
+        auto constReverse = checkSource(QStringLiteral(R"(
+            fn int main() {
+                const vector<int> xs = {1};
+                xs.reverse();
+                return 0;
+            }
+        )"));
+        QVERIFY(!constReverse.diagnostics.isEmpty());
     }
 
     void acceptsVectorStructResizeWhenElementDefaultConstructible()

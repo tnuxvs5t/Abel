@@ -24,6 +24,11 @@ private slots:
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("erase")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("find")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("sort")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("reverse")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("unique")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("binary_search")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("lower_bound")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("upper_bound")));
     }
 
     void vectorPushAndLenRunThroughRegistry()
@@ -165,6 +170,104 @@ private slots:
         QCOMPARE(loc->read().asVector()->elements[1].asInt(), 2);
         QCOMPARE(loc->read().asVector()->elements[2].asInt(), 3);
 
+        abel::BuiltinMethodCall insertDuplicate{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("insert"),
+            {abel::AbelValue::makeInt(2), abel::AbelValue::makeInt(2)},
+            {},
+            {},
+        };
+        auto duplicated = registry.callMethod(std::move(insertDuplicate));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(duplicated.type().kind, abel::TypeKind::Void);
+
+        abel::BuiltinMethodCall lowerBound{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("lower_bound"),
+            {abel::AbelValue::makeInt(2)},
+            {},
+            {},
+        };
+        auto lower = registry.callMethod(std::move(lowerBound));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(lower.asInt(), 1);
+
+        abel::BuiltinMethodCall upperBound{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("upper_bound"),
+            {abel::AbelValue::makeInt(2)},
+            {},
+            {},
+        };
+        auto upper = registry.callMethod(std::move(upperBound));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(upper.asInt(), 3);
+
+        abel::BuiltinMethodCall binarySearch{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("binary_search"),
+            {abel::AbelValue::makeInt(2)},
+            {},
+            {},
+        };
+        auto present = registry.callMethod(std::move(binarySearch));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QVERIFY(present.asBool());
+
+        abel::BuiltinMethodCall binarySearchMissing{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("binary_search"),
+            {abel::AbelValue::makeInt(9)},
+            {},
+            {},
+        };
+        auto absentSearch = registry.callMethod(std::move(binarySearchMissing));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QVERIFY(!absentSearch.asBool());
+
+        abel::BuiltinMethodCall unique{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("unique"),
+            {},
+            {},
+            {},
+        };
+        auto uniqued = registry.callMethod(std::move(unique));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(uniqued.type().kind, abel::TypeKind::Void);
+        QCOMPARE(loc->read().asVector()->elements.size(), static_cast<size_t>(3));
+        QCOMPARE(loc->read().asVector()->elements[0].asInt(), 1);
+        QCOMPARE(loc->read().asVector()->elements[1].asInt(), 2);
+        QCOMPARE(loc->read().asVector()->elements[2].asInt(), 3);
+
+        abel::BuiltinMethodCall reverse{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("reverse"),
+            {},
+            {},
+            {},
+        };
+        auto reversed = registry.callMethod(std::move(reverse));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(reversed.type().kind, abel::TypeKind::Void);
+        QCOMPARE(loc->read().asVector()->elements[0].asInt(), 3);
+        QCOMPARE(loc->read().asVector()->elements[1].asInt(), 2);
+        QCOMPARE(loc->read().asVector()->elements[2].asInt(), 1);
+
         abel::BuiltinMethodCall erase{
             ctx,
             loc,
@@ -178,8 +281,8 @@ private slots:
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(removed.asInt(), 2);
         QCOMPARE(loc->read().asVector()->elements.size(), static_cast<size_t>(2));
-        QCOMPARE(loc->read().asVector()->elements[0].asInt(), 1);
-        QCOMPARE(loc->read().asVector()->elements[1].asInt(), 3);
+        QCOMPARE(loc->read().asVector()->elements[0].asInt(), 3);
+        QCOMPARE(loc->read().asVector()->elements[1].asInt(), 1);
     }
 
     void customFunctionCanBeRegistered()
