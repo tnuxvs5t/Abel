@@ -240,3 +240,108 @@ string(FIND "${ambiguous_check_stderr}" "ambiguous across imported modules" ambi
 if(ambiguous_pos EQUAL -1)
     message(FATAL_ERROR "abel check did not explain ambiguous imported call:\n${ambiguous_check_stdout}\n${ambiguous_check_stderr}")
 endif()
+
+set(qualified_backend_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-qualified-backend")
+file(REMOVE_RECURSE "${qualified_backend_project_dir}")
+file(MAKE_DIRECTORY "${qualified_backend_project_dir}/src/lib")
+
+file(WRITE "${qualified_backend_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-qualified-backend",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "backendArtifacts": [
+    {
+      "backendId": "MathSystem",
+      "path": "@CMAKE_BINARY_DIR@/plugins/libmath_backend.so",
+      "symbols": ["fast_add"]
+    }
+  ]
+}
+]=])
+
+file(WRITE "${qualified_backend_project_dir}/src/lib/math.abel" [=[
+module cli.lib.math;
+
+backend MathSystem {
+    fn int fast_add(int a, int b);
+}
+]=])
+
+file(WRITE "${qualified_backend_project_dir}/src/main.abel" [=[
+module cli.main;
+use cli.lib.math;
+
+fn int main() {
+    return cli.lib.math::MathSystem::fast_add(19, 23);
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${qualified_backend_project_dir}"
+    RESULT_VARIABLE qualified_backend_check_result
+    OUTPUT_VARIABLE qualified_backend_check_stdout
+    ERROR_VARIABLE qualified_backend_check_stderr
+)
+if(NOT qualified_backend_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check rejected qualified module backend call:\n${qualified_backend_check_stdout}\n${qualified_backend_check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${qualified_backend_project_dir}"
+    RESULT_VARIABLE qualified_backend_run_result
+    OUTPUT_VARIABLE qualified_backend_run_stdout
+    ERROR_VARIABLE qualified_backend_run_stderr
+)
+if(NOT qualified_backend_run_result EQUAL 42)
+    message(FATAL_ERROR "abel run expected qualified backend project exit code 42, got ${qualified_backend_run_result}:\n${qualified_backend_run_stdout}\n${qualified_backend_run_stderr}")
+endif()
+
+set(qualified_backend_no_use_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-qualified-backend-no-use")
+file(REMOVE_RECURSE "${qualified_backend_no_use_project_dir}")
+file(MAKE_DIRECTORY "${qualified_backend_no_use_project_dir}/src/lib")
+
+file(WRITE "${qualified_backend_no_use_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-qualified-backend-no-use",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "backendArtifacts": [
+    {
+      "backendId": "MathSystem",
+      "path": "@CMAKE_BINARY_DIR@/plugins/libmath_backend.so",
+      "symbols": ["fast_add"]
+    }
+  ]
+}
+]=])
+
+file(WRITE "${qualified_backend_no_use_project_dir}/src/lib/math.abel" [=[
+module cli.lib.math;
+
+backend MathSystem {
+    fn int fast_add(int a, int b);
+}
+]=])
+
+file(WRITE "${qualified_backend_no_use_project_dir}/src/main.abel" [=[
+module cli.main;
+
+fn int main() {
+    return cli.lib.math::MathSystem::fast_add(19, 23);
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${qualified_backend_no_use_project_dir}"
+    RESULT_VARIABLE qualified_backend_no_use_check_result
+    OUTPUT_VARIABLE qualified_backend_no_use_check_stdout
+    ERROR_VARIABLE qualified_backend_no_use_check_stderr
+)
+if(qualified_backend_no_use_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted qualified backend call without use:\n${qualified_backend_no_use_check_stdout}\n${qualified_backend_no_use_check_stderr}")
+endif()
+string(FIND "${qualified_backend_no_use_check_stderr}" "backend 'MathSystem' is not visible from current module" qualified_backend_no_use_not_visible_pos)
+if(qualified_backend_no_use_not_visible_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain missing use for qualified backend call:\n${qualified_backend_no_use_check_stdout}\n${qualified_backend_no_use_check_stderr}")
+endif()
