@@ -1477,6 +1477,13 @@ stack:
 4. 若是 backend error，优先看 Abel 调用点和 backend block 签名是否匹配。
 ```
 
+运行期转换错误也应看 primary 行。比如实参类型、返回值类型、赋值 RHS 或 backend 实参在运行期不匹配时，诊断应指向调用实参或 `return expr` 那一行，而不是函数声明里的参数位置：
+
+```text
+return take("bad");
+       ^^^^^^^^^^^
+```
+
 当前 excerpt 来自 lexer 保存的单行源码；多文件/module source map 仍是 v1 后续大块。
 
 当前 `std.debug` 第一片以 builtin 形式提供：

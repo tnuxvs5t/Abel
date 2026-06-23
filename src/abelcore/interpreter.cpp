@@ -252,13 +252,13 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
                 error(QStringLiteral("E0566"),
                       QStringLiteral("cannot bind method parameter '%1' of type %2 to %3 lvalue")
                           .arg(p.name, target.displayName(), current.type().displayName()),
-                      p.span);
+                      args[i]->span);
                 continue;
             }
             prepared[i].location = loc;
             prepared[i].byReference = true;
         } else {
-            prepared[i].value = convertOrError(evalExpr(*args[i]), target, p.span);
+            prepared[i].value = convertOrError(evalExpr(*args[i]), target, args[i]->span);
         }
     }
     std::vector<AbelValue> packed;
@@ -296,7 +296,7 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeUnknown());
     const AbelType returnType = typeFromAst(*fn.returnType);
     if (flow.kind == FlowKind::Return)
-        return ExecResult::returned(convertOrError(flow.value, returnType, fn.span));
+        return ExecResult::returned(convertOrError(flow.value, returnType, flow.span), flow.span);
     if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
         error(QStringLiteral("E0569"), QStringLiteral("break/continue cannot leave method '%1'").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -339,8 +339,8 @@ ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vect
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
     if (flow.kind == FlowKind::Return) {
-        AbelValue converted = convertOrError(flow.value, returnType, fn.span);
-        return ExecResult::returned(converted);
+        AbelValue converted = convertOrError(flow.value, returnType, flow.span);
+        return ExecResult::returned(converted, flow.span);
     }
     if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
         error(QStringLiteral("E0532"), QStringLiteral("break/continue cannot leave function '%1'").arg(fn.name), fn.span);
@@ -391,13 +391,13 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
                 error(QStringLiteral("E0541"),
                       QStringLiteral("cannot bind parameter '%1' of type %2 to %3 lvalue")
                           .arg(p.name, target.displayName(), current.type().displayName()),
-                      p.span);
+                      args[i]->span);
                 continue;
             }
             prepared[i].location = loc;
             prepared[i].byReference = true;
         } else {
-            prepared[i].value = convertOrError(evalExpr(*args[i]), target, p.span);
+            prepared[i].value = convertOrError(evalExpr(*args[i]), target, args[i]->span);
         }
     }
     std::vector<AbelValue> packed;
@@ -437,7 +437,7 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
 
     const AbelType returnType = typeFromAst(*fn.returnType);
     if (flow.kind == FlowKind::Return)
-        return ExecResult::returned(convertOrError(flow.value, returnType, fn.span));
+        return ExecResult::returned(convertOrError(flow.value, returnType, flow.span), flow.span);
     if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
         error(QStringLiteral("E0542"), QStringLiteral("break/continue cannot leave function '%1'").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -494,13 +494,13 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
                 error(QStringLiteral("E0541"),
                       QStringLiteral("cannot bind parameter '%1' of type %2 to %3 lvalue")
                           .arg(p.name, target.displayName(), current.type().displayName()),
-                      p.span);
+                      arg.span);
                 continue;
             }
             prepared[i].location = loc;
             prepared[i].byReference = true;
         } else {
-            prepared[i].value = convertOrError(evalExpr(arg), target, p.span);
+            prepared[i].value = convertOrError(evalExpr(arg), target, arg.span);
         }
     }
     std::vector<AbelValue> packed;
@@ -539,7 +539,7 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
 
     const AbelType returnType = typeFromAst(*fn.returnType);
     if (flow.kind == FlowKind::Return)
-        return ExecResult::returned(convertOrError(flow.value, returnType, fn.span));
+        return ExecResult::returned(convertOrError(flow.value, returnType, flow.span), flow.span);
     if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
         error(QStringLiteral("E0542"), QStringLiteral("break/continue cannot leave function '%1'").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -617,7 +617,7 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
 
     const AbelType& returnType = *fnValue.type().pointee;
     if (flow.kind == FlowKind::Return)
-        return convertOrError(flow.value, returnType, lambda.span);
+        return convertOrError(flow.value, returnType, flow.span);
     if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
         error(QStringLiteral("E0584"), QStringLiteral("break/continue cannot leave lambda"), lambda.span);
         return AbelValue::makeUnknown();
@@ -703,7 +703,7 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
 
     const AbelType& returnType = *fnValue.type().pointee;
     if (flow.kind == FlowKind::Return)
-        return convertOrError(flow.value, returnType, lambda.span);
+        return convertOrError(flow.value, returnType, flow.span);
     if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
         error(QStringLiteral("E0584"), QStringLiteral("break/continue cannot leave lambda"), lambda.span);
         return AbelValue::makeUnknown();
@@ -730,7 +730,7 @@ ExecResult Interpreter::execStmt(const StmtNode& stmt)
 {
     if (auto* s = dynamic_cast<const ReturnStmtNode*>(&stmt)) {
         AbelValue value = s->expr ? evalExpr(*s->expr) : AbelValue::makeVoid();
-        return ExecResult::returned(value);
+        return ExecResult::returned(value, stmt.span);
     }
     if (auto* s = dynamic_cast<const VarDeclStmtNode*>(&stmt))
         return execVarDecl(*s);
@@ -829,7 +829,7 @@ ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
             error(QStringLiteral("E0534"),
                   QStringLiteral("cannot bind %1& to %2 lvalue")
                       .arg(referred.displayName(), current.type().displayName()),
-                  stmt.span);
+                  stmt.init->span);
             return ExecResult::normal();
         }
         m_ctx->defineVariable(stmt.name, loc, stmt.isConst || stmt.type->isConst, true, stmt.span);
@@ -848,7 +848,7 @@ ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
             values.push_back(convertOrError(evalExpr(*element), *type.pointee, element->span));
         value = AbelValue::makeVector(*type.pointee, std::move(values));
     } else {
-        value = stmt.init ? convertOrError(evalExpr(*stmt.init), type, stmt.span) : defaultConstructValue(type, stmt.span);
+        value = stmt.init ? convertOrError(evalExpr(*stmt.init), type, stmt.init->span) : defaultConstructValue(type, stmt.span);
         if (m_ctx->hasError())
             return ExecResult::normal();
     }
@@ -1429,15 +1429,15 @@ AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
                 error(QStringLiteral("E0609"),
                       QStringLiteral("cannot bind backend parameter '%1' of type %2 to %3 lvalue")
                           .arg(param.name, target.displayName(), current.type().displayName()),
-                      param.span);
+                      args[i]->span);
                 values.push_back(AbelValue::makeUnknown());
                 locations.push_back(nullptr);
                 continue;
             }
-            values.push_back(convertOrError(current, *target.pointee, param.span));
+            values.push_back(convertOrError(current, *target.pointee, args[i]->span));
             locations.push_back(loc);
         } else {
-            values.push_back(convertOrError(evalExpr(*args[i]), target, param.span));
+            values.push_back(convertOrError(evalExpr(*args[i]), target, args[i]->span));
             locations.push_back(nullptr);
         }
     }
@@ -1655,7 +1655,7 @@ AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
             return AbelValue::makeUnknown();
         }
         AbelValue current = slot->location ? slot->location->read() : AbelValue::makeUnknown();
-        AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.span);
+        AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.rhs->span);
         m_ctx->assignVariable(name->name, rhs, expr.span);
         return rhs;
     }
@@ -1666,7 +1666,7 @@ AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
         return AbelValue::makeUnknown();
     }
     AbelValue current = lhs->read();
-    AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.span);
+    AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.rhs->span);
     lhs->write(rhs);
     return rhs;
 }

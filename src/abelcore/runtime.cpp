@@ -26,11 +26,12 @@ ExecResult ExecResult::normal()
     return {};
 }
 
-ExecResult ExecResult::returned(const AbelValue& value)
+ExecResult ExecResult::returned(const AbelValue& value, const SourceSpan& span)
 {
     ExecResult r;
     r.kind = FlowKind::Return;
     r.value = value;
+    r.span = span;
     return r;
 }
 

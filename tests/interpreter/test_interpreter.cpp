@@ -874,6 +874,99 @@ private slots:
         QCOMPARE(result.exitCode, 1);
     }
 
+    void runtimeConversionErrorsUseArgumentAndReturnSourceLines()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int take(int x) {
+                return x;
+            }
+
+            fn int bad_return() {
+                return "bad";
+            }
+
+            fn int main() {
+                return take("bad") + bad_return();
+            }
+        )");
+        auto argResult = runSource(src);
+        QVERIFY(!argResult.diagnostics.isEmpty());
+        const auto& argDiagnostic = argResult.diagnostics.front();
+        QCOMPARE(argDiagnostic.code, QStringLiteral("E0531"));
+        QVERIFY(argDiagnostic.primary.sourceLine.contains(QStringLiteral("return take(\"bad\") + bad_return();")));
+        QVERIFY(stackHasSymbol(argDiagnostic, QStringLiteral("fn main")));
+
+        const QString returnSrc = QStringLiteral(R"(
+            fn int bad_return() {
+                return "bad";
+            }
+
+            fn int main() {
+                return bad_return();
+            }
+        )");
+        auto returnResult = runSource(returnSrc);
+        QVERIFY(!returnResult.diagnostics.isEmpty());
+        const auto& returnDiagnostic = returnResult.diagnostics.front();
+        QCOMPARE(returnDiagnostic.code, QStringLiteral("E0531"));
+        QVERIFY(returnDiagnostic.primary.sourceLine.contains(QStringLiteral("return \"bad\";")));
+        QVERIFY(stackHasSymbol(returnDiagnostic, QStringLiteral("fn bad_return")));
+        QVERIFY(stackHasSymbol(returnDiagnostic, QStringLiteral("fn main")));
+    }
+
+    void runtimeConversionErrorsUseLambdaMethodAndBackendSourceLines()
+    {
+        const QString lambdaSrc = QStringLiteral(R"(
+            fn int main() {
+                func int() f = lambda [] int() {
+                    return "bad";
+                };
+                return f();
+            }
+        )");
+        auto lambdaResult = runSource(lambdaSrc);
+        QVERIFY(!lambdaResult.diagnostics.isEmpty());
+        const auto& lambdaDiagnostic = lambdaResult.diagnostics.front();
+        QCOMPARE(lambdaDiagnostic.code, QStringLiteral("E0531"));
+        QVERIFY(lambdaDiagnostic.primary.sourceLine.contains(QStringLiteral("return \"bad\";")));
+        QVERIFY(stackHasSymbol(lambdaDiagnostic, QStringLiteral("lambda")));
+
+        const QString methodSrc = QStringLiteral(R"(
+            struct Box {
+                fn int set(int x) {
+                    return x;
+                }
+            }
+
+            fn int main() {
+                Box b = Box();
+                return b.set("bad");
+            }
+        )");
+        auto methodResult = runSource(methodSrc);
+        QVERIFY(!methodResult.diagnostics.isEmpty());
+        const auto& methodDiagnostic = methodResult.diagnostics.front();
+        QCOMPARE(methodDiagnostic.code, QStringLiteral("E0531"));
+        QVERIFY(methodDiagnostic.primary.sourceLine.contains(QStringLiteral("return b.set(\"bad\");")));
+        QVERIFY(stackHasSymbol(methodDiagnostic, QStringLiteral("fn main")));
+
+        const QString backendSrc = QStringLiteral(R"(
+            backend MathSystem {
+                fn int accept(int x);
+            }
+
+            fn int main() {
+                return MathSystem::accept("bad");
+            }
+        )");
+        auto backendResult = runSource(backendSrc);
+        QVERIFY(!backendResult.diagnostics.isEmpty());
+        const auto& backendDiagnostic = backendResult.diagnostics.front();
+        QCOMPARE(backendDiagnostic.code, QStringLiteral("E0531"));
+        QVERIFY(backendDiagnostic.primary.sourceLine.contains(QStringLiteral("return MathSystem::accept(\"bad\");")));
+        QVERIFY(stackHasSymbol(backendDiagnostic, QStringLiteral("fn main")));
+    }
+
     void debugBreakReportsStackAndSourceLine()
     {
         const QString src = QStringLiteral(R"(

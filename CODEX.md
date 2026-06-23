@@ -1009,6 +1009,8 @@ backend 排错顺序：
 5. 若没有 sourceLine excerpt，退回 file:line:column；多文件/module source map 仍可能是后续能力边界。
 ```
 
+运行期转换错误的 primary 行应当落在造成转换的位置：函数实参、method 实参、lambda 返回表达式、函数 `return expr`、赋值 RHS 或 backend 调用实参。若它指向声明处，优先怀疑 Abel 本体 source span 传递问题。
+
 调试辅助：
 
 ```abel

@@ -21,9 +21,10 @@ enum class FlowKind {
 struct ExecResult {
     FlowKind kind = FlowKind::Normal;
     AbelValue value = AbelValue::makeVoid();
+    SourceSpan span;
 
     static ExecResult normal();
-    static ExecResult returned(const AbelValue& value);
+    static ExecResult returned(const AbelValue& value, const SourceSpan& span = {});
     static ExecResult breakFlow();
     static ExecResult continueFlow();
 };
