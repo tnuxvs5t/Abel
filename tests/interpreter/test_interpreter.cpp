@@ -768,6 +768,21 @@ private slots:
         QCOMPARE(diagnostic.primary.file, QStringLiteral("<test>"));
         QVERIFY(diagnostic.primary.startLine > 0);
         QVERIFY(diagnostic.primary.startColumn > 0);
+        QVERIFY(diagnostic.primary.sourceLine.contains(QStringLiteral("return 1 / 0;")));
+        bool sawInnerCallLine = false;
+        bool sawOuterCallLine = false;
+        bool sawMainLine = false;
+        for (const auto& frame : diagnostic.stackTrace) {
+            if (frame.symbol == QStringLiteral("fn inner"))
+                sawInnerCallLine = frame.callSite.sourceLine.contains(QStringLiteral("return inner();"));
+            if (frame.symbol == QStringLiteral("fn outer"))
+                sawOuterCallLine = frame.callSite.sourceLine.contains(QStringLiteral("return outer();"));
+            if (frame.symbol == QStringLiteral("fn main"))
+                sawMainLine = frame.callSite.sourceLine.contains(QStringLiteral("fn int main()"));
+        }
+        QVERIFY(sawInnerCallLine);
+        QVERIFY(sawOuterCallLine);
+        QVERIFY(sawMainLine);
         QCOMPARE(result.exitCode, 1);
     }
 
@@ -788,6 +803,13 @@ private slots:
         QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("lambda")));
         QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
         QVERIFY(stackIndexOf(diagnostic, QStringLiteral("lambda")) < stackIndexOf(diagnostic, QStringLiteral("fn main")));
+        QVERIFY(diagnostic.primary.sourceLine.contains(QStringLiteral("return 1 / 0;")));
+        bool sawLambdaCallLine = false;
+        for (const auto& frame : diagnostic.stackTrace) {
+            if (frame.symbol == QStringLiteral("lambda"))
+                sawLambdaCallLine = frame.callSite.sourceLine.contains(QStringLiteral("return f();"));
+        }
+        QVERIFY(sawLambdaCallLine);
         QCOMPARE(result.exitCode, 1);
     }
 
@@ -814,6 +836,13 @@ private slots:
         QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("method crash")));
         QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
         QVERIFY(stackIndexOf(diagnostic, QStringLiteral("method crash")) < stackIndexOf(diagnostic, QStringLiteral("fn main")));
+        QVERIFY(diagnostic.primary.sourceLine.contains(QStringLiteral("return 1 / 0;")));
+        bool sawMethodCallLine = false;
+        for (const auto& frame : diagnostic.stackTrace) {
+            if (frame.symbol == QStringLiteral("method crash"))
+                sawMethodCallLine = frame.callSite.sourceLine.contains(QStringLiteral("return b.crash();"));
+        }
+        QVERIFY(sawMethodCallLine);
         QCOMPARE(result.exitCode, 1);
     }
 
@@ -835,6 +864,13 @@ private slots:
         QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("backend MathSystem::fast_add")));
         QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
         QVERIFY(stackIndexOf(diagnostic, QStringLiteral("backend MathSystem::fast_add")) < stackIndexOf(diagnostic, QStringLiteral("fn main")));
+        QVERIFY(diagnostic.primary.sourceLine.contains(QStringLiteral("return MathSystem::fast_add(1, 2);")));
+        bool sawBackendCallLine = false;
+        for (const auto& frame : diagnostic.stackTrace) {
+            if (frame.symbol == QStringLiteral("backend MathSystem::fast_add"))
+                sawBackendCallLine = frame.callSite.sourceLine.contains(QStringLiteral("return MathSystem::fast_add(1, 2);"));
+        }
+        QVERIFY(sawBackendCallLine);
         QCOMPARE(result.exitCode, 1);
     }
 };

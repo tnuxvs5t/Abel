@@ -73,10 +73,27 @@ bool Lexer::match(QChar ch)
     return true;
 }
 
+QString Lexer::sourceLineAt(qsizetype pos) const
+{
+    if (pos < 0 || pos >= m_source.size())
+        return {};
+
+    qsizetype begin = pos;
+    while (begin > 0 && m_source[begin - 1] != QChar('\n') && m_source[begin - 1] != QChar('\r'))
+        --begin;
+
+    qsizetype end = pos;
+    while (end < m_source.size() && m_source[end] != QChar('\n') && m_source[end] != QChar('\r'))
+        ++end;
+
+    return m_source.mid(begin, end - begin);
+}
+
 SourceSpan Lexer::startSpan(qsizetype startPos, int startLine, int startColumn) const
 {
     SourceSpan span;
     span.file = m_fileName;
+    span.sourceLine = sourceLineAt(startPos);
     span.startOffset = static_cast<int>(startPos);
     span.endOffset = static_cast<int>(m_pos);
     span.startLine = startLine;

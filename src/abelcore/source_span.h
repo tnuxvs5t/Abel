@@ -6,6 +6,7 @@ namespace abel {
 
 struct SourceSpan {
     QString file;
+    QString sourceLine;
     int startOffset = 0;
     int endOffset = 0;
     int startLine = 1;
@@ -15,4 +16,3 @@ struct SourceSpan {
 };
 
 } // namespace abel
-

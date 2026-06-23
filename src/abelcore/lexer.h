@@ -30,6 +30,7 @@ private:
     QChar peek(int offset = 0) const;
     QChar advance();
     bool match(QChar ch);
+    QString sourceLineAt(qsizetype pos) const;
     SourceSpan startSpan(qsizetype startPos, int startLine, int startColumn) const;
     void add(TokenKind kind, const QString& text, qsizetype startPos, int startLine, int startColumn);
     void error(const QString& message, qsizetype startPos, int startLine, int startColumn);

@@ -1385,7 +1385,32 @@ resource symbols:   MathSystem.fast_add
 
 任一处错，ResourceNode/BackendRegistry 应给 E06xx 类诊断。
 
-### 17.4 修改 parser 后不加错误恢复测试
+### 17.4 运行期错误怎么看
+
+Abel 的运行期诊断已经包含 Abel 调用栈、源码位置、源码行 excerpt 和 caret。先看 primary error，再沿 `stack:` 往下看调用链：
+
+```text
+E0517: division by zero at src/main.abel:3:24
+                return 1 / 0;
+                       ^^^^^
+stack:
+  at fn inner (src/main.abel:7:24)
+                return inner();
+                       ^^^^^^^
+```
+
+排错顺序：
+
+```text
+1. primary error 的源码行：真正崩的位置。
+2. stack 第一帧：谁直接触发它。
+3. 后续帧：从 main/backend/lambda/method 往内的调用路径。
+4. 若是 backend error，优先看 Abel 调用点和 backend block 签名是否匹配。
+```
+
+当前 excerpt 来自 lexer 保存的单行源码；多文件/module source map 仍是 v1 后续大块。
+
+### 17.5 修改 parser 后不加错误恢复测试
 
 parser 曾经因为错误恢复不前进导致内存爆炸。以后动 parser，要特别检查：
 

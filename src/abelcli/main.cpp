@@ -15,6 +15,30 @@
 
 #include <vector>
 
+static QString caretLineForSpan(const abel::SourceSpan& span)
+{
+    if (span.startColumn <= 0)
+        return {};
+    QString caret;
+    caret.reserve(qMax(1, span.startColumn));
+    for (int i = 1; i < span.startColumn; ++i)
+        caret.push_back(QLatin1Char(' '));
+    const int width = qMax(1, span.endLine == span.startLine ? span.endColumn - span.startColumn : 1);
+    for (int i = 0; i < width; ++i)
+        caret.push_back(QLatin1Char('^'));
+    return caret;
+}
+
+static void printSourceExcerpt(QTextStream& err, const abel::SourceSpan& span, const QString& indent)
+{
+    if (span.sourceLine.isEmpty())
+        return;
+    err << indent << span.sourceLine << Qt::endl;
+    const QString caret = caretLineForSpan(span);
+    if (!caret.isEmpty())
+        err << indent << caret << Qt::endl;
+}
+
 static void printDiagnostic(const abel::Diagnostic& d)
 {
     QTextStream err(stderr);
@@ -23,6 +47,7 @@ static void printDiagnostic(const abel::Diagnostic& d)
         err << " at " << d.primary.file << ":" << d.primary.startLine << ":" << d.primary.startColumn;
     }
     err << Qt::endl;
+    printSourceExcerpt(err, d.primary, QString());
     if (!d.stackTrace.isEmpty()) {
         err << "stack:" << Qt::endl;
         for (const auto& frame : d.stackTrace) {
@@ -33,6 +58,7 @@ static void printDiagnostic(const abel::Diagnostic& d)
                     << frame.callSite.startColumn << ")";
             }
             err << Qt::endl;
+            printSourceExcerpt(err, frame.callSite, QStringLiteral("    "));
         }
     }
 }

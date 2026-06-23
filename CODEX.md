@@ -985,6 +985,16 @@ backend 排错顺序：
 11. 运行时是否需要 LD_LIBRARY_PATH 指向 ABEL_PREFIX/lib。
 ```
 
+运行期错误排错顺序：
+
+```text
+1. 先读 primary diagnostic 的源码行 excerpt 和 caret；那是当前崩溃点。
+2. 再读 stack 第一帧的源码行；那是直接调用点。
+3. 继续沿 stack 往下找 main / method / lambda / backend 的进入路径。
+4. backend error 不要只看 C++ plugin；必须对照 Abel 调用点、backend block 签名、C++ bind symbol 和 package/cache resource。
+5. 若没有 sourceLine excerpt，退回 file:line:column；多文件/module source map 仍可能是后续能力边界。
+```
+
 ## 16. 验证命令
 
 纯 Abel 项目：
