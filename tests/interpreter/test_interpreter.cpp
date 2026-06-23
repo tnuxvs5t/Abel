@@ -710,14 +710,19 @@ private slots:
         const QString src = QStringLiteral(R"(
             fn int main() {
                 str s = build_string("hakurei", " shrine");
-                bool ok = s.contains("rei") && !s.contains("moriya") && !s.empty();
+                bool ok = s.contains("rei") && !s.contains("moriya") && !s.empty()
+                    && s.starts_with("hak") && s.ends_with("shrine");
                 int pos = s.find("shrine");
                 int missing = s.find("scarlet");
                 str a = s.substr(0, 7);
                 str b = s.slice(pos, 6);
                 str c = s.replace("shrine", "engine");
-                if (ok && pos == 8 && missing == -1 && a == "hakurei" && b == "shrine" && c == "hakurei engine") {
-                    return s.len() + a.len() + b.len() + c.len() + pos;
+                str t = "  Aya  ".trim().lower().upper();
+                vector<str> parts = s.split(" ");
+                if (ok && pos == 8 && missing == -1 && a == "hakurei" && b == "shrine"
+                    && c == "hakurei engine" && t == "AYA"
+                    && parts.len() == 2 && parts[0] == "hakurei" && parts[1] == "shrine") {
+                    return s.len() + a.len() + b.len() + c.len() + t.len() + parts.len() + pos;
                 }
                 return 0;
             }
@@ -726,7 +731,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 49);
+        QCOMPARE(result.exitCode, 54);
     }
 
     void stringSliceRejectsNegativeBoundsAtRuntime()

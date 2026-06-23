@@ -1,5 +1,6 @@
 #include "abelcore/builtin_registry.h"
 
+#include <QStringList>
 #include <QTextStream>
 
 #include <algorithm>
@@ -826,6 +827,22 @@ AbelValue stringFind(BuiltinMethodCall& call)
     return AbelValue::makeInt(call.receiver.asString().indexOf(needle.asString()), TypeKind::I32);
 }
 
+AbelValue stringStartsWith(BuiltinMethodCall& call)
+{
+    AbelValue prefix = convertBuiltinArg(call, 0, makeType(TypeKind::Str));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    return AbelValue::makeBool(call.receiver.asString().startsWith(prefix.asString()));
+}
+
+AbelValue stringEndsWith(BuiltinMethodCall& call)
+{
+    AbelValue suffix = convertBuiltinArg(call, 0, makeType(TypeKind::Str));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    return AbelValue::makeBool(call.receiver.asString().endsWith(suffix.asString()));
+}
+
 AbelValue stringSlice(BuiltinMethodCall& call)
 {
     AbelValue startValue = convertBuiltinArg(call, 0, makeType(TypeKind::I64));
@@ -857,6 +874,40 @@ AbelValue stringReplace(BuiltinMethodCall& call)
     return AbelValue::makeString(copy);
 }
 
+AbelValue stringTrim(BuiltinMethodCall& call)
+{
+    return AbelValue::makeString(call.receiver.asString().trimmed());
+}
+
+AbelValue stringLower(BuiltinMethodCall& call)
+{
+    return AbelValue::makeString(call.receiver.asString().toLower());
+}
+
+AbelValue stringUpper(BuiltinMethodCall& call)
+{
+    return AbelValue::makeString(call.receiver.asString().toUpper());
+}
+
+AbelValue stringSplit(BuiltinMethodCall& call)
+{
+    AbelValue sep = convertBuiltinArg(call, 0, makeType(TypeKind::Str));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    if (sep.asString().isEmpty()) {
+        call.ctx.error(QStringLiteral("E0434"),
+                       QStringLiteral("str.split separator must not be empty"),
+                       call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+        return AbelValue::makeUnknown();
+    }
+    std::vector<AbelValue> parts;
+    const QStringList split = call.receiver.asString().split(sep.asString(), Qt::KeepEmptyParts);
+    parts.reserve(static_cast<size_t>(split.size()));
+    for (const QString& part : split)
+        parts.push_back(AbelValue::makeString(part));
+    return AbelValue::makeVector(makeType(TypeKind::Str), std::move(parts));
+}
+
 } // namespace
 
 BuiltinRegistry BuiltinRegistry::makeDefault()
@@ -881,9 +932,15 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerMethod({TypeKind::Str, QStringLiteral("empty"), 0, 0, false, stringEmpty, QStringLiteral("string empty test")});
     registry.registerMethod({TypeKind::Str, QStringLiteral("contains"), 1, 1, false, stringContains, QStringLiteral("string contains")});
     registry.registerMethod({TypeKind::Str, QStringLiteral("find"), 1, 1, false, stringFind, QStringLiteral("string find, -1 when absent")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("starts_with"), 1, 1, false, stringStartsWith, QStringLiteral("string prefix test")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("ends_with"), 1, 1, false, stringEndsWith, QStringLiteral("string suffix test")});
     registry.registerMethod({TypeKind::Str, QStringLiteral("substr"), 2, 2, false, stringSlice, QStringLiteral("string substring")});
     registry.registerMethod({TypeKind::Str, QStringLiteral("slice"), 2, 2, false, stringSlice, QStringLiteral("string slice alias")});
     registry.registerMethod({TypeKind::Str, QStringLiteral("replace"), 2, 2, false, stringReplace, QStringLiteral("string replace all")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("trim"), 0, 0, false, stringTrim, QStringLiteral("trim surrounding whitespace")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("lower"), 0, 0, false, stringLower, QStringLiteral("lowercase string")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("upper"), 0, 0, false, stringUpper, QStringLiteral("uppercase string")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("split"), 1, 1, false, stringSplit, QStringLiteral("split string by non-empty separator")});
 
     registry.registerFunction({QStringLiteral("to_str"), 1, 1, false, builtinToStr, QStringLiteral("stringify one value")});
     registry.registerFunction({QStringLiteral("build_string"), 0, -1, true, builtinBuildString, QStringLiteral("concatenate stringified values")});

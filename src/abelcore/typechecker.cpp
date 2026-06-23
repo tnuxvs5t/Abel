@@ -2450,13 +2450,18 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
                 return errorExpr(callee.span, QStringLiteral("str.empty expects no arguments"));
             return {makeType(TypeKind::Bool), ValueCategory::PRValue, false};
         }
-        if (callee.field == QStringLiteral("contains") || callee.field == QStringLiteral("find")) {
+        if (callee.field == QStringLiteral("contains")
+            || callee.field == QStringLiteral("find")
+            || callee.field == QStringLiteral("starts_with")
+            || callee.field == QStringLiteral("ends_with")) {
             if (args.size() != 1)
                 return errorExpr(callee.span, QStringLiteral("str.%1 expects one argument").arg(callee.field));
             ExprType needle = checkExpr(*args[0]);
             if (!isUnknownType(needle.type) && !isAssignable(makeType(TypeKind::Str), needle.type))
                 error(args[0]->span, QStringLiteral("str.%1 expects str argument").arg(callee.field));
             return callee.field == QStringLiteral("contains")
+                    || callee.field == QStringLiteral("starts_with")
+                    || callee.field == QStringLiteral("ends_with")
                 ? ExprType{makeType(TypeKind::Bool), ValueCategory::PRValue, false}
                 : ExprType{makeType(TypeKind::I32), ValueCategory::PRValue, false};
         }
@@ -2481,6 +2486,21 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
             if (!isUnknownType(after.type) && !isAssignable(makeType(TypeKind::Str), after.type))
                 error(args[1]->span, QStringLiteral("str.replace after argument must be str"));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
+        }
+        if (callee.field == QStringLiteral("trim")
+            || callee.field == QStringLiteral("lower")
+            || callee.field == QStringLiteral("upper")) {
+            if (!args.empty())
+                return errorExpr(callee.span, QStringLiteral("str.%1 expects no arguments").arg(callee.field));
+            return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
+        }
+        if (callee.field == QStringLiteral("split")) {
+            if (args.size() != 1)
+                return errorExpr(callee.span, QStringLiteral("str.split expects one argument"));
+            ExprType sep = checkExpr(*args[0]);
+            if (!isUnknownType(sep.type) && !isAssignable(makeType(TypeKind::Str), sep.type))
+                error(args[0]->span, QStringLiteral("str.split expects str argument"));
+            return {makeVectorType(makeType(TypeKind::Str)), ValueCategory::PRValue, false};
         }
         return errorExpr(callee.span, QStringLiteral("unsupported builtin method '%1'").arg(callee.field));
     }

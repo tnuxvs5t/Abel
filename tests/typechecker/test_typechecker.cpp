@@ -230,12 +230,14 @@ private slots:
         const QString src = QStringLiteral(R"(
             fn int main() {
                 str s = build_string("hakurei", " shrine");
-                bool ok = s.contains("rei") && !s.empty();
+                bool ok = s.contains("rei") && !s.empty() && s.starts_with("hak") && s.ends_with("shrine");
                 int pos = s.find("shrine");
                 str a = s.substr(0, 7);
                 str b = s.slice(pos, 6);
                 str c = s.replace("shrine", "engine");
-                return s.len() + a.len() + b.len() + c.len();
+                str t = "  Aya  ".trim().lower().upper();
+                vector<str> parts = s.split(" ");
+                return s.len() + a.len() + b.len() + c.len() + t.len() + parts.len();
             }
         )");
         auto result = checkSource(src);
@@ -260,6 +262,29 @@ private slots:
             }
         )"));
         QVERIFY(!badSliceIndex.diagnostics.isEmpty());
+
+        auto badStartsWith = checkSource(QStringLiteral(R"(
+            fn int main() {
+                return "abc".starts_with(1);
+            }
+        )"));
+        QVERIFY(!badStartsWith.diagnostics.isEmpty());
+
+        auto badTrimArity = checkSource(QStringLiteral(R"(
+            fn int main() {
+                str s = "abc".trim(1);
+                return s.len();
+            }
+        )"));
+        QVERIFY(!badTrimArity.diagnostics.isEmpty());
+
+        auto badSplit = checkSource(QStringLiteral(R"(
+            fn int main() {
+                vector<str> xs = "abc".split(1);
+                return xs.len();
+            }
+        )"));
+        QVERIFY(!badSplit.diagnostics.isEmpty());
     }
 
     void acceptsCastPipeAndExtendedOperators()

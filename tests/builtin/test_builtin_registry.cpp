@@ -234,9 +234,15 @@ private slots:
         QVERIFY(registry.hasMethod(strType, QStringLiteral("empty")));
         QVERIFY(registry.hasMethod(strType, QStringLiteral("contains")));
         QVERIFY(registry.hasMethod(strType, QStringLiteral("find")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("starts_with")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("ends_with")));
         QVERIFY(registry.hasMethod(strType, QStringLiteral("substr")));
         QVERIFY(registry.hasMethod(strType, QStringLiteral("slice")));
         QVERIFY(registry.hasMethod(strType, QStringLiteral("replace")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("trim")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("lower")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("upper")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("split")));
 
         abel::AbelRuntimeContext ctx;
         abel::BuiltinFunctionCall call{
@@ -366,70 +372,62 @@ private slots:
         abel::AbelRuntimeContext ctx;
         const abel::AbelValue text = abel::AbelValue::makeString(QStringLiteral("hakurei shrine"));
 
-        abel::BuiltinMethodCall len{
-            ctx,
-            nullptr,
-            text,
-            QStringLiteral("len"),
-            {},
-            {},
-            {},
+        auto call = [&](const abel::AbelValue& receiver, const QString& name, std::vector<abel::AbelValue> args = {}) {
+            return registry.callMethod(abel::BuiltinMethodCall{ctx, nullptr, receiver, name, std::move(args), {}, {}});
         };
-        auto length = registry.callMethod(std::move(len));
+
+        auto length = call(text, QStringLiteral("len"));
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(length.asInt(), 14);
 
-        abel::BuiltinMethodCall contains{
-            ctx,
-            nullptr,
-            text,
-            QStringLiteral("contains"),
-            {abel::AbelValue::makeString(QStringLiteral("rei"))},
-            {},
-            {},
-        };
-        auto hasNeedle = registry.callMethod(std::move(contains));
+        auto hasNeedle = call(text, QStringLiteral("contains"), {abel::AbelValue::makeString(QStringLiteral("rei"))});
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(hasNeedle.asBool(), true);
 
-        abel::BuiltinMethodCall find{
-            ctx,
-            nullptr,
-            text,
-            QStringLiteral("find"),
-            {abel::AbelValue::makeString(QStringLiteral("shrine"))},
-            {},
-            {},
-        };
-        auto index = registry.callMethod(std::move(find));
+        auto index = call(text, QStringLiteral("find"), {abel::AbelValue::makeString(QStringLiteral("shrine"))});
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(index.asInt(), 8);
 
-        abel::BuiltinMethodCall slice{
-            ctx,
-            nullptr,
-            text,
-            QStringLiteral("slice"),
-            {abel::AbelValue::makeInt(8), abel::AbelValue::makeInt(6)},
-            {},
-            {},
-        };
-        auto part = registry.callMethod(std::move(slice));
+        auto starts = call(text, QStringLiteral("starts_with"), {abel::AbelValue::makeString(QStringLiteral("hak"))});
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(starts.asBool(), true);
+
+        auto ends = call(text, QStringLiteral("ends_with"), {abel::AbelValue::makeString(QStringLiteral("shrine"))});
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(ends.asBool(), true);
+
+        auto part = call(text, QStringLiteral("slice"), {abel::AbelValue::makeInt(8), abel::AbelValue::makeInt(6)});
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(part.asString(), QStringLiteral("shrine"));
 
-        abel::BuiltinMethodCall replace{
-            ctx,
-            nullptr,
-            text,
-            QStringLiteral("replace"),
-            {abel::AbelValue::makeString(QStringLiteral("shrine")), abel::AbelValue::makeString(QStringLiteral("engine"))},
-            {},
-            {},
-        };
-        auto replaced = registry.callMethod(std::move(replace));
+        auto replaced = call(text,
+                             QStringLiteral("replace"),
+                             {abel::AbelValue::makeString(QStringLiteral("shrine")),
+                              abel::AbelValue::makeString(QStringLiteral("engine"))});
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(replaced.asString(), QStringLiteral("hakurei engine"));
+
+        const abel::AbelValue padded = abel::AbelValue::makeString(QStringLiteral("  Aya  "));
+        auto trimmed = call(padded, QStringLiteral("trim"));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(trimmed.asString(), QStringLiteral("Aya"));
+
+        auto lower = call(abel::AbelValue::makeString(QStringLiteral("Aya")), QStringLiteral("lower"));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(lower.asString(), QStringLiteral("aya"));
+
+        auto upper = call(lower, QStringLiteral("upper"));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(upper.asString(), QStringLiteral("AYA"));
+
+        auto split = call(text, QStringLiteral("split"), {abel::AbelValue::makeString(QStringLiteral(" "))});
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(split.type().kind, abel::TypeKind::Vector);
+        QVERIFY(split.type().pointee);
+        QCOMPARE(split.type().pointee->kind, abel::TypeKind::Str);
+        QCOMPARE(split.asVector()->elements.size(), static_cast<size_t>(2));
+        QCOMPARE(split.asVector()->elements[0].asString(), QStringLiteral("hakurei"));
+        QCOMPARE(split.asVector()->elements[1].asString(), QStringLiteral("shrine"));
     }
 
     void stringCharConversionsWork()
