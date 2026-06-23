@@ -486,6 +486,63 @@ AbelValue vectorBack(BuiltinMethodCall& call)
     return vector->elements.back();
 }
 
+AbelValue stringLen(BuiltinMethodCall& call)
+{
+    return AbelValue::makeInt(call.receiver.asString().size(), TypeKind::I32);
+}
+
+AbelValue stringEmpty(BuiltinMethodCall& call)
+{
+    return AbelValue::makeBool(call.receiver.asString().isEmpty());
+}
+
+AbelValue stringContains(BuiltinMethodCall& call)
+{
+    AbelValue needle = convertBuiltinArg(call, 0, makeType(TypeKind::Str));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    return AbelValue::makeBool(call.receiver.asString().contains(needle.asString()));
+}
+
+AbelValue stringFind(BuiltinMethodCall& call)
+{
+    AbelValue needle = convertBuiltinArg(call, 0, makeType(TypeKind::Str));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    return AbelValue::makeInt(call.receiver.asString().indexOf(needle.asString()), TypeKind::I32);
+}
+
+AbelValue stringSlice(BuiltinMethodCall& call)
+{
+    AbelValue startValue = convertBuiltinArg(call, 0, makeType(TypeKind::I64));
+    AbelValue lenValue = convertBuiltinArg(call, 1, makeType(TypeKind::I64));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    const qint64 start = startValue.asInt();
+    const qint64 len = lenValue.asInt();
+    if (start < 0 || len < 0) {
+        const SourceSpan span = start < 0
+            ? (call.argSpans.empty() ? call.callSpan : call.argSpans[0])
+            : (call.argSpans.size() < 2 ? call.callSpan : call.argSpans[1]);
+        call.ctx.error(QStringLiteral("E0418"),
+                       QStringLiteral("str.%1 expects non-negative start and length").arg(call.name),
+                       span);
+        return AbelValue::makeUnknown();
+    }
+    return AbelValue::makeString(call.receiver.asString().mid(static_cast<qsizetype>(start), static_cast<qsizetype>(len)));
+}
+
+AbelValue stringReplace(BuiltinMethodCall& call)
+{
+    AbelValue before = convertBuiltinArg(call, 0, makeType(TypeKind::Str));
+    AbelValue after = convertBuiltinArg(call, 1, makeType(TypeKind::Str));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    QString copy = call.receiver.asString();
+    copy.replace(before.asString(), after.asString());
+    return AbelValue::makeString(copy);
+}
+
 } // namespace
 
 BuiltinRegistry BuiltinRegistry::makeDefault()
@@ -501,6 +558,14 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerMethod({TypeKind::Vector, QStringLiteral("resize"), 1, 1, true, vectorResize, QStringLiteral("vector resize")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("front"), 0, 0, false, vectorFront, QStringLiteral("vector front")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("back"), 0, 0, false, vectorBack, QStringLiteral("vector back")});
+
+    registry.registerMethod({TypeKind::Str, QStringLiteral("len"), 0, 0, false, stringLen, QStringLiteral("string length")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("empty"), 0, 0, false, stringEmpty, QStringLiteral("string empty test")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("contains"), 1, 1, false, stringContains, QStringLiteral("string contains")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("find"), 1, 1, false, stringFind, QStringLiteral("string find, -1 when absent")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("substr"), 2, 2, false, stringSlice, QStringLiteral("string substring")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("slice"), 2, 2, false, stringSlice, QStringLiteral("string slice alias")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("replace"), 2, 2, false, stringReplace, QStringLiteral("string replace all")});
 
     registry.registerFunction({QStringLiteral("to_str"), 1, 1, false, builtinToStr, QStringLiteral("stringify one value")});
     registry.registerFunction({QStringLiteral("build_string"), 0, -1, true, builtinBuildString, QStringLiteral("concatenate stringified values")});

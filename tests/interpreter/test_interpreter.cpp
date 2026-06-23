@@ -614,6 +614,42 @@ private slots:
         QCOMPARE(result.exitCode, 22);
     }
 
+    void stringBuiltinMethodsWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                str s = build_string("hakurei", " shrine");
+                bool ok = s.contains("rei") && !s.contains("moriya") && !s.empty();
+                int pos = s.find("shrine");
+                int missing = s.find("scarlet");
+                str a = s.substr(0, 7);
+                str b = s.slice(pos, 6);
+                str c = s.replace("shrine", "engine");
+                if (ok && pos == 8 && missing == -1 && a == "hakurei" && b == "shrine" && c == "hakurei engine") {
+                    return s.len() + a.len() + b.len() + c.len() + pos;
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 49);
+    }
+
+    void stringSliceRejectsNegativeBoundsAtRuntime()
+    {
+        auto result = runSource(QStringLiteral(R"(
+            fn int main() {
+                return "abc".slice(-1, 1).len();
+            }
+        )"));
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 1);
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("non-negative")));
+    }
+
     void castPipeAndExtendedOperatorsWork()
     {
         const QString src = QStringLiteral(R"(

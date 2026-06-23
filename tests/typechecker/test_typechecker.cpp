@@ -225,6 +225,43 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsStringBuiltinMethods()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                str s = build_string("hakurei", " shrine");
+                bool ok = s.contains("rei") && !s.empty();
+                int pos = s.find("shrine");
+                str a = s.substr(0, 7);
+                str b = s.slice(pos, 6);
+                str c = s.replace("shrine", "engine");
+                return s.len() + a.len() + b.len() + c.len();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsBadStringBuiltinMethodArguments()
+    {
+        auto badNeedle = checkSource(QStringLiteral(R"(
+            fn int main() {
+                return "abc".find(1);
+            }
+        )"));
+        QVERIFY(!badNeedle.diagnostics.isEmpty());
+
+        auto badSliceIndex = checkSource(QStringLiteral(R"(
+            fn int main() {
+                str s = "abc".slice("x", 1);
+                return s.len();
+            }
+        )"));
+        QVERIFY(!badSliceIndex.diagnostics.isEmpty());
+    }
+
     void acceptsCastPipeAndExtendedOperators()
     {
         const QString src = QStringLiteral(R"(

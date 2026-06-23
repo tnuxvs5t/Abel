@@ -119,6 +119,7 @@ private slots:
     void defaultStringBuiltinsWork()
     {
         auto registry = abel::BuiltinRegistry::makeDefault();
+        const abel::AbelType strType = abel::makeType(abel::TypeKind::Str);
         QVERIFY(registry.hasFunction(QStringLiteral("to_str")));
         QVERIFY(registry.hasFunction(QStringLiteral("build_string")));
         QVERIFY(registry.hasFunction(QStringLiteral("print")));
@@ -130,6 +131,13 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("test_assert")));
         QVERIFY(registry.hasFunction(QStringLiteral("test_eq")));
         QVERIFY(registry.hasFunction(QStringLiteral("test_ne")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("len")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("empty")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("contains")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("find")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("substr")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("slice")));
+        QVERIFY(registry.hasMethod(strType, QStringLiteral("replace")));
 
         abel::AbelRuntimeContext ctx;
         abel::BuiltinFunctionCall call{
@@ -148,6 +156,78 @@ private slots:
 
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(value.asString(), QStringLiteral("x=7, ok=true"));
+    }
+
+    void stringMethodsRunThroughRegistry()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+        const abel::AbelValue text = abel::AbelValue::makeString(QStringLiteral("hakurei shrine"));
+
+        abel::BuiltinMethodCall len{
+            ctx,
+            nullptr,
+            text,
+            QStringLiteral("len"),
+            {},
+            {},
+            {},
+        };
+        auto length = registry.callMethod(std::move(len));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(length.asInt(), 14);
+
+        abel::BuiltinMethodCall contains{
+            ctx,
+            nullptr,
+            text,
+            QStringLiteral("contains"),
+            {abel::AbelValue::makeString(QStringLiteral("rei"))},
+            {},
+            {},
+        };
+        auto hasNeedle = registry.callMethod(std::move(contains));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(hasNeedle.asBool(), true);
+
+        abel::BuiltinMethodCall find{
+            ctx,
+            nullptr,
+            text,
+            QStringLiteral("find"),
+            {abel::AbelValue::makeString(QStringLiteral("shrine"))},
+            {},
+            {},
+        };
+        auto index = registry.callMethod(std::move(find));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(index.asInt(), 8);
+
+        abel::BuiltinMethodCall slice{
+            ctx,
+            nullptr,
+            text,
+            QStringLiteral("slice"),
+            {abel::AbelValue::makeInt(8), abel::AbelValue::makeInt(6)},
+            {},
+            {},
+        };
+        auto part = registry.callMethod(std::move(slice));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(part.asString(), QStringLiteral("shrine"));
+
+        abel::BuiltinMethodCall replace{
+            ctx,
+            nullptr,
+            text,
+            QStringLiteral("replace"),
+            {abel::AbelValue::makeString(QStringLiteral("shrine")), abel::AbelValue::makeString(QStringLiteral("engine"))},
+            {},
+            {},
+        };
+        auto replaced = registry.callMethod(std::move(replace));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(replaced.asString(), QStringLiteral("hakurei engine"));
     }
 
     void stringCharConversionsWork()

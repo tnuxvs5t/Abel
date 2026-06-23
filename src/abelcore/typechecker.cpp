@@ -2276,9 +2276,59 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
         return unknownExprType();
     }
     if (receiver.type.kind != TypeKind::Vector || !receiver.type.pointee)
-        return errorExpr(callee.span, QStringLiteral("builtin method '%1' requires vector receiver").arg(callee.field));
+    {
+        if (receiver.type.kind != TypeKind::Str)
+            return errorExpr(callee.span,
+                             QStringLiteral("builtin method '%1' requires vector or str receiver").arg(callee.field));
+    }
     if (!m_builtins.hasMethod(receiver.type, callee.field))
         return errorExpr(callee.span, QStringLiteral("unknown builtin method '%1'").arg(callee.field));
+
+    if (receiver.type.kind == TypeKind::Str) {
+        if (callee.field == QStringLiteral("len")) {
+            if (!args.empty())
+                return errorExpr(callee.span, QStringLiteral("str.len expects no arguments"));
+            return {makeType(TypeKind::I32), ValueCategory::PRValue, false};
+        }
+        if (callee.field == QStringLiteral("empty")) {
+            if (!args.empty())
+                return errorExpr(callee.span, QStringLiteral("str.empty expects no arguments"));
+            return {makeType(TypeKind::Bool), ValueCategory::PRValue, false};
+        }
+        if (callee.field == QStringLiteral("contains") || callee.field == QStringLiteral("find")) {
+            if (args.size() != 1)
+                return errorExpr(callee.span, QStringLiteral("str.%1 expects one argument").arg(callee.field));
+            ExprType needle = checkExpr(*args[0]);
+            if (!isUnknownType(needle.type) && !isAssignable(makeType(TypeKind::Str), needle.type))
+                error(args[0]->span, QStringLiteral("str.%1 expects str argument").arg(callee.field));
+            return callee.field == QStringLiteral("contains")
+                ? ExprType{makeType(TypeKind::Bool), ValueCategory::PRValue, false}
+                : ExprType{makeType(TypeKind::I32), ValueCategory::PRValue, false};
+        }
+        if (callee.field == QStringLiteral("substr") || callee.field == QStringLiteral("slice")) {
+            if (args.size() != 2)
+                return errorExpr(callee.span, QStringLiteral("str.%1 expects two arguments").arg(callee.field));
+            ExprType start = checkExpr(*args[0]);
+            ExprType len = checkExpr(*args[1]);
+            if (!isUnknownType(start.type) && !isAssignable(makeType(TypeKind::I64), start.type))
+                error(args[0]->span, QStringLiteral("str.%1 start must be integer").arg(callee.field));
+            if (!isUnknownType(len.type) && !isAssignable(makeType(TypeKind::I64), len.type))
+                error(args[1]->span, QStringLiteral("str.%1 length must be integer").arg(callee.field));
+            return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
+        }
+        if (callee.field == QStringLiteral("replace")) {
+            if (args.size() != 2)
+                return errorExpr(callee.span, QStringLiteral("str.replace expects two arguments"));
+            ExprType before = checkExpr(*args[0]);
+            ExprType after = checkExpr(*args[1]);
+            if (!isUnknownType(before.type) && !isAssignable(makeType(TypeKind::Str), before.type))
+                error(args[0]->span, QStringLiteral("str.replace before argument must be str"));
+            if (!isUnknownType(after.type) && !isAssignable(makeType(TypeKind::Str), after.type))
+                error(args[1]->span, QStringLiteral("str.replace after argument must be str"));
+            return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
+        }
+        return errorExpr(callee.span, QStringLiteral("unsupported builtin method '%1'").arg(callee.field));
+    }
 
     const AbelType& element = *receiver.type.pointee;
     if (callee.field == QStringLiteral("len")) {
