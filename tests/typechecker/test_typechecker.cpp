@@ -817,14 +817,21 @@ private slots:
                 vector<int> xs = {3, 1, 2, 2};
                 xs.insert(1, 2);
                 int at = xs.find(2);
+                bool has = xs.contains(2);
+                int copies = xs.count(2);
+                vector<int> mid = xs.slice(1, 3);
+                xs.extend(mid);
                 xs.sort();
                 int lb = xs.lower_bound(2);
                 int ub = xs.upper_bound(2);
-                bool has = xs.binary_search(2);
+                bool sortedHas = xs.binary_search(2);
                 xs.unique();
                 xs.reverse();
                 int removed = xs.erase(0);
-                return at + lb + ub + removed + xs[0];
+                if (has && sortedHas) {
+                    return at + copies + mid.len() + lb + ub + removed + xs[0];
+                }
+                return 0;
             }
         )");
         auto result = checkSource(src);
@@ -857,6 +864,33 @@ private slots:
             }
         )"));
         QVERIFY(!badFind.diagnostics.isEmpty());
+
+        auto badContains = checkSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                return xs.contains("bad");
+            }
+        )"));
+        QVERIFY(!badContains.diagnostics.isEmpty());
+
+        auto badExtend = checkSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                vector<str> ys = {"bad"};
+                xs.extend(ys);
+                return 0;
+            }
+        )"));
+        QVERIFY(!badExtend.diagnostics.isEmpty());
+
+        auto badSlice = checkSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                vector<int> ys = xs.slice("bad", 1);
+                return ys.len();
+            }
+        )"));
+        QVERIFY(!badSlice.diagnostics.isEmpty());
 
         auto badLowerBound = checkSource(QStringLiteral(R"(
             fn int main() {

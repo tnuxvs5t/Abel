@@ -2657,6 +2657,41 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
                       .arg(value.type.displayName(), element.displayName()));
         return {makeType(TypeKind::I32), ValueCategory::PRValue, false};
     }
+    if (callee.field == QStringLiteral("contains") || callee.field == QStringLiteral("count")) {
+        if (args.size() != 1)
+            return errorExpr(callee.span, QStringLiteral("vector.%1 expects one argument").arg(callee.field));
+        ExprType value = checkExpr(*args[0]);
+        if (!isUnknownType(value.type) && !isAssignable(element, value.type))
+            error(args[0]->span,
+                  QStringLiteral("cannot search %1 in vector<%2>")
+                      .arg(value.type.displayName(), element.displayName()));
+        return callee.field == QStringLiteral("contains")
+            ? ExprType{makeType(TypeKind::Bool), ValueCategory::PRValue, false}
+            : ExprType{makeType(TypeKind::I32), ValueCategory::PRValue, false};
+    }
+    if (callee.field == QStringLiteral("extend")) {
+        if (args.size() != 1)
+            return errorExpr(callee.span, QStringLiteral("vector.extend expects one argument"));
+        if (receiver.category == ValueCategory::LValue && !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.extend requires mutable vector receiver"));
+        ExprType other = checkExpr(*args[0]);
+        if (!isUnknownType(other.type) && !isAssignable(receiver.type, other.type))
+            error(args[0]->span,
+                  QStringLiteral("vector.extend expects %1 argument")
+                      .arg(receiver.type.displayName()));
+        return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+    }
+    if (callee.field == QStringLiteral("slice")) {
+        if (args.size() != 2)
+            return errorExpr(callee.span, QStringLiteral("vector.slice expects two arguments"));
+        ExprType start = checkExpr(*args[0]);
+        ExprType len = checkExpr(*args[1]);
+        if (!isUnknownType(start.type) && !isAssignable(makeType(TypeKind::I64), start.type))
+            error(args[0]->span, QStringLiteral("vector.slice start must be integer"));
+        if (!isUnknownType(len.type) && !isAssignable(makeType(TypeKind::I64), len.type))
+            error(args[1]->span, QStringLiteral("vector.slice length must be integer"));
+        return {receiver.type, ValueCategory::PRValue, false};
+    }
     if (callee.field == QStringLiteral("sort")) {
         if (!args.empty())
             return errorExpr(callee.span, QStringLiteral("vector.sort expects no arguments"));

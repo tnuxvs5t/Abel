@@ -845,6 +845,72 @@ AbelValue vectorFind(BuiltinMethodCall& call)
     return AbelValue::makeInt(-1, TypeKind::I32);
 }
 
+AbelValue vectorContains(BuiltinMethodCall& call)
+{
+    const AbelType& elementType = *call.receiver.type().pointee;
+    AbelValue needle = convertBuiltinArg(call, 0, elementType);
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    const auto vector = call.receiver.asVector();
+    for (const AbelValue& element : vector->elements) {
+        if (valuesEqual(element, needle))
+            return AbelValue::makeBool(true);
+    }
+    return AbelValue::makeBool(false);
+}
+
+AbelValue vectorCount(BuiltinMethodCall& call)
+{
+    const AbelType& elementType = *call.receiver.type().pointee;
+    AbelValue needle = convertBuiltinArg(call, 0, elementType);
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    const auto vector = call.receiver.asVector();
+    qint64 count = 0;
+    for (const AbelValue& element : vector->elements) {
+        if (valuesEqual(element, needle))
+            ++count;
+    }
+    return AbelValue::makeInt(count, TypeKind::I32);
+}
+
+AbelValue vectorExtend(BuiltinMethodCall& call)
+{
+    const AbelType& receiverType = call.receiver.type();
+    AbelValue otherValue = convertBuiltinArg(call, 0, receiverType);
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    auto vector = call.receiver.asVector();
+    const auto other = otherValue.asVector();
+    vector->elements.insert(vector->elements.end(), other->elements.begin(), other->elements.end());
+    return AbelValue::makeVoid();
+}
+
+AbelValue vectorSlice(BuiltinMethodCall& call)
+{
+    AbelValue startValue = convertBuiltinArg(call, 0, makeType(TypeKind::I64));
+    AbelValue lenValue = convertBuiltinArg(call, 1, makeType(TypeKind::I64));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    const qint64 start = startValue.asInt();
+    const qint64 len = lenValue.asInt();
+    const auto vector = call.receiver.asVector();
+    if (start < 0 || len < 0 || static_cast<size_t>(start) > vector->elements.size()) {
+        call.ctx.error(QStringLiteral("E0437"),
+                       QStringLiteral("vector.slice expects non-negative start/length within vector bounds"),
+                       call.callSpan);
+        return AbelValue::makeUnknown();
+    }
+    const size_t from = static_cast<size_t>(start);
+    const size_t available = vector->elements.size() - from;
+    const size_t count = std::min(static_cast<size_t>(len), available);
+    std::vector<AbelValue> out;
+    out.reserve(count);
+    for (size_t i = 0; i < count; ++i)
+        out.push_back(vector->elements[from + i]);
+    return AbelValue::makeVector(vector->elementType, std::move(out));
+}
+
 AbelValue vectorSort(BuiltinMethodCall& call)
 {
     auto vector = call.receiver.asVector();
@@ -1113,6 +1179,10 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerMethod({TypeKind::Vector, QStringLiteral("insert"), 2, 2, true, vectorInsert, QStringLiteral("vector insert at index")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("erase"), 1, 1, true, vectorErase, QStringLiteral("vector erase at index and return removed value")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("find"), 1, 1, false, vectorFind, QStringLiteral("vector find, -1 when absent")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("contains"), 1, 1, false, vectorContains, QStringLiteral("vector contains value")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("count"), 1, 1, false, vectorCount, QStringLiteral("count equal vector elements")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("extend"), 1, 1, true, vectorExtend, QStringLiteral("append vector elements")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("slice"), 2, 2, false, vectorSlice, QStringLiteral("copy vector slice")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("sort"), 0, 0, true, vectorSort, QStringLiteral("vector sort orderable elements")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("reverse"), 0, 0, true, vectorReverse, QStringLiteral("vector reverse in place")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("unique"), 0, 0, true, vectorUnique, QStringLiteral("remove adjacent equal elements")});

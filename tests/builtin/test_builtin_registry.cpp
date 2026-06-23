@@ -23,6 +23,10 @@ private slots:
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("insert")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("erase")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("find")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("contains")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("count")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("extend")));
+        QVERIFY(registry.hasMethod(vectorType, QStringLiteral("slice")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("sort")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("reverse")));
         QVERIFY(registry.hasMethod(vectorType, QStringLiteral("unique")));
@@ -141,6 +145,19 @@ private slots:
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(found.asInt(), 1);
 
+        abel::BuiltinMethodCall contains{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("contains"),
+            {abel::AbelValue::makeInt(2)},
+            {},
+            {},
+        };
+        auto hasTwo = registry.callMethod(std::move(contains));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QVERIFY(hasTwo.asBool());
+
         abel::BuiltinMethodCall missing{
             ctx,
             loc,
@@ -153,6 +170,51 @@ private slots:
         auto absent = registry.callMethod(std::move(missing));
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(absent.asInt(), -1);
+
+        abel::BuiltinMethodCall count{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("count"),
+            {abel::AbelValue::makeInt(2)},
+            {},
+            {},
+        };
+        auto counted = registry.callMethod(std::move(count));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(counted.asInt(), 1);
+
+        abel::BuiltinMethodCall slice{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("slice"),
+            {abel::AbelValue::makeInt(1), abel::AbelValue::makeInt(2)},
+            {},
+            {},
+        };
+        auto sliced = registry.callMethod(std::move(slice));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(sliced.type().kind, abel::TypeKind::Vector);
+        QCOMPARE(sliced.asVector()->elements.size(), static_cast<size_t>(2));
+        QCOMPARE(sliced.asVector()->elements[0].asInt(), 2);
+        QCOMPARE(sliced.asVector()->elements[1].asInt(), 1);
+
+        abel::BuiltinMethodCall extend{
+            ctx,
+            loc,
+            loc->read(),
+            QStringLiteral("extend"),
+            {sliced},
+            {},
+            {},
+        };
+        auto extended = registry.callMethod(std::move(extend));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(extended.type().kind, abel::TypeKind::Void);
+        QCOMPARE(loc->read().asVector()->elements.size(), static_cast<size_t>(5));
+        QCOMPARE(loc->read().asVector()->elements[3].asInt(), 2);
+        QCOMPARE(loc->read().asVector()->elements[4].asInt(), 1);
 
         abel::BuiltinMethodCall sort{
             ctx,
@@ -167,8 +229,8 @@ private slots:
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(sorted.type().kind, abel::TypeKind::Void);
         QCOMPARE(loc->read().asVector()->elements[0].asInt(), 1);
-        QCOMPARE(loc->read().asVector()->elements[1].asInt(), 2);
-        QCOMPARE(loc->read().asVector()->elements[2].asInt(), 3);
+        QCOMPARE(loc->read().asVector()->elements[1].asInt(), 1);
+        QCOMPARE(loc->read().asVector()->elements[2].asInt(), 2);
 
         abel::BuiltinMethodCall insertDuplicate{
             ctx,
@@ -194,7 +256,7 @@ private slots:
         };
         auto lower = registry.callMethod(std::move(lowerBound));
         QVERIFY(ctx.diagnostics().isEmpty());
-        QCOMPARE(lower.asInt(), 1);
+        QCOMPARE(lower.asInt(), 2);
 
         abel::BuiltinMethodCall upperBound{
             ctx,
@@ -207,7 +269,7 @@ private slots:
         };
         auto upper = registry.callMethod(std::move(upperBound));
         QVERIFY(ctx.diagnostics().isEmpty());
-        QCOMPARE(upper.asInt(), 3);
+        QCOMPARE(upper.asInt(), 5);
 
         abel::BuiltinMethodCall binarySearch{
             ctx,

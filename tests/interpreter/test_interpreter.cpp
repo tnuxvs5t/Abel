@@ -461,6 +461,10 @@ private slots:
                 vector<int> xs = {3, 1, 2};
                 xs.insert(2, 2);
                 int missing = xs.find(9);
+                bool containsTwo = xs.contains(2);
+                int copies = xs.count(2);
+                vector<int> mid = xs.slice(1, 2);
+                xs.extend(mid);
                 xs.sort();
                 int lb = xs.lower_bound(2);
                 int ub = xs.upper_bound(2);
@@ -473,8 +477,9 @@ private slots:
                 vector<str> names = {"moriya", "hakurei"};
                 names.sort();
 
-                if (names[0] == "hakurei" && has && !miss) {
-                    return missing + lb + ub + removed + xs[0] * 10 + xs[1];
+                if (names[0] == "hakurei" && has && !miss && containsTwo
+                    && copies == 2 && mid.len() == 2) {
+                    return missing + lb + ub + removed + xs[0] * 10 + xs[1] + copies + mid[0];
                 }
                 return 0;
             }
@@ -483,7 +488,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 36);
+        QCOMPARE(result.exitCode, 42);
     }
 
     void mathBuiltinsWork()
