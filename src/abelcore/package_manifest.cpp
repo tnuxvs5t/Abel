@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QDirIterator>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
@@ -885,9 +886,17 @@ ResourceNode parseBackendArtifact(const QJsonObject& object,
     return node;
 }
 
+bool sameResolvedPackage(const PackageLockEntry& a, const PackageLockEntry& b)
+{
+    return a.name == b.name
+        && a.version == b.version
+        && a.kind == b.kind
+        && absolutePathFrom(QString(), a.resolvedPath) == absolutePathFrom(QString(), b.resolvedPath);
+}
+
 void resolvePackageDependencies(const PackageManifest& package,
                                 PackageLockResult& result,
-                                QSet<QString>& seen,
+                                QHash<QString, PackageLockEntry>& resolvedByName,
                                 QSet<QString>& resolving)
 {
     for (const PackageDependency& dependency : package.dependencies) {
@@ -962,9 +971,6 @@ void resolvePackageDependencies(const PackageManifest& package,
                             span);
             continue;
         }
-        if (seen.contains(key))
-            continue;
-
         PackageLockEntry entry;
         entry.name = resolvedPackage.name;
         entry.version = resolvedPackage.version;
@@ -972,11 +978,31 @@ void resolvePackageDependencies(const PackageManifest& package,
         entry.kind = dependency.kind;
         entry.source = dependency.kind == QStringLiteral("registry") ? dependency.registry : dependency.path;
         entry.resolvedPath = dependency.kind == QStringLiteral("registry") ? resolvedPath : absolutePathFrom(QString(), resolvedPath);
+
+        if (resolvedByName.contains(entry.name)) {
+            const PackageLockEntry existing = resolvedByName.value(entry.name);
+            if (!sameResolvedPackage(existing, entry)) {
+                addPackageError(result.diagnostics,
+                                QStringLiteral("dependency conflict for package '%1': already resolved %2 %3 at %4, but %5 from %6 resolves %7 at %8")
+                                    .arg(entry.name,
+                                         existing.kind,
+                                         existing.version,
+                                         existing.resolvedPath,
+                                         entry.kind,
+                                         entry.source,
+                                         entry.version,
+                                         entry.resolvedPath),
+                                span);
+                continue;
+            }
+            continue;
+        }
+
+        resolvedByName.insert(entry.name, entry);
         result.entries.push_back(entry);
 
-        seen.insert(key);
         resolving.insert(key);
-        resolvePackageDependencies(resolvedPackage, result, seen, resolving);
+        resolvePackageDependencies(resolvedPackage, result, resolvedByName, resolving);
         resolving.remove(key);
     }
 }
@@ -1324,10 +1350,10 @@ PackageLockResult resolvePackageLock(const QString& dir)
     result.rootVersion = parsed.package.version;
     result.lockFile = QDir(result.rootDir).absoluteFilePath(packageLockFileName());
 
-    QSet<QString> seen;
+    QHash<QString, PackageLockEntry> resolvedByName;
     QSet<QString> resolving;
     resolving.insert(absolutePathFrom(QString(), result.rootDir));
-    resolvePackageDependencies(parsed.package, result, seen, resolving);
+    resolvePackageDependencies(parsed.package, result, resolvedByName, resolving);
     return result;
 }
 

@@ -22,7 +22,7 @@
 
 不要默认修改 Abel 编译器/解释器源码。
 不要把用户项目扩成大型框架。
-不要幻想 Abel 已经有远程 registry、完整 semver solver、网络 download cache、JIT、成熟模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、本地 registry 目录依赖、SemVer version requirement 第一片、lockfile、package graph consumption、根项目 `src/**/*.abel` 多文件合并、依赖包非 entry `src/**/*.abel` 库源码合并、`module/use` 语法解析、跨包顶层 `export` enforcement 第一片、`.abel/cache/packages` 本地包缓存、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、add/remove/update/build 做成早期闭环。
+不要幻想 Abel 已经有远程 registry、完整 semver solver、网络 download cache、JIT、成熟模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、本地 registry 目录依赖、SemVer version requirement 第一片、同名包多解析冲突诊断、lockfile、package graph consumption、根项目 `src/**/*.abel` 多文件合并、依赖包非 entry `src/**/*.abel` 库源码合并、`module/use` 语法解析、跨包顶层 `export` enforcement 第一片、`.abel/cache/packages` 本地包缓存、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、add/remove/update/build 做成早期闭环。
 
 当前 Abel 的正确定位：
 
@@ -196,6 +196,7 @@ $ABEL_BIN run .
 - 如果要观察计算结果，优先用 `println(...)` 输出，不要只依赖退出码；
 - 当前项目入口、本地 path dependency、本地 registry dependency、SemVer version requirement、lockfile、`.abel/cache/packages`、backend artifact 项目缓存、sidecar 失效检测与 CMake backend artifact 自动构建只是早期包管理闭环；不要假设已有成熟模块系统、远程 registry、完整 semver solver、网络下载缓存或完整 ABI/版本化缓存失效。
 - package 目录输入会合并根项目 `src/**/*.abel`，entry 文件最后加载；依赖包会合并非 entry `src/**/*.abel` 库源码，依赖包 entry 默认排除以避免 `main` 冲突。跨包访问依赖包顶层 `fn/struct/backend` 要求目标带 `export`；`module/use` 仍不提供真正 import 过滤、模块可见性或限定名查找。
+- resolver 会拒绝同一个 package name 被解析到不同 version/source/resolvedPath；如果用户遇到 dependency conflict，不要绕过 lockfile，应调整版本要求或依赖拓扑。
 
 ---
 

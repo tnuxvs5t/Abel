@@ -1147,7 +1147,7 @@ my_abel_project/
       math.abel
 ```
 
-当前 v1 包管理已经支持项目级入口、本地 path 依赖、以及本地 registry 目录依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作依赖并生成 `abel.lock.json`，path/registry dependency 已支持 SemVer 版本要求检查，registry dependency 会把选中的版本复制到 `.abel/cache/packages`，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run <project-dir>` 会读取 package graph。
+当前 v1 包管理已经支持项目级入口、本地 path 依赖、以及本地 registry 目录依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作依赖并生成 `abel.lock.json`，path/registry dependency 已支持 SemVer 版本要求检查，并会拒绝同一个包名在依赖图中解析到不同版本或不同来源；registry dependency 会把选中的版本复制到 `.abel/cache/packages`，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run <project-dir>` 会读取 package graph。
 
 当前项目源码加载规则是 v1 多文件第一片：如果输入是 package 目录，`abel check/run/build` 会读取根项目 `src/**/*.abel`，读取依赖包的非 entry `src/**/*.abel` 作为库源码，并把根项目 manifest `entry` 文件放到最后合并为一个 Program。依赖包 entry 默认排除，避免依赖包自己的 `main` 污染根项目。每个文件保留自己的 SourceSpan，所以诊断仍能指向真实文件/行/列。`module xxx;` 与 `use yyy;` 现在可解析并作为 AST 声明保存；跨包访问依赖包顶层 `fn/struct/backend` 时要求依赖声明带 `export`。这仍不是完整模块系统：import 过滤、限定名查找和模块内 private/public 还没有完成。
 
@@ -1286,7 +1286,7 @@ abel update/build 会把实际解析到的包版本和 versionRequirement 写入
 
 `abel run <project-dir>` 会读取 package graph；如果依赖包在 `backendArtifacts` 声明了 Qt plugin，根项目只要通过 `abel add path` 依赖它，运行时也会自动加载这个依赖 backend。若已经运行过 `abel build`，`run` 只会在缓存 `.so` 存在且 sidecar 元数据仍匹配当前源 artifact 的路径、大小、mtime、ResourceNode 字段与 symbols 时，优先加载 `.abel/cache/backend/...` 下的缓存 artifact；若缓存不存在、元数据缺失或已经失效，则回退到依赖包声明的源 artifact 路径，直到重新运行 `abel build` 刷新缓存。lockfile 若已经过期，`abel check/run` 会提示先运行 `abel update` 或 `abel build`，避免悄悄使用旧依赖图。
 
-注意：这仍只是 v1 包管理引擎的早期闭环。path dependency 与本地 registry dependency 已有 SemVer requirement 检查和本地 package cache，但远程 registry 下载、完整 resolver 冲突求解、网络 download cache、安装版 SDK 成熟化、ABI 校验与完整版本化缓存失效仍是后续 v1 工作。
+注意：这仍只是 v1 包管理引擎的早期闭环。path dependency 与本地 registry dependency 已有 SemVer requirement 检查、本地 package cache、以及同名包多解析冲突诊断，但远程 registry 下载、完整 solver 策略、网络 download cache、安装版 SDK 成熟化、ABI 校验与完整版本化缓存失效仍是后续 v1 工作。
 
 若项目需要 C++ backend，当前可以在根包或依赖包描述里写 `backendArtifacts`。如果 plugin 已经存在，`abel build` 会直接复制；如果写了 `build` 字段，`abel build` 会先调用 CMake 构建 plugin。运行时 `abel run <project-dir>` 自动加载 plugin，不用在普通运行命令里手动传 `--resource`：
 

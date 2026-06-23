@@ -1034,6 +1034,57 @@ extern "C" int dep_backend_answer() {
         QVERIFY(sawMissing);
     }
 
+    void resolverRejectsSamePackageNameWithDifferentResolutions()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        writePackage(root, QStringLiteral("shared_v1"), QStringLiteral("shared"), QStringLiteral("1.0.0"));
+        writePackage(root, QStringLiteral("shared_v2"), QStringLiteral("shared"), QStringLiteral("2.0.0"));
+        writePackage(root, QStringLiteral("a"), QStringLiteral("a"), QStringLiteral("0.1.0"));
+        writePackage(root, QStringLiteral("b"), QStringLiteral("b"), QStringLiteral("0.1.0"));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+
+        writeText(root.absoluteFilePath(QStringLiteral("a/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "a",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "shared", "kind": "path", "path": "../shared_v1"}
+                      ]
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("b/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "b",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "shared", "kind": "path", "path": "../shared_v2"}
+                      ]
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "a", "kind": "path", "path": "../a"},
+                          {"name": "b", "kind": "path", "path": "../b"}
+                      ]
+                  })"));
+
+        auto lock = abel::resolvePackageLock(root.absoluteFilePath(QStringLiteral("app")));
+        QVERIFY(!lock.diagnostics.isEmpty());
+        bool sawConflict = false;
+        for (const auto& d : lock.diagnostics)
+            sawConflict = sawConflict || d.message.contains(QStringLiteral("dependency conflict for package 'shared'"));
+        QVERIFY(sawConflict);
+    }
+
     void packageGraphRejectsStaleLockfile()
     {
         QTemporaryDir dir;
