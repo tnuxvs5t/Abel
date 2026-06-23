@@ -454,6 +454,58 @@ private slots:
         QCOMPARE(result.exitCode, 8);
     }
 
+    void vectorInsertEraseFindSortWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {3, 1};
+                xs.insert(1, 2);
+                int at = xs.find(2);
+                int missing = xs.find(9);
+                xs.sort();
+                int removed = xs.erase(1);
+
+                vector<str> names = {"moriya", "hakurei"};
+                names.sort();
+
+                if (names[0] == "hakurei") {
+                    return at + missing + removed + xs[0] * 10 + xs[1];
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 15);
+    }
+
+    void vectorInsertEraseRejectOutOfRangeAtRuntime()
+    {
+        auto badErase = runSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                xs.erase(9);
+                return 0;
+            }
+        )"));
+        QVERIFY(!badErase.diagnostics.isEmpty());
+        QCOMPARE(badErase.exitCode, 1);
+        QVERIFY(badErase.diagnostics.front().message.contains(QStringLiteral("vector.erase index out of range")));
+
+        auto badInsert = runSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                xs.insert(-1, 2);
+                return 0;
+            }
+        )"));
+        QVERIFY(!badInsert.diagnostics.isEmpty());
+        QCOMPARE(badInsert.exitCode, 1);
+        QVERIFY(badInsert.diagnostics.front().message.contains(QStringLiteral("vector.insert index out of range")));
+    }
+
     void vectorStructResizeDefaultConstructsElements()
     {
         const QString src = QStringLiteral(R"(

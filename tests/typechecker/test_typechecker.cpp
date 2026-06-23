@@ -672,10 +672,70 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsVectorInsertEraseFindAndSort()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {3, 1};
+                xs.insert(1, 2);
+                int at = xs.find(2);
+                int removed = xs.erase(0);
+                xs.sort();
+                return at + removed + xs[0];
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void rejectsVectorResizeWithNonIntegerSize()
     {
         auto result = checkSource(QStringLiteral("fn int main() { vector<int> xs = {1}; xs.resize(\"bad\"); return 0; }"));
         QVERIFY(!result.diagnostics.isEmpty());
+    }
+
+    void rejectsVectorInsertFindAndSortBadTypes()
+    {
+        auto badInsert = checkSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                xs.insert(0, "bad");
+                return 0;
+            }
+        )"));
+        QVERIFY(!badInsert.diagnostics.isEmpty());
+
+        auto badFind = checkSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                return xs.find("bad");
+            }
+        )"));
+        QVERIFY(!badFind.diagnostics.isEmpty());
+
+        auto badSort = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+
+            fn int main() {
+                vector<Box> xs;
+                xs.sort();
+                return 0;
+            }
+        )"));
+        QVERIFY(!badSort.diagnostics.isEmpty());
+
+        auto constInsert = checkSource(QStringLiteral(R"(
+            fn int main() {
+                const vector<int> xs = {1};
+                xs.insert(0, 2);
+                return 0;
+            }
+        )"));
+        QVERIFY(!constInsert.diagnostics.isEmpty());
     }
 
     void acceptsVectorStructResizeWhenElementDefaultConstructible()

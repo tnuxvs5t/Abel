@@ -52,6 +52,14 @@ bool isTestComparable(const AbelType& lhs, const AbelType& rhs)
     return lhs == rhs;
 }
 
+bool isBuiltinOrderable(const AbelType& type)
+{
+    return type.isNumeric()
+        || type.kind == TypeKind::Bool
+        || type.kind == TypeKind::Char
+        || type.kind == TypeKind::Str;
+}
+
 ExprType unknownExprType()
 {
     return {makeType(TypeKind::Unknown), ValueCategory::PRValue, false};
@@ -2379,6 +2387,52 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
         return {element,
                 ValueCategory::LValue,
                 (receiver.category == ValueCategory::PRValue || receiver.isMutable) && !element.isConst};
+    }
+    if (callee.field == QStringLiteral("insert")) {
+        if (args.size() != 2)
+            return errorExpr(callee.span, QStringLiteral("vector.insert expects two arguments"));
+        if (receiver.category == ValueCategory::LValue && !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.insert requires mutable vector receiver"));
+        ExprType index = checkExpr(*args[0]);
+        ExprType value = checkExpr(*args[1]);
+        if (!isUnknownType(index.type) && !isAssignable(makeType(TypeKind::I64), index.type))
+            error(args[0]->span, QStringLiteral("vector.insert index must be integer"));
+        if (!isUnknownType(value.type) && !isAssignable(element, value.type))
+            error(args[1]->span,
+                  QStringLiteral("cannot insert %1 into vector<%2>")
+                      .arg(value.type.displayName(), element.displayName()));
+        return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+    }
+    if (callee.field == QStringLiteral("erase")) {
+        if (args.size() != 1)
+            return errorExpr(callee.span, QStringLiteral("vector.erase expects one argument"));
+        if (receiver.category == ValueCategory::LValue && !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.erase requires mutable vector receiver"));
+        ExprType index = checkExpr(*args[0]);
+        if (!isUnknownType(index.type) && !isAssignable(makeType(TypeKind::I64), index.type))
+            error(args[0]->span, QStringLiteral("vector.erase index must be integer"));
+        return {element, ValueCategory::PRValue, false};
+    }
+    if (callee.field == QStringLiteral("find")) {
+        if (args.size() != 1)
+            return errorExpr(callee.span, QStringLiteral("vector.find expects one argument"));
+        ExprType value = checkExpr(*args[0]);
+        if (!isUnknownType(value.type) && !isAssignable(element, value.type))
+            error(args[0]->span,
+                  QStringLiteral("cannot find %1 in vector<%2>")
+                      .arg(value.type.displayName(), element.displayName()));
+        return {makeType(TypeKind::I32), ValueCategory::PRValue, false};
+    }
+    if (callee.field == QStringLiteral("sort")) {
+        if (!args.empty())
+            return errorExpr(callee.span, QStringLiteral("vector.sort expects no arguments"));
+        if (receiver.category == ValueCategory::LValue && !receiver.isMutable)
+            return errorExpr(callee.span, QStringLiteral("vector.sort requires mutable vector receiver"));
+        if (!isBuiltinOrderable(element))
+            error(callee.span,
+                  QStringLiteral("vector.sort requires orderable element type, got %1")
+                      .arg(element.displayName()));
+        return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
     }
     return errorExpr(callee.span, QStringLiteral("unsupported builtin method '%1'").arg(callee.field));
 }

@@ -2,6 +2,8 @@
 
 #include <QTextStream>
 
+#include <algorithm>
+#include <cstddef>
 #include <exception>
 
 namespace abel {
@@ -169,6 +171,32 @@ bool valuesEqual(const AbelValue& lhs, const AbelValue& rhs)
     case TypeKind::Unknown:
         return false;
     }
+    return false;
+}
+
+bool isOrderableType(const AbelType& type)
+{
+    return type.isNumeric()
+        || type.kind == TypeKind::Bool
+        || type.kind == TypeKind::Char
+        || type.kind == TypeKind::Str;
+}
+
+bool valuesLess(const AbelValue& lhs, const AbelValue& rhs)
+{
+    if (lhs.type().isNumeric() && rhs.type().isNumeric()) {
+        if (lhs.type().kind == TypeKind::F64 || rhs.type().kind == TypeKind::F64)
+            return lhs.asDouble() < rhs.asDouble();
+        if (lhs.type().isUnsignedInteger() || rhs.type().isUnsignedInteger())
+            return static_cast<quint64>(lhs.asInt()) < static_cast<quint64>(rhs.asInt());
+        return lhs.asInt() < rhs.asInt();
+    }
+    if (lhs.type().kind == TypeKind::Bool && rhs.type().kind == TypeKind::Bool)
+        return !lhs.asBool() && rhs.asBool();
+    if (lhs.type().kind == TypeKind::Char && rhs.type().kind == TypeKind::Char)
+        return lhs.asChar().unicode() < rhs.asChar().unicode();
+    if (lhs.type().kind == TypeKind::Str && rhs.type().kind == TypeKind::Str)
+        return QString::compare(lhs.asString(), rhs.asString()) < 0;
     return false;
 }
 
@@ -486,6 +514,78 @@ AbelValue vectorBack(BuiltinMethodCall& call)
     return vector->elements.back();
 }
 
+AbelValue vectorInsert(BuiltinMethodCall& call)
+{
+    AbelValue indexValue = convertBuiltinArg(call, 0, makeType(TypeKind::I64));
+    const AbelType& elementType = *call.receiver.type().pointee;
+    AbelValue value = convertBuiltinArg(call, 1, elementType);
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    const qint64 index = indexValue.asInt();
+    auto vector = call.receiver.asVector();
+    if (index < 0 || static_cast<size_t>(index) > vector->elements.size()) {
+        call.ctx.error(QStringLiteral("E0419"),
+                       QStringLiteral("vector.insert index out of range"),
+                       call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+        return AbelValue::makeUnknown();
+    }
+    try {
+        vector->elements.insert(vector->elements.begin() + static_cast<std::ptrdiff_t>(index), value);
+    } catch (const std::exception& e) {
+        call.ctx.error(QStringLiteral("E0420"),
+                       QStringLiteral("vector.insert failed: %1").arg(QString::fromLocal8Bit(e.what())),
+                       call.callSpan);
+        return AbelValue::makeUnknown();
+    }
+    return AbelValue::makeVoid();
+}
+
+AbelValue vectorErase(BuiltinMethodCall& call)
+{
+    AbelValue indexValue = convertBuiltinArg(call, 0, makeType(TypeKind::I64));
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    const qint64 index = indexValue.asInt();
+    auto vector = call.receiver.asVector();
+    if (index < 0 || static_cast<size_t>(index) >= vector->elements.size()) {
+        call.ctx.error(QStringLiteral("E0421"),
+                       QStringLiteral("vector.erase index out of range"),
+                       call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+        return AbelValue::makeUnknown();
+    }
+    AbelValue removed = vector->elements[static_cast<size_t>(index)];
+    vector->elements.erase(vector->elements.begin() + static_cast<std::ptrdiff_t>(index));
+    return removed;
+}
+
+AbelValue vectorFind(BuiltinMethodCall& call)
+{
+    const AbelType& elementType = *call.receiver.type().pointee;
+    AbelValue needle = convertBuiltinArg(call, 0, elementType);
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    const auto vector = call.receiver.asVector();
+    for (size_t i = 0; i < vector->elements.size(); ++i) {
+        if (valuesEqual(vector->elements[i], needle))
+            return AbelValue::makeInt(static_cast<qint64>(i), TypeKind::I32);
+    }
+    return AbelValue::makeInt(-1, TypeKind::I32);
+}
+
+AbelValue vectorSort(BuiltinMethodCall& call)
+{
+    auto vector = call.receiver.asVector();
+    if (!isOrderableType(vector->elementType)) {
+        call.ctx.error(QStringLiteral("E0422"),
+                       QStringLiteral("vector.sort requires orderable element type, got %1")
+                           .arg(vector->elementType.displayName()),
+                       call.callSpan);
+        return AbelValue::makeUnknown();
+    }
+    std::sort(vector->elements.begin(), vector->elements.end(), valuesLess);
+    return AbelValue::makeVoid();
+}
+
 AbelValue stringLen(BuiltinMethodCall& call)
 {
     return AbelValue::makeInt(call.receiver.asString().size(), TypeKind::I32);
@@ -558,6 +658,10 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerMethod({TypeKind::Vector, QStringLiteral("resize"), 1, 1, true, vectorResize, QStringLiteral("vector resize")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("front"), 0, 0, false, vectorFront, QStringLiteral("vector front")});
     registry.registerMethod({TypeKind::Vector, QStringLiteral("back"), 0, 0, false, vectorBack, QStringLiteral("vector back")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("insert"), 2, 2, true, vectorInsert, QStringLiteral("vector insert at index")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("erase"), 1, 1, true, vectorErase, QStringLiteral("vector erase at index and return removed value")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("find"), 1, 1, false, vectorFind, QStringLiteral("vector find, -1 when absent")});
+    registry.registerMethod({TypeKind::Vector, QStringLiteral("sort"), 0, 0, true, vectorSort, QStringLiteral("vector sort orderable elements")});
 
     registry.registerMethod({TypeKind::Str, QStringLiteral("len"), 0, 0, false, stringLen, QStringLiteral("string length")});
     registry.registerMethod({TypeKind::Str, QStringLiteral("empty"), 0, 0, false, stringEmpty, QStringLiteral("string empty test")});
