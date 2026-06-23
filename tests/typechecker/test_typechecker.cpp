@@ -237,7 +237,16 @@ private slots:
                 str c = s.replace("shrine", "engine");
                 str t = "  Aya  ".trim().lower().upper();
                 vector<str> parts = s.split(" ");
-                return s.len() + a.len() + b.len() + c.len() + t.len() + parts.len();
+                str joined = "/".join(parts);
+                int parsed = "123".parse_int();
+                long parsedLong = "5000".parse_long();
+                double parsedDouble = "2.5".parse_double();
+                bool parsedBool = "true".parse_bool();
+                if (parsedBool) {
+                    return s.len() + a.len() + b.len() + c.len() + t.len() + parts.len()
+                        + joined.len() + parsed + cast<int>(parsedLong) + cast<int>(parsedDouble);
+                }
+                return 0;
             }
         )");
         auto result = checkSource(src);
@@ -285,6 +294,21 @@ private slots:
             }
         )"));
         QVERIFY(!badSplit.diagnostics.isEmpty());
+
+        auto badJoin = checkSource(QStringLiteral(R"(
+            fn int main() {
+                str s = ",".join("bad");
+                return s.len();
+            }
+        )"));
+        QVERIFY(!badJoin.diagnostics.isEmpty());
+
+        auto badParseArity = checkSource(QStringLiteral(R"(
+            fn int main() {
+                return "123".parse_int(1);
+            }
+        )"));
+        QVERIFY(!badParseArity.diagnostics.isEmpty());
     }
 
     void acceptsCastPipeAndExtendedOperators()

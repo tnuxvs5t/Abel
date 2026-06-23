@@ -735,10 +735,18 @@ private slots:
                 str c = s.replace("shrine", "engine");
                 str t = "  Aya  ".trim().lower().upper();
                 vector<str> parts = s.split(" ");
+                str joined = "/".join(parts);
+                int parsed = "123".parse_int();
+                long parsedLong = "5000".parse_long();
+                double parsedDouble = "2.5".parse_double();
+                bool parsedBool = "true".parse_bool();
                 if (ok && pos == 8 && missing == -1 && a == "hakurei" && b == "shrine"
                     && c == "hakurei engine" && t == "AYA"
-                    && parts.len() == 2 && parts[0] == "hakurei" && parts[1] == "shrine") {
-                    return s.len() + a.len() + b.len() + c.len() + t.len() + parts.len() + pos;
+                    && parts.len() == 2 && parts[0] == "hakurei" && parts[1] == "shrine"
+                    && joined == "hakurei/shrine" && parsedLong == 5000
+                    && parsedDouble == 2.5 && parsedBool) {
+                    return s.len() + a.len() + b.len() + c.len() + t.len()
+                        + parts.len() + pos + joined.len() + parsed + cast<int>(parsedDouble);
                 }
                 return 0;
             }
@@ -747,7 +755,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 54);
+        QCOMPARE(result.exitCode, 193);
     }
 
     void stringSliceRejectsNegativeBoundsAtRuntime()
@@ -760,6 +768,28 @@ private slots:
         QVERIFY(!result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 1);
         QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("non-negative")));
+    }
+
+    void stringParseRejectsBadInputAtRuntime()
+    {
+        auto badInt = runSource(QStringLiteral(R"(
+            fn int main() {
+                return "abc".parse_int();
+            }
+        )"));
+        QVERIFY(!badInt.diagnostics.isEmpty());
+        QCOMPARE(badInt.exitCode, 1);
+        QVERIFY(badInt.diagnostics.front().message.contains(QStringLiteral("parse_int")));
+
+        auto badBool = runSource(QStringLiteral(R"(
+            fn int main() {
+                bool ok = "maybe".parse_bool();
+                return ok;
+            }
+        )"));
+        QVERIFY(!badBool.diagnostics.isEmpty());
+        QCOMPARE(badBool.exitCode, 1);
+        QVERIFY(badBool.diagnostics.front().message.contains(QStringLiteral("parse_bool")));
     }
 
     void castPipeAndExtendedOperatorsWork()

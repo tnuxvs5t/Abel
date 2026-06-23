@@ -2546,6 +2546,29 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
                 error(args[0]->span, QStringLiteral("str.split expects str argument"));
             return {makeVectorType(makeType(TypeKind::Str)), ValueCategory::PRValue, false};
         }
+        if (callee.field == QStringLiteral("join")) {
+            if (args.size() != 1)
+                return errorExpr(callee.span, QStringLiteral("str.join expects one argument"));
+            ExprType values = checkExpr(*args[0]);
+            const AbelType strVectorType = makeVectorType(makeType(TypeKind::Str));
+            if (!isUnknownType(values.type) && !isAssignable(strVectorType, values.type))
+                error(args[0]->span, QStringLiteral("str.join expects vector<str> argument"));
+            return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
+        }
+        if (callee.field == QStringLiteral("parse_int")
+            || callee.field == QStringLiteral("parse_long")
+            || callee.field == QStringLiteral("parse_double")
+            || callee.field == QStringLiteral("parse_bool")) {
+            if (!args.empty())
+                return errorExpr(callee.span, QStringLiteral("str.%1 expects no arguments").arg(callee.field));
+            if (callee.field == QStringLiteral("parse_int"))
+                return {makeType(TypeKind::I32), ValueCategory::PRValue, false};
+            if (callee.field == QStringLiteral("parse_long"))
+                return {makeType(TypeKind::I64), ValueCategory::PRValue, false};
+            if (callee.field == QStringLiteral("parse_double"))
+                return {makeType(TypeKind::F64), ValueCategory::PRValue, false};
+            return {makeType(TypeKind::Bool), ValueCategory::PRValue, false};
+        }
         return errorExpr(callee.span, QStringLiteral("unsupported builtin method '%1'").arg(callee.field));
     }
 

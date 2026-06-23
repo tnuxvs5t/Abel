@@ -8,6 +8,7 @@
 #include <cmath>
 #include <exception>
 #include <iterator>
+#include <limits>
 #include <numeric>
 
 namespace abel {
@@ -1025,6 +1026,75 @@ AbelValue stringSplit(BuiltinMethodCall& call)
     return AbelValue::makeVector(makeType(TypeKind::Str), std::move(parts));
 }
 
+AbelValue stringJoin(BuiltinMethodCall& call)
+{
+    const AbelType strVectorType = makeVectorType(makeType(TypeKind::Str));
+    AbelValue values = convertBuiltinArg(call, 0, strVectorType);
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+
+    QStringList parts;
+    const auto vector = values.asVector();
+    parts.reserve(static_cast<qsizetype>(vector->elements.size()));
+    for (const AbelValue& element : vector->elements)
+        parts.push_back(element.asString());
+    return AbelValue::makeString(parts.join(call.receiver.asString()));
+}
+
+AbelValue stringParseInt(BuiltinMethodCall& call)
+{
+    bool ok = false;
+    const qlonglong value = call.receiver.asString().trimmed().toLongLong(&ok, 10);
+    if (!ok
+        || value < std::numeric_limits<qint32>::min()
+        || value > std::numeric_limits<qint32>::max()) {
+        call.ctx.error(QStringLiteral("E0436"),
+                       QStringLiteral("str.parse_int cannot parse i32 from '%1'").arg(call.receiver.asString()),
+                       call.callSpan);
+        return AbelValue::makeUnknown();
+    }
+    return AbelValue::makeInt(static_cast<qint64>(value), TypeKind::I32);
+}
+
+AbelValue stringParseLong(BuiltinMethodCall& call)
+{
+    bool ok = false;
+    const qlonglong value = call.receiver.asString().trimmed().toLongLong(&ok, 10);
+    if (!ok) {
+        call.ctx.error(QStringLiteral("E0436"),
+                       QStringLiteral("str.parse_long cannot parse i64 from '%1'").arg(call.receiver.asString()),
+                       call.callSpan);
+        return AbelValue::makeUnknown();
+    }
+    return AbelValue::makeInt(static_cast<qint64>(value), TypeKind::I64);
+}
+
+AbelValue stringParseDouble(BuiltinMethodCall& call)
+{
+    bool ok = false;
+    const double value = call.receiver.asString().trimmed().toDouble(&ok);
+    if (!ok) {
+        call.ctx.error(QStringLiteral("E0436"),
+                       QStringLiteral("str.parse_double cannot parse f64 from '%1'").arg(call.receiver.asString()),
+                       call.callSpan);
+        return AbelValue::makeUnknown();
+    }
+    return AbelValue::makeDouble(value);
+}
+
+AbelValue stringParseBool(BuiltinMethodCall& call)
+{
+    const QString value = call.receiver.asString().trimmed().toLower();
+    if (value == QStringLiteral("true") || value == QStringLiteral("1"))
+        return AbelValue::makeBool(true);
+    if (value == QStringLiteral("false") || value == QStringLiteral("0"))
+        return AbelValue::makeBool(false);
+    call.ctx.error(QStringLiteral("E0436"),
+                   QStringLiteral("str.parse_bool cannot parse bool from '%1'").arg(call.receiver.asString()),
+                   call.callSpan);
+    return AbelValue::makeUnknown();
+}
+
 } // namespace
 
 BuiltinRegistry BuiltinRegistry::makeDefault()
@@ -1063,6 +1133,11 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerMethod({TypeKind::Str, QStringLiteral("lower"), 0, 0, false, stringLower, QStringLiteral("lowercase string")});
     registry.registerMethod({TypeKind::Str, QStringLiteral("upper"), 0, 0, false, stringUpper, QStringLiteral("uppercase string")});
     registry.registerMethod({TypeKind::Str, QStringLiteral("split"), 1, 1, false, stringSplit, QStringLiteral("split string by non-empty separator")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("join"), 1, 1, false, stringJoin, QStringLiteral("join vector<str> using receiver as separator")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("parse_int"), 0, 0, false, stringParseInt, QStringLiteral("parse i32 from string")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("parse_long"), 0, 0, false, stringParseLong, QStringLiteral("parse i64 from string")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("parse_double"), 0, 0, false, stringParseDouble, QStringLiteral("parse f64 from string")});
+    registry.registerMethod({TypeKind::Str, QStringLiteral("parse_bool"), 0, 0, false, stringParseBool, QStringLiteral("parse bool from string")});
 
     registry.registerFunction({QStringLiteral("to_str"), 1, 1, false, builtinToStr, QStringLiteral("stringify one value")});
     registry.registerFunction({QStringLiteral("build_string"), 0, -1, true, builtinBuildString, QStringLiteral("concatenate stringified values")});

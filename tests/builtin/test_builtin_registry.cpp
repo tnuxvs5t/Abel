@@ -555,6 +555,32 @@ private slots:
         QCOMPARE(split.asVector()->elements.size(), static_cast<size_t>(2));
         QCOMPARE(split.asVector()->elements[0].asString(), QStringLiteral("hakurei"));
         QCOMPARE(split.asVector()->elements[1].asString(), QStringLiteral("shrine"));
+
+        auto joined = call(abel::AbelValue::makeString(QStringLiteral("/")),
+                           QStringLiteral("join"),
+                           {split});
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(joined.asString(), QStringLiteral("hakurei/shrine"));
+
+        auto parsedInt = call(abel::AbelValue::makeString(QStringLiteral("123")), QStringLiteral("parse_int"));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(parsedInt.type().kind, abel::TypeKind::I32);
+        QCOMPARE(parsedInt.asInt(), 123);
+
+        auto parsedLong = call(abel::AbelValue::makeString(QStringLiteral("5000000000")), QStringLiteral("parse_long"));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(parsedLong.type().kind, abel::TypeKind::I64);
+        QCOMPARE(parsedLong.asInt(), 5000000000LL);
+
+        auto parsedDouble = call(abel::AbelValue::makeString(QStringLiteral("2.5")), QStringLiteral("parse_double"));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(parsedDouble.type().kind, abel::TypeKind::F64);
+        QCOMPARE(parsedDouble.asDouble(), 2.5);
+
+        auto parsedBool = call(abel::AbelValue::makeString(QStringLiteral("true")), QStringLiteral("parse_bool"));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(parsedBool.type().kind, abel::TypeKind::Bool);
+        QVERIFY(parsedBool.asBool());
     }
 
     void stringCharConversionsWork()
