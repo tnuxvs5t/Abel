@@ -98,6 +98,47 @@ private slots:
         QVERIFY(sources.contains(root.absoluteFilePath(QStringLiteral("src/extra.abel"))));
     }
 
+    void packageGraphSourceFilesIncludeDependencyLibrariesButNotDependencyEntry()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src/lib")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/lib/math.abel")),
+                  QStringLiteral("export fn int dep_value() { return 41; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel"
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return dep_value() + 1; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep"}
+                      ]
+                  })"));
+
+        auto graph = abel::packageGraphFromDirectory(root.absoluteFilePath(QStringLiteral("app")));
+        for (const auto& d : graph.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(graph.diagnostics.isEmpty());
+
+        const QStringList sources = abel::packageGraphSourceFiles(graph);
+        QCOMPARE(sources.size(), 2);
+        QVERIFY(sources.contains(root.absoluteFilePath(QStringLiteral("dep/src/lib/math.abel"))));
+        QVERIFY(!sources.contains(root.absoluteFilePath(QStringLiteral("dep/src/main.abel"))));
+        QCOMPARE(sources.back(), root.absoluteFilePath(QStringLiteral("app/src/main.abel")));
+    }
+
     void rejectsMissingEntryFile()
     {
         QTemporaryDir dir;

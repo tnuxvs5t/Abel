@@ -1,0 +1,70 @@
+set(project_root "@CMAKE_BINARY_DIR@/cli-dependency-sources")
+set(dep_dir "${project_root}/dep")
+set(app_dir "${project_root}/app")
+file(REMOVE_RECURSE "${project_root}")
+file(MAKE_DIRECTORY "${dep_dir}/src/lib")
+file(MAKE_DIRECTORY "${app_dir}/src")
+
+file(WRITE "${dep_dir}/abel.package.json" [=[
+{
+  "name": "dep",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${dep_dir}/src/main.abel" [=[
+module dep.main;
+
+fn int main() {
+    return 0;
+}
+]=])
+
+file(WRITE "${dep_dir}/src/lib/math.abel" [=[
+module dep.lib.math;
+
+export fn int dep_value() {
+    return 41;
+}
+]=])
+
+file(WRITE "${app_dir}/abel.package.json" [=[
+{
+  "name": "app",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "dependencies": [
+    {"name": "dep", "kind": "path", "path": "../dep"}
+  ]
+}
+]=])
+
+file(WRITE "${app_dir}/src/main.abel" [=[
+module app.main;
+use dep.lib.math;
+
+fn int main() {
+    return dep_value() + 1;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${app_dir}"
+    RESULT_VARIABLE check_result
+    OUTPUT_VARIABLE check_stdout
+    ERROR_VARIABLE check_stderr
+)
+if(NOT check_result EQUAL 0)
+    message(FATAL_ERROR "abel check failed:\n${check_stdout}\n${check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${app_dir}"
+    RESULT_VARIABLE run_result
+    OUTPUT_VARIABLE run_stdout
+    ERROR_VARIABLE run_stderr
+)
+if(NOT run_result EQUAL 42)
+    message(FATAL_ERROR "abel run expected exit code 42, got ${run_result}:\n${run_stdout}\n${run_stderr}")
+endif()

@@ -253,6 +253,16 @@ add_test(NAME abel_cli_multifile_project_tests
     COMMAND ${CMAKE_COMMAND} -P "${CMAKE_BINARY_DIR}/cli_multifile_project.cmake"
 )
 
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_dependency_sources.cmake.in"
+    "${CMAKE_BINARY_DIR}/cli_dependency_sources.cmake"
+    @ONLY
+)
+
+add_test(NAME abel_cli_dependency_sources_tests
+    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_BINARY_DIR}/cli_dependency_sources.cmake"
+)
+
 set(ABEL_SDK_TEST_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/sdk-test-install")
 set(ABEL_SDK_TEST_BUILD_DIR "${CMAKE_BINARY_DIR}/sdk-backend-fixture")
 

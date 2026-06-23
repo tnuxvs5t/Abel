@@ -1523,7 +1523,7 @@ PackageGraphResult updatePackageGraph(const QString& dir)
     return graph;
 }
 
-QStringList packageSourceFiles(const PackageManifest& package)
+QStringList packageSourceFiles(const PackageManifest& package, bool includeEntry)
 {
     QStringList files;
     const QString entry = package.entryFilePath();
@@ -1540,8 +1540,17 @@ QStringList packageSourceFiles(const PackageManifest& package)
         }
     }
     files.sort();
-    if (!entry.isEmpty())
+    if (includeEntry && !entry.isEmpty())
         files.push_back(entry);
+    return files;
+}
+
+QStringList packageGraphSourceFiles(const PackageGraphResult& graph)
+{
+    QStringList files;
+    for (const PackageManifest& dependency : graph.dependencies)
+        files.append(packageSourceFiles(dependency, false));
+    files.append(packageSourceFiles(graph.root, true));
     return files;
 }
 

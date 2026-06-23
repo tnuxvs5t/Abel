@@ -97,7 +97,7 @@ static CliInput readCliInput(const QString& path)
         if (!graph.ok())
             return input;
         input.sourceFile = graph.root.entryFilePath();
-        input.sourceFiles = abel::packageSourceFiles(graph.root);
+        input.sourceFiles = abel::packageGraphSourceFiles(graph);
         input.packageRoot = graph.root.rootDir;
         input.packageResources = abel::cachedPackageBackendArtifacts(graph);
         filePath = input.sourceFile;
@@ -245,7 +245,7 @@ int main(int argc, char** argv)
         if (!graph.ok())
             return 1;
 
-        const QList<abel::Diagnostic> diagnostics = checkSourceFiles(abel::packageSourceFiles(graph.root));
+        const QList<abel::Diagnostic> diagnostics = checkSourceFiles(abel::packageGraphSourceFiles(graph));
         for (const auto& d : diagnostics)
             printDiagnostic(d);
         if (!diagnostics.isEmpty())
