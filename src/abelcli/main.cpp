@@ -158,6 +158,15 @@ struct CliProgramRun {
     QList<abel::Diagnostic> diagnostics;
 };
 
+struct PendingCliSource {
+    abel::PackageSourceFile sourceEntry;
+    std::unique_ptr<abel::ProgramNode> program;
+    QString moduleName;
+    QList<QString> importedModules;
+    QList<QString> exportedModules;
+    QHash<QString, QString> importedModuleAliases;
+};
+
 static void appendProgram(abel::ProgramNode& target, std::unique_ptr<abel::ProgramNode> source)
 {
     if (!source)
@@ -227,6 +236,7 @@ static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& s
     ParsedCliProgram result;
     result.program = std::make_unique<abel::ProgramNode>();
     QSet<QString> seen;
+    std::vector<PendingCliSource> pendingSources;
 
     for (const abel::PackageSourceFile& sourceEntry : sourceFiles) {
         const QString sourceFile = QFileInfo(sourceEntry.path).absoluteFilePath();
@@ -256,6 +266,7 @@ static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& s
 
         QString moduleName;
         QList<QString> importedModules;
+        QList<QString> exportedModules;
         QHash<QString, QString> importedModuleAliases;
         bool importAliasesOk = true;
         for (const auto& decl : parsed.program->declarations) {
@@ -263,6 +274,8 @@ static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& s
                 moduleName = module->name;
             if (auto* use = dynamic_cast<abel::UseDeclNode*>(decl.get())) {
                 importedModules.push_back(use->name);
+                if (use->exported)
+                    exportedModules.push_back(use->name);
                 if (!use->alias.isEmpty()) {
                     if (importedModuleAliases.contains(use->alias)) {
                         abel::Diagnostic d;
@@ -281,12 +294,51 @@ static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& s
         if (!importAliasesOk)
             continue;
 
-        for (auto& decl : parsed.program->declarations) {
-            tagDeclarationPackage(*decl, sourceEntry);
-            tagDeclarationModule(*decl, moduleName, importedModules);
-            tagDeclarationImportAliases(*decl, importedModuleAliases);
+        PendingCliSource pending;
+        pending.sourceEntry = sourceEntry;
+        pending.program = std::move(parsed.program);
+        pending.moduleName = moduleName;
+        pending.importedModules = importedModules;
+        pending.exportedModules = exportedModules;
+        pending.importedModuleAliases = importedModuleAliases;
+        pendingSources.push_back(std::move(pending));
+    }
+
+    QHash<QString, QList<QString>> reexportedModules;
+    for (const PendingCliSource& pending : pendingSources) {
+        if (pending.moduleName.isEmpty())
+            continue;
+        auto& targets = reexportedModules[pending.moduleName];
+        for (const QString& module : pending.exportedModules) {
+            if (!targets.contains(module))
+                targets.push_back(module);
         }
-        appendProgram(*result.program, std::move(parsed.program));
+    }
+
+    auto expandImports = [&](const QList<QString>& directImports) {
+        QList<QString> expanded;
+        QSet<QString> seenImports;
+        auto addOne = [&](const QString& module, auto&& addRef) -> void {
+            if (module.isEmpty() || seenImports.contains(module))
+                return;
+            seenImports.insert(module);
+            expanded.push_back(module);
+            for (const QString& reexport : reexportedModules.value(module))
+                addRef(reexport, addRef);
+        };
+        for (const QString& module : directImports)
+            addOne(module, addOne);
+        return expanded;
+    };
+
+    for (PendingCliSource& pending : pendingSources) {
+        const QList<QString> expandedImports = expandImports(pending.importedModules);
+        for (auto& decl : pending.program->declarations) {
+            tagDeclarationPackage(*decl, pending.sourceEntry);
+            tagDeclarationModule(*decl, pending.moduleName, expandedImports);
+            tagDeclarationImportAliases(*decl, pending.importedModuleAliases);
+        }
+        appendProgram(*result.program, std::move(pending.program));
     }
 
     return result;

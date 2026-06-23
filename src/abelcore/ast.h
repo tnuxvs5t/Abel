@@ -177,6 +177,7 @@ struct ModuleDeclNode final : DeclNode {
 struct UseDeclNode final : DeclNode {
     QString name;
     QString alias;
+    bool exported = false;
 };
 
 struct FunctionDeclNode final : DeclNode {

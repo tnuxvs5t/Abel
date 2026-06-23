@@ -90,6 +90,8 @@ std::unique_ptr<DeclNode> Parser::parseDeclaration()
         return parseUse();
 
     bool exported = match(TokenKind::KwExport);
+    if (match(TokenKind::KwUse))
+        return parseUse(exported);
     if (match(TokenKind::KwDebt)) {
         consume(TokenKind::KwFn, QStringLiteral("expected fn after debt"));
         return parseFunction(exported, true);
@@ -114,10 +116,11 @@ std::unique_ptr<ModuleDeclNode> Parser::parseModule()
     return module;
 }
 
-std::unique_ptr<UseDeclNode> Parser::parseUse()
+std::unique_ptr<UseDeclNode> Parser::parseUse(bool exported)
 {
     auto use = std::make_unique<UseDeclNode>();
     const SourceSpan startSpan = previous().span;
+    use->exported = exported;
     use->name = parseQualifiedName(QStringLiteral("use target"));
     if (match(TokenKind::KwAs))
         use->alias = consume(TokenKind::Identifier, QStringLiteral("expected alias after as")).text;

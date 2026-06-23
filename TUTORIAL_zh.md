@@ -1149,7 +1149,7 @@ my_abel_project/
 
 当前 v1 包管理已经支持项目级入口、本地 path 依赖、以及本地 registry 目录依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作依赖并生成 `abel.lock.json`，path/registry dependency 已支持 SemVer 版本要求检查，并会拒绝同一个包名在依赖图中解析到不同版本或不同来源；registry dependency 会把选中的版本复制到 `.abel/cache/packages`，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run/test <project-dir>` 会读取 package graph。
 
-当前项目源码加载规则是 v1 多文件第一片：如果输入是 package 目录，`abel check/run/build` 会读取根项目 `src/**/*.abel`，读取依赖包的非 entry `src/**/*.abel` 作为库源码，并把根项目 manifest `entry` 文件放到最后合并为一个 Program。依赖包 entry 默认排除，避免依赖包自己的 `main` 污染根项目。每个文件保留自己的 SourceSpan，所以诊断仍能指向真实文件/行/列。`module xxx;` 与 `use yyy;` 现在参与可见性：同包跨模块访问必须显式 `use`，跨包访问依赖包顶层 `fn/struct/backend` 还要求目标声明带 `export`。函数、struct、backend 解析会优先使用当前 package/module 上下文；`module.path::symbol` 与 `use module.path as Alias; Alias::symbol` 可用于限定函数、限定 struct 类型/构造和限定 backend 调用解歧。re-export、模块内完整 private/public 与完整模块系统仍未完成。
+当前项目源码加载规则是 v1 多文件第一片：如果输入是 package 目录，`abel check/run/build` 会读取根项目 `src/**/*.abel`，读取依赖包的非 entry `src/**/*.abel` 作为库源码，并把根项目 manifest `entry` 文件放到最后合并为一个 Program。依赖包 entry 默认排除，避免依赖包自己的 `main` 污染根项目。每个文件保留自己的 SourceSpan，所以诊断仍能指向真实文件/行/列。`module xxx;` 与 `use yyy;` 现在参与可见性：同包跨模块访问必须显式 `use`，跨包访问依赖包顶层 `fn/struct/backend` 还要求目标声明带 `export`。`export use some.module;` 可以把当前模块写成 facade：使用 facade 模块时，会同时获得被 re-export 模块的可见符号。函数、struct、backend 解析会优先使用当前 package/module 上下文；`module.path::symbol` 与 `use module.path as Alias; Alias::symbol` 可用于限定函数、限定 struct 类型/构造和限定 backend 调用解歧。模块内完整 private/public 与完整模块系统仍未完成。
 
 从空目录创建：
 
@@ -1243,6 +1243,27 @@ fn int main() {
 ```
 
 alias 只是 `use` 的短名，不会绕过可见性；没有 `use my.lib.math as M;` 时，`M::helper()` 不会凭空可用。
+
+如果想做 facade module，可以写显式 re-export：
+
+```abel
+// src/lib/api.abel
+module my.lib.api;
+export use my.lib.math;
+```
+
+然后入口只需要 use facade：
+
+```abel
+module my.main;
+use my.lib.api;
+
+fn int main() {
+    return helper() + 1;
+}
+```
+
+只有 `export use` 会传播；普通 `use my.lib.math;` 只对当前文件/模块可见，不会转交给使用该模块的人。re-export 传播的是真实模块名，不传播 alias；如果需要限定名，仍使用 `my.lib.math::helper()` 或在当前文件自己写 `use my.lib.math as M;`。
 
 依赖包源码第一片也遵守同样的合并模型：如果根项目通过 `abel add path` 或本地 registry 依赖了某个包，依赖包 `src/` 下除 entry 外的 `.abel` 文件会进入根项目 check/run。建议依赖包把可被外部使用的函数写在 `src/lib/...`，并使用 `export fn` / `export struct` / `export backend` 暴露；依赖包内部仍可调用自己的非 export helper，但根项目直接调用会在 `abel check` 阶段被拒绝。
 

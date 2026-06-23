@@ -26,6 +26,7 @@ private slots:
         const QString src = QStringLiteral(R"(
             module app.main;
             use app.math;
+            export use app.api;
 
             export fn int main() {
                 return helper();
@@ -41,13 +42,18 @@ private slots:
             qWarning() << d.message;
         QVERIFY(parsed.diagnostics.isEmpty());
         QVERIFY(parsed.program != nullptr);
-        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(3));
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(4));
         auto* module = dynamic_cast<abel::ModuleDeclNode*>(parsed.program->declarations[0].get());
         auto* use = dynamic_cast<abel::UseDeclNode*>(parsed.program->declarations[1].get());
+        auto* exportedUse = dynamic_cast<abel::UseDeclNode*>(parsed.program->declarations[2].get());
         QVERIFY(module != nullptr);
         QVERIFY(use != nullptr);
+        QVERIFY(exportedUse != nullptr);
         QCOMPARE(module->name, QStringLiteral("app.main"));
         QCOMPARE(use->name, QStringLiteral("app.math"));
+        QVERIFY(!use->exported);
+        QCOMPARE(exportedUse->name, QStringLiteral("app.api"));
+        QVERIFY(exportedUse->exported);
     }
 
     void parsesVectorAndBackend()

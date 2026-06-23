@@ -54,6 +54,16 @@ export fn int public_box_value(PublicBox b) {
 }
 ]=])
 
+file(WRITE "${dep_dir}/src/lib/api.abel" [=[
+module dep.api;
+export use dep.lib.math;
+]=])
+
+file(WRITE "${dep_dir}/src/lib/private_api.abel" [=[
+module dep.private_api;
+use dep.lib.math;
+]=])
+
 file(WRITE "${app_dir}/abel.package.json" [=[
 {
   "name": "app",
@@ -102,6 +112,85 @@ execute_process(
 )
 if(NOT run_result EQUAL 42)
     message(FATAL_ERROR "abel run expected exit code 42, got ${run_result}:\n${run_stdout}\n${run_stderr}")
+endif()
+
+set(reexport_app_dir "${project_root}/reexport-app")
+file(MAKE_DIRECTORY "${reexport_app_dir}/src")
+file(WRITE "${reexport_app_dir}/abel.package.json" [=[
+{
+  "name": "reexport-app",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "dependencies": [
+    {"name": "dep", "kind": "path", "path": "../dep"}
+  ]
+}
+]=])
+
+file(WRITE "${reexport_app_dir}/src/main.abel" [=[
+module reexport.main;
+use dep.api;
+
+fn int main() {
+    PublicBox p = PublicBox(2);
+    return dep_value() + public_box_value(p) - 1;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${reexport_app_dir}"
+    RESULT_VARIABLE reexport_check_result
+    OUTPUT_VARIABLE reexport_check_stdout
+    ERROR_VARIABLE reexport_check_stderr
+)
+if(NOT reexport_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check rejected dependency re-export:\n${reexport_check_stdout}\n${reexport_check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${reexport_app_dir}"
+    RESULT_VARIABLE reexport_run_result
+    OUTPUT_VARIABLE reexport_run_stdout
+    ERROR_VARIABLE reexport_run_stderr
+)
+if(NOT reexport_run_result EQUAL 42)
+    message(FATAL_ERROR "abel run expected re-export app exit code 42, got ${reexport_run_result}:\n${reexport_run_stdout}\n${reexport_run_stderr}")
+endif()
+
+set(non_reexport_app_dir "${project_root}/non-reexport-app")
+file(MAKE_DIRECTORY "${non_reexport_app_dir}/src")
+file(WRITE "${non_reexport_app_dir}/abel.package.json" [=[
+{
+  "name": "non-reexport-app",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "dependencies": [
+    {"name": "dep", "kind": "path", "path": "../dep"}
+  ]
+}
+]=])
+
+file(WRITE "${non_reexport_app_dir}/src/main.abel" [=[
+module non_reexport.main;
+use dep.private_api;
+
+fn int main() {
+    return dep_value();
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${non_reexport_app_dir}"
+    RESULT_VARIABLE non_reexport_check_result
+    OUTPUT_VARIABLE non_reexport_check_stdout
+    ERROR_VARIABLE non_reexport_check_stderr
+)
+if(non_reexport_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted non-exported use propagation:\n${non_reexport_check_stdout}\n${non_reexport_check_stderr}")
+endif()
+string(FIND "${non_reexport_check_stderr}" "not visible from current module" non_reexport_not_visible_pos)
+if(non_reexport_not_visible_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not reject non-exported use propagation clearly:\n${non_reexport_check_stdout}\n${non_reexport_check_stderr}")
 endif()
 
 set(bad_app_dir "${project_root}/bad-app")
