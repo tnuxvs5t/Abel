@@ -4,6 +4,7 @@
 
 #include <QChar>
 #include <QHash>
+#include <QList>
 #include <QString>
 
 #include <memory>
@@ -87,6 +88,7 @@ struct AbelFunctionValue {
     QString packageName;
     QString moduleName;
     QList<QString> importedModules;
+    QHash<QString, QString> importedModuleAliases;
     QHash<QString, AbelValue> valueCaptures;
     QHash<QString, AbelLocation*> refCaptures;
     QHash<QString, bool> refConstness;

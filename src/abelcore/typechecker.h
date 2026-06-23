@@ -64,6 +64,7 @@ private:
     QString m_currentPackage;
     QString m_currentModule;
     QList<QString> m_currentImports;
+    QHash<QString, QString> m_currentImportAliases;
     int m_loopDepth = 0;
 
     void collectStructs(const ProgramNode& program);
@@ -162,6 +163,7 @@ private:
     bool isDeclInCurrentModule(const DeclNode& decl, const QString& packageName = QString()) const;
     bool isDeclVisible(const DeclNode& decl) const;
     bool isModuleImported(const QString& moduleName) const;
+    QString resolveModuleName(const QString& moduleName) const;
     bool isDeclVisibleInCurrentContext(const DeclNode& decl, bool exportedSymbol) const;
     bool isFunctionVisible(const FunctionDeclNode& fn) const;
     bool isStructVisible(const StructDeclNode& decl) const;

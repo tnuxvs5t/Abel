@@ -39,6 +39,7 @@ private:
     QString m_currentPackage;
     QString m_currentModule;
     QList<QString> m_currentImports;
+    QHash<QString, QString> m_currentImportAliases;
     QHash<QString, QList<StructRuntimeInfo>> m_structs;
     QHash<QString, QList<BackendRuntimeInfo>> m_backends;
     BackendRegistry m_backendRegistry;
@@ -113,6 +114,7 @@ private:
 
     bool isDeclInCurrentModule(const DeclNode& decl, const QString& packageName = QString()) const;
     bool isModuleImported(const QString& moduleName) const;
+    QString resolveModuleName(const QString& moduleName) const;
     bool isDeclVisible(const DeclNode& decl, bool exportedSymbol) const;
 
     bool requireBool(const AbelValue& value, const SourceSpan& span, bool& out);

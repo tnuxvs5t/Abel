@@ -2,6 +2,7 @@
 
 #include "abelcore/source_span.h"
 
+#include <QHash>
 #include <QString>
 #include <QList>
 
@@ -163,6 +164,7 @@ struct DeclNode : AstNode {
     QString packageName;
     QString moduleName;
     QList<QString> importedModules;
+    QHash<QString, QString> importedModuleAliases;
     bool fromDependency = false;
 
     virtual ~DeclNode() = default;
@@ -174,6 +176,7 @@ struct ModuleDeclNode final : DeclNode {
 
 struct UseDeclNode final : DeclNode {
     QString name;
+    QString alias;
 };
 
 struct FunctionDeclNode final : DeclNode {

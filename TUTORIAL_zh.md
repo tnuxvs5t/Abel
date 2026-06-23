@@ -1149,7 +1149,7 @@ my_abel_project/
 
 当前 v1 包管理已经支持项目级入口、本地 path 依赖、以及本地 registry 目录依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作依赖并生成 `abel.lock.json`，path/registry dependency 已支持 SemVer 版本要求检查，并会拒绝同一个包名在依赖图中解析到不同版本或不同来源；registry dependency 会把选中的版本复制到 `.abel/cache/packages`，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run <project-dir>` 会读取 package graph。
 
-当前项目源码加载规则是 v1 多文件第一片：如果输入是 package 目录，`abel check/run/build` 会读取根项目 `src/**/*.abel`，读取依赖包的非 entry `src/**/*.abel` 作为库源码，并把根项目 manifest `entry` 文件放到最后合并为一个 Program。依赖包 entry 默认排除，避免依赖包自己的 `main` 污染根项目。每个文件保留自己的 SourceSpan，所以诊断仍能指向真实文件/行/列。`module xxx;` 与 `use yyy;` 现在可解析并作为 AST 声明保存；函数名解析会优先使用当前 package 的同名函数，跨包访问依赖包顶层 `fn/struct/backend` 时要求依赖声明带 `export`。这仍不是完整模块系统：import 过滤、限定名查找和模块内 private/public 还没有完成。
+当前项目源码加载规则是 v1 多文件第一片：如果输入是 package 目录，`abel check/run/build` 会读取根项目 `src/**/*.abel`，读取依赖包的非 entry `src/**/*.abel` 作为库源码，并把根项目 manifest `entry` 文件放到最后合并为一个 Program。依赖包 entry 默认排除，避免依赖包自己的 `main` 污染根项目。每个文件保留自己的 SourceSpan，所以诊断仍能指向真实文件/行/列。`module xxx;` 与 `use yyy;` 现在参与可见性：同包跨模块访问必须显式 `use`，跨包访问依赖包顶层 `fn/struct/backend` 还要求目标声明带 `export`。函数、struct、backend 解析会优先使用当前 package/module 上下文；`module.path::symbol` 与 `use module.path as Alias; Alias::symbol` 可用于限定函数、限定 struct 类型/构造和限定 backend 调用解歧。re-export、模块内完整 private/public 与完整模块系统仍未完成。
 
 从空目录创建：
 
@@ -1200,7 +1200,20 @@ fn int main() {
 }
 ```
 
-当前 `use` 不负责导入过滤；它先作为源码结构和未来模块系统的声明进入 AST。只要两个文件都在根项目 `src/` 下，`helper()` 会在合并后的同包顶层符号表里被找到。
+当前 `use` 已经负责跨模块可见性：同包不同模块之间不能只靠文件在同一个 `src/` 下互相访问，必须写 `use my.lib.math;`。裸名 `helper()` 会在当前模块和已 use 模块中解析；若多个已 use 模块提供同名符号，裸名会报歧义。
+
+需要解歧时，可以用完整模块限定名或 import alias：
+
+```abel
+module my.main;
+use my.lib.math as M;
+
+fn int main() {
+    return M::helper() + 1;
+}
+```
+
+alias 只是 `use` 的短名，不会绕过可见性；没有 `use my.lib.math as M;` 时，`M::helper()` 不会凭空可用。
 
 依赖包源码第一片也遵守同样的合并模型：如果根项目通过 `abel add path` 或本地 registry 依赖了某个包，依赖包 `src/` 下除 entry 外的 `.abel` 文件会进入根项目 check/run。建议依赖包把可被外部使用的函数写在 `src/lib/...`，并使用 `export fn` / `export struct` / `export backend` 暴露；依赖包内部仍可调用自己的非 export helper，但根项目直接调用会在 `abel check` 阶段被拒绝。
 

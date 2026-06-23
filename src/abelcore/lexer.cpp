@@ -271,6 +271,7 @@ void Lexer::lexIdentifierOrKeyword(qsizetype startPos, int startLine, int startC
         {QStringLiteral("export"), TokenKind::KwExport},
         {QStringLiteral("module"), TokenKind::KwModule},
         {QStringLiteral("use"), TokenKind::KwUse},
+        {QStringLiteral("as"), TokenKind::KwAs},
         {QStringLiteral("public"), TokenKind::KwPublic},
         {QStringLiteral("private"), TokenKind::KwPrivate},
     };

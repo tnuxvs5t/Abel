@@ -97,35 +97,44 @@ public:
     DeclContextGuard(QString& currentPackage,
                      QString& currentModule,
                      QList<QString>& currentImports,
+                     QHash<QString, QString>& currentImportAliases,
                      const DeclNode& decl)
         : m_currentPackage(currentPackage)
         , m_currentModule(currentModule)
         , m_currentImports(currentImports)
+        , m_currentImportAliases(currentImportAliases)
         , m_previousPackage(currentPackage)
         , m_previousModule(currentModule)
         , m_previousImports(currentImports)
+        , m_previousImportAliases(currentImportAliases)
     {
         m_currentPackage = decl.packageName;
         m_currentModule = decl.moduleName;
         m_currentImports = decl.importedModules;
+        m_currentImportAliases = decl.importedModuleAliases;
     }
 
     DeclContextGuard(QString& currentPackage,
                      QString& currentModule,
                      QList<QString>& currentImports,
+                     QHash<QString, QString>& currentImportAliases,
                      QString packageName,
                      QString moduleName,
-                     QList<QString> importedModules)
+                     QList<QString> importedModules,
+                     QHash<QString, QString> importedModuleAliases)
         : m_currentPackage(currentPackage)
         , m_currentModule(currentModule)
         , m_currentImports(currentImports)
+        , m_currentImportAliases(currentImportAliases)
         , m_previousPackage(currentPackage)
         , m_previousModule(currentModule)
         , m_previousImports(currentImports)
+        , m_previousImportAliases(currentImportAliases)
     {
         m_currentPackage = std::move(packageName);
         m_currentModule = std::move(moduleName);
         m_currentImports = std::move(importedModules);
+        m_currentImportAliases = std::move(importedModuleAliases);
     }
 
     ~DeclContextGuard()
@@ -133,15 +142,18 @@ public:
         m_currentPackage = m_previousPackage;
         m_currentModule = m_previousModule;
         m_currentImports = m_previousImports;
+        m_currentImportAliases = m_previousImportAliases;
     }
 
 private:
     QString& m_currentPackage;
     QString& m_currentModule;
     QList<QString>& m_currentImports;
+    QHash<QString, QString>& m_currentImportAliases;
     QString m_previousPackage;
     QString m_previousModule;
     QList<QString> m_previousImports;
+    QHash<QString, QString> m_previousImportAliases;
 };
 
 bool isSourceLocationBuiltinName(const QString& name)
@@ -177,6 +189,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
     m_currentPackage.clear();
     m_currentModule.clear();
     m_currentImports.clear();
+    m_currentImportAliases.clear();
     m_backendRegistry = BackendRegistry();
     m_activeBackendRegistry = backendRegistry ? backendRegistry : &m_backendRegistry;
 
@@ -329,12 +342,13 @@ const FunctionDeclNode* Interpreter::resolveFunction(const QString& name) const
 
 const FunctionDeclNode* Interpreter::resolveFunctionInModule(const QString& moduleName, const QString& name) const
 {
+    const QString resolvedModuleName = resolveModuleName(moduleName);
     const auto candidates = m_functions.value(name);
     if (candidates.isEmpty())
         return nullptr;
     QList<const FunctionDeclNode*> visible;
     for (const FunctionDeclNode* fn : candidates) {
-        if (fn->moduleName == moduleName && isDeclVisible(*fn, fn->exported))
+        if (fn->moduleName == resolvedModuleName && isDeclVisible(*fn, fn->exported))
             visible.push_back(fn);
     }
     return visible.size() == 1 ? visible.front() : nullptr;
@@ -349,12 +363,13 @@ const Interpreter::StructRuntimeInfo* Interpreter::resolveStruct(const QString& 
 
 const Interpreter::StructRuntimeInfo* Interpreter::resolveStructInModule(const QString& moduleName, const QString& name) const
 {
+    const QString resolvedModuleName = resolveModuleName(moduleName);
     auto found = m_structs.constFind(name);
     if (found == m_structs.constEnd() || found->isEmpty())
         return nullptr;
     QList<const StructRuntimeInfo*> visible;
     for (const auto& info : found.value()) {
-        if (info.decl && info.decl->moduleName == moduleName && isDeclVisible(*info.decl, info.decl->exported))
+        if (info.decl && info.decl->moduleName == resolvedModuleName && isDeclVisible(*info.decl, info.decl->exported))
             visible.push_back(&info);
     }
     return visible.size() == 1 ? visible.front() : nullptr;
@@ -398,12 +413,13 @@ const Interpreter::BackendRuntimeInfo* Interpreter::resolveBackend(const QString
 
 const Interpreter::BackendRuntimeInfo* Interpreter::resolveBackendInModule(const QString& moduleName, const QString& name) const
 {
+    const QString resolvedModuleName = resolveModuleName(moduleName);
     auto found = m_backends.constFind(name);
     if (found == m_backends.constEnd() || found->isEmpty())
         return nullptr;
     QList<const BackendRuntimeInfo*> visible;
     for (const auto& info : found.value()) {
-        if (info.decl && info.decl->moduleName == moduleName && isDeclVisible(*info.decl, info.decl->exported))
+        if (info.decl && info.decl->moduleName == resolvedModuleName && isDeclVisible(*info.decl, info.decl->exported))
             visible.push_back(&info);
     }
     return visible.size() == 1 ? visible.front() : nullptr;
@@ -472,7 +488,7 @@ AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& 
 
 AbelType Interpreter::typeFromAstForDecl(const TypeNode& node, const DeclNode& decl)
 {
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, decl);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, decl);
     return typeFromAstInPackage(node, decl.packageName);
 }
 
@@ -500,7 +516,7 @@ bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext
             continue;
         BackendRuntimeInfo info;
         info.decl = backend;
-        DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, *backend);
+        DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, *backend);
         for (const auto& fn : backend->functions) {
             if (info.functions.contains(fn->name)) {
                 ctx.error(QStringLiteral("E0602"), QStringLiteral("duplicate backend function '%1::%2'").arg(backend->name, fn->name), fn->span);
@@ -541,7 +557,7 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
                                            const std::vector<std::unique_ptr<ExprNode>>& args,
                                            const SourceSpan& span)
 {
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, fn);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, fn);
     if (!self) {
         error(QStringLiteral("E0566"), QStringLiteral("missing struct receiver for '%1'").arg(fn.name), span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -634,7 +650,7 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
 
 ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args)
 {
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, fn);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, fn);
     if (fn.debt || !fn.body) {
         error(QStringLiteral("E0507"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -683,7 +699,7 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
                                          const std::vector<std::unique_ptr<ExprNode>>& args,
                                          const SourceSpan& span)
 {
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, fn);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, fn);
     if (fn.debt || !fn.body) {
         error(QStringLiteral("E0539"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -784,7 +800,7 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
                                              const std::vector<std::unique_ptr<ExprNode>>& restArgs,
                                              const SourceSpan& span)
 {
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, fn);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, fn);
     if (fn.debt || !fn.body) {
         error(QStringLiteral("E0539"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -930,9 +946,11 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
     DeclContextGuard context(m_currentPackage,
                              m_currentModule,
                              m_currentImports,
+                             m_currentImportAliases,
                              function->packageName,
                              function->moduleName,
-                             function->importedModules);
+                             function->importedModules,
+                             function->importedModuleAliases);
     RuntimeFrameGuard frame(*m_ctx, true, lambdaFrameSymbol(), span);
     for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
         m_ctx->defineValueVariable(it.key(), it.value(), true, lambda.span);
@@ -1022,9 +1040,11 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
     DeclContextGuard context(m_currentPackage,
                              m_currentModule,
                              m_currentImports,
+                             m_currentImportAliases,
                              function->packageName,
                              function->moduleName,
-                             function->importedModules);
+                             function->importedModules,
+                             function->importedModuleAliases);
     RuntimeFrameGuard frame(*m_ctx, true, lambdaFrameSymbol(), span);
     for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
         m_ctx->defineValueVariable(it.key(), it.value(), true, lambda.span);
@@ -1734,11 +1754,12 @@ AbelValue Interpreter::evalStaticCall(const StaticAccessExprNode& callee,
 {
     if (auto* nested = dynamic_cast<StaticAccessExprNode*>(callee.base.get())) {
         const QString moduleName = staticAccessModuleName(*nested);
+        const QString resolvedModuleName = resolveModuleName(moduleName);
         const QString backendName = nested->member;
         if (!moduleName.isEmpty()) {
             const auto backends = m_backends.value(backendName);
             for (const auto& info : backends) {
-                if (info.decl && info.decl->moduleName == moduleName)
+                if (info.decl && info.decl->moduleName == resolvedModuleName)
                     return evalBackendCallByName(moduleName + QStringLiteral("::") + backendName,
                                                  nested->span,
                                                  callee.member,
@@ -1756,13 +1777,14 @@ AbelValue Interpreter::evalStaticCall(const StaticAccessExprNode& callee,
 
     QString moduleName = baseName;
     moduleName.replace(QStringLiteral("::"), QStringLiteral("."));
+    const QString resolvedModuleName = resolveModuleName(moduleName);
 
-    if (const StructRuntimeInfo* info = resolveStructInModule(moduleName, callee.member))
+    if (resolveStructInModule(moduleName, callee.member))
         return evalQualifiedStructConstructor(moduleName, callee.member, args, span);
 
     const auto functions = m_functions.value(callee.member);
     for (const FunctionDeclNode* fn : functions) {
-        if (fn->moduleName == moduleName)
+        if (fn->moduleName == resolvedModuleName)
             return evalQualifiedFunctionCall(moduleName, callee.member, args, span);
     }
 
@@ -1802,7 +1824,7 @@ AbelValue Interpreter::evalBackendCallByName(const QString& backendName,
         error(QStringLiteral("E0604"), QStringLiteral("unknown backend '%1'").arg(backendName), backendSpan);
         return AbelValue::makeUnknown();
     }
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, *backend->decl);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, *backend->decl);
     const FunctionDeclNode* fn = backend->functions.value(member, nullptr);
     if (!fn) {
         error(QStringLiteral("E0605"), QStringLiteral("unknown backend function '%1::%2'").arg(backendName, member), backendSpan);
@@ -1902,6 +1924,7 @@ AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)
     function->packageName = m_currentPackage;
     function->moduleName = m_currentModule;
     function->importedModules = m_currentImports;
+    function->importedModuleAliases = m_currentImportAliases;
 
     enum class CaptureMode {
         None,
@@ -1963,7 +1986,7 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
                                              const std::vector<std::unique_ptr<ExprNode>>& args,
                                              const SourceSpan& span)
 {
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, *info.decl);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, *info.decl);
     QHash<QString, AbelValue> fields;
     std::vector<QString> order;
     order.reserve(info.decl->fields.size());
@@ -2158,7 +2181,7 @@ AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceS
             for (const auto& fieldName : structValue->fieldOrder)
                 m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(structValue.get(), fieldName), false, false, span);
             if (!m_ctx->hasError()) {
-                DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, *info->decl);
+                DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, *info->decl);
                 ExecResult flow = execBlock(*info->constructor->body);
                 if (flow.kind == FlowKind::Return)
                     error(QStringLiteral("E0577"), QStringLiteral("constructor cannot return a value"), span);
@@ -2214,6 +2237,11 @@ bool Interpreter::isDeclInCurrentModule(const DeclNode& decl, const QString& pac
 bool Interpreter::isModuleImported(const QString& moduleName) const
 {
     return !moduleName.isEmpty() && m_currentImports.contains(moduleName);
+}
+
+QString Interpreter::resolveModuleName(const QString& moduleName) const
+{
+    return m_currentImportAliases.value(moduleName, moduleName);
 }
 
 bool Interpreter::isDeclVisible(const DeclNode& decl, bool exportedSymbol) const

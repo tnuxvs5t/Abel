@@ -196,6 +196,19 @@ static void tagDeclarationModule(abel::DeclNode& decl, const QString& moduleName
     }
 }
 
+static void tagDeclarationImportAliases(abel::DeclNode& decl, const QHash<QString, QString>& importedModuleAliases)
+{
+    decl.importedModuleAliases = importedModuleAliases;
+    if (auto* s = dynamic_cast<abel::StructDeclNode*>(&decl)) {
+        for (auto& method : s->methods)
+            method->importedModuleAliases = importedModuleAliases;
+    }
+    if (auto* backend = dynamic_cast<abel::BackendBlockNode*>(&decl)) {
+        for (auto& fn : backend->functions)
+            fn->importedModuleAliases = importedModuleAliases;
+    }
+}
+
 static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& sourceFiles)
 {
     ParsedCliProgram result;
@@ -230,16 +243,35 @@ static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& s
 
         QString moduleName;
         QList<QString> importedModules;
+        QHash<QString, QString> importedModuleAliases;
+        bool importAliasesOk = true;
         for (const auto& decl : parsed.program->declarations) {
             if (auto* module = dynamic_cast<abel::ModuleDeclNode*>(decl.get()))
                 moduleName = module->name;
-            if (auto* use = dynamic_cast<abel::UseDeclNode*>(decl.get()))
+            if (auto* use = dynamic_cast<abel::UseDeclNode*>(decl.get())) {
                 importedModules.push_back(use->name);
+                if (!use->alias.isEmpty()) {
+                    if (importedModuleAliases.contains(use->alias)) {
+                        abel::Diagnostic d;
+                        d.severity = abel::Severity::Error;
+                        d.code = QStringLiteral("E0208");
+                        d.message = QStringLiteral("duplicate import alias '%1'").arg(use->alias);
+                        d.primary = use->span;
+                        result.diagnostics.push_back(d);
+                        importAliasesOk = false;
+                    } else {
+                        importedModuleAliases.insert(use->alias, use->name);
+                    }
+                }
+            }
         }
+        if (!importAliasesOk)
+            continue;
 
         for (auto& decl : parsed.program->declarations) {
             tagDeclarationPackage(*decl, sourceEntry);
             tagDeclarationModule(*decl, moduleName, importedModules);
+            tagDeclarationImportAliases(*decl, importedModuleAliases);
         }
         appendProgram(*result.program, std::move(parsed.program));
     }

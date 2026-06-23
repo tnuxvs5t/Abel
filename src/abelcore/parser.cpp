@@ -119,6 +119,8 @@ std::unique_ptr<UseDeclNode> Parser::parseUse()
     auto use = std::make_unique<UseDeclNode>();
     const SourceSpan startSpan = previous().span;
     use->name = parseQualifiedName(QStringLiteral("use target"));
+    if (match(TokenKind::KwAs))
+        use->alias = consume(TokenKind::Identifier, QStringLiteral("expected alias after as")).text;
     const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';' after use declaration"));
     use->span = mergeSpans(startSpan, semi.span);
     return use;

@@ -54,17 +54,21 @@ public:
     DeclContextGuard(QString& currentPackage,
                      QString& currentModule,
                      QList<QString>& currentImports,
+                     QHash<QString, QString>& currentImportAliases,
                      const DeclNode& decl)
         : m_currentPackage(currentPackage)
         , m_currentModule(currentModule)
         , m_currentImports(currentImports)
+        , m_currentImportAliases(currentImportAliases)
         , m_previousPackage(currentPackage)
         , m_previousModule(currentModule)
         , m_previousImports(currentImports)
+        , m_previousImportAliases(currentImportAliases)
     {
         m_currentPackage = decl.packageName;
         m_currentModule = decl.moduleName;
         m_currentImports = decl.importedModules;
+        m_currentImportAliases = decl.importedModuleAliases;
     }
 
     ~DeclContextGuard()
@@ -72,15 +76,18 @@ public:
         m_currentPackage = m_previousPackage;
         m_currentModule = m_previousModule;
         m_currentImports = m_previousImports;
+        m_currentImportAliases = m_previousImportAliases;
     }
 
 private:
     QString& m_currentPackage;
     QString& m_currentModule;
     QList<QString>& m_currentImports;
+    QHash<QString, QString>& m_currentImportAliases;
     QString m_previousPackage;
     QString m_previousModule;
     QList<QString> m_previousImports;
+    QHash<QString, QString> m_previousImportAliases;
 };
 
 bool sameDeclNamespace(const DeclNode& lhs, const DeclNode& rhs)
@@ -243,6 +250,7 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     m_currentPackage.clear();
     m_currentModule.clear();
     m_currentImports.clear();
+    m_currentImportAliases.clear();
     m_loopDepth = 0;
 
     collectStructs(program);
@@ -419,6 +427,7 @@ const FunctionDeclNode* TypeChecker::resolveFunctionInModule(const QString& modu
                                                              const SourceSpan& span,
                                                              bool diagnose)
 {
+    const QString resolvedModuleName = resolveModuleName(moduleName);
     const auto candidates = m_functions.value(name);
     if (candidates.isEmpty())
         return nullptr;
@@ -426,7 +435,7 @@ const FunctionDeclNode* TypeChecker::resolveFunctionInModule(const QString& modu
     QList<const FunctionDeclNode*> visible;
     QList<const FunctionDeclNode*> hidden;
     for (const FunctionDeclNode* fn : candidates) {
-        if (fn->moduleName != moduleName)
+        if (fn->moduleName != resolvedModuleName)
             continue;
         if (isFunctionVisible(*fn))
             visible.push_back(fn);
@@ -466,6 +475,7 @@ const TypeChecker::StructInfo* TypeChecker::resolveStructInModule(const QString&
                                                                   const SourceSpan& span,
                                                                   bool diagnose)
 {
+    const QString resolvedModuleName = resolveModuleName(moduleName);
     auto found = m_structs.constFind(name);
     if (found == m_structs.constEnd() || found->isEmpty())
         return nullptr;
@@ -473,7 +483,7 @@ const TypeChecker::StructInfo* TypeChecker::resolveStructInModule(const QString&
     QList<const StructInfo*> visible;
     QList<const StructInfo*> hidden;
     for (const auto& info : found.value()) {
-        if (!info.decl || info.decl->moduleName != moduleName)
+        if (!info.decl || info.decl->moduleName != resolvedModuleName)
             continue;
         if (isStructVisible(*info.decl))
             visible.push_back(&info);
@@ -580,13 +590,14 @@ const TypeChecker::BackendInfo* TypeChecker::resolveBackendInModule(const QStrin
                                                                     const SourceSpan& span,
                                                                     bool diagnose)
 {
+    const QString resolvedModuleName = resolveModuleName(moduleName);
     auto found = m_backends.constFind(name);
     if (found == m_backends.constEnd() || found->isEmpty())
         return nullptr;
     QList<const BackendInfo*> visible;
     QList<const BackendInfo*> hidden;
     for (const auto& info : found.value()) {
-        if (!info.decl || info.decl->moduleName != moduleName)
+        if (!info.decl || info.decl->moduleName != resolvedModuleName)
             continue;
         if (isBackendVisible(*info.decl))
             visible.push_back(&info);
@@ -713,7 +724,7 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
 
 AbelType TypeChecker::typeFromAstForDecl(const TypeNode& node, const DeclNode& decl, bool diagnose)
 {
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, decl);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, decl);
     return typeFromAstInPackage(node, decl.packageName, diagnose);
 }
 
@@ -750,7 +761,7 @@ void TypeChecker::collectBackends(const ProgramNode& program)
 
 void TypeChecker::checkStruct(const StructDeclNode& decl)
 {
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, decl);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, decl);
     for (const auto& field : decl.fields) {
         AbelType type = typeFromAstInCurrentPackage(*field->type);
         if (!isSupportedType(type))
@@ -766,7 +777,7 @@ void TypeChecker::checkStruct(const StructDeclNode& decl)
 
 void TypeChecker::checkBackend(const BackendBlockNode& backend)
 {
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, backend);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, backend);
     for (const auto& fn : backend.functions) {
         const AbelType returnType = typeFromAstInCurrentPackage(*fn->returnType);
         if (!isSupportedType(returnType))
@@ -845,7 +856,7 @@ void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNod
 
 void TypeChecker::checkFunction(const FunctionDeclNode& fn)
 {
-    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, fn);
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, fn);
     const qsizetype diagnosticsBeforeCallable = m_diagnostics.size();
     const AbelType returnType = typeFromAstInCurrentPackage(*fn.returnType);
     if (!isSupportedType(returnType)) {
@@ -1585,11 +1596,12 @@ ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee,
 {
     if (auto* nested = dynamic_cast<StaticAccessExprNode*>(callee.base.get())) {
         const QString moduleName = staticAccessModuleName(*nested);
+        const QString resolvedModuleName = resolveModuleName(moduleName);
         const QString backendName = nested->member;
         if (!moduleName.isEmpty()) {
             const auto backends = m_backends.value(backendName);
             for (const auto& info : backends) {
-                if (info.decl && info.decl->moduleName == moduleName)
+                if (info.decl && info.decl->moduleName == resolvedModuleName)
                     return checkBackendCallByName(moduleName + QStringLiteral("::") + backendName,
                                                   nested->span,
                                                   callee.member,
@@ -1605,10 +1617,11 @@ ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee,
 
     QString moduleName = baseName;
     moduleName.replace(QStringLiteral("::"), QStringLiteral("."));
+    const QString resolvedModuleName = resolveModuleName(moduleName);
 
     const auto structs = m_structs.value(callee.member);
     for (const auto& info : structs) {
-        if (info.decl && info.decl->moduleName == moduleName) {
+        if (info.decl && info.decl->moduleName == resolvedModuleName) {
             const StructInfo* resolved = resolveStructInModule(moduleName, callee.member, callee.base->span);
             if (!resolved) {
                 for (const auto& argExpr : args)
@@ -1621,7 +1634,7 @@ ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee,
 
     const auto functions = m_functions.value(callee.member);
     for (const FunctionDeclNode* fn : functions) {
-        if (fn->moduleName == moduleName)
+        if (fn->moduleName == resolvedModuleName)
             return checkQualifiedFunctionCall(moduleName, callee.base->span, callee.member, args, span);
     }
 
@@ -2078,6 +2091,11 @@ bool TypeChecker::isDeclInCurrentModule(const DeclNode& decl, const QString& pac
 bool TypeChecker::isModuleImported(const QString& moduleName) const
 {
     return !moduleName.isEmpty() && m_currentImports.contains(moduleName);
+}
+
+QString TypeChecker::resolveModuleName(const QString& moduleName) const
+{
+    return m_currentImportAliases.value(moduleName, moduleName);
 }
 
 bool TypeChecker::isDeclVisibleInCurrentContext(const DeclNode& decl, bool exportedSymbol) const

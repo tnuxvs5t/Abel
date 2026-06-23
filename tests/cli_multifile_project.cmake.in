@@ -491,6 +491,128 @@ if(NOT qualified_struct_run_result EQUAL 42)
     message(FATAL_ERROR "abel run expected qualified struct project exit code 42, got ${qualified_struct_run_result}:\n${qualified_struct_run_stdout}\n${qualified_struct_run_stderr}")
 endif()
 
+set(alias_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-alias")
+file(REMOVE_RECURSE "${alias_project_dir}")
+file(MAKE_DIRECTORY "${alias_project_dir}/src/lib")
+
+file(WRITE "${alias_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-alias",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "backendArtifacts": [
+    {
+      "backendId": "MathSystem",
+      "path": "@CMAKE_BINARY_DIR@/plugins/libmath_backend.so",
+      "symbols": ["fast_add"]
+    }
+  ]
+}
+]=])
+
+file(WRITE "${alias_project_dir}/src/lib/a.abel" [=[
+module cli.lib.a;
+
+fn int value() {
+    return 10;
+}
+
+struct Point {
+    int x;
+}
+]=])
+
+file(WRITE "${alias_project_dir}/src/lib/math.abel" [=[
+module cli.lib.math;
+
+backend MathSystem {
+    fn int fast_add(int a, int b);
+}
+]=])
+
+file(WRITE "${alias_project_dir}/src/main.abel" [=[
+module cli.main;
+use cli.lib.a as A;
+use cli.lib.math as M;
+
+fn int main() {
+    A::Point p = A::Point(29);
+    return A::value() + p.x + M::MathSystem::fast_add(1, 2);
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${alias_project_dir}"
+    RESULT_VARIABLE alias_check_result
+    OUTPUT_VARIABLE alias_check_stdout
+    ERROR_VARIABLE alias_check_stderr
+)
+if(NOT alias_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check rejected import aliases:\n${alias_check_stdout}\n${alias_check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${alias_project_dir}"
+    RESULT_VARIABLE alias_run_result
+    OUTPUT_VARIABLE alias_run_stdout
+    ERROR_VARIABLE alias_run_stderr
+)
+if(NOT alias_run_result EQUAL 42)
+    message(FATAL_ERROR "abel run expected alias project exit code 42, got ${alias_run_result}:\n${alias_run_stdout}\n${alias_run_stderr}")
+endif()
+
+set(duplicate_alias_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-duplicate-alias")
+file(REMOVE_RECURSE "${duplicate_alias_project_dir}")
+file(MAKE_DIRECTORY "${duplicate_alias_project_dir}/src/lib")
+
+file(WRITE "${duplicate_alias_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-duplicate-alias",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${duplicate_alias_project_dir}/src/lib/a.abel" [=[
+module cli.lib.a;
+
+fn int value() {
+    return 10;
+}
+]=])
+
+file(WRITE "${duplicate_alias_project_dir}/src/lib/b.abel" [=[
+module cli.lib.b;
+
+fn int value() {
+    return 30;
+}
+]=])
+
+file(WRITE "${duplicate_alias_project_dir}/src/main.abel" [=[
+module cli.main;
+use cli.lib.a as L;
+use cli.lib.b as L;
+
+fn int main() {
+    return L::value();
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${duplicate_alias_project_dir}"
+    RESULT_VARIABLE duplicate_alias_check_result
+    OUTPUT_VARIABLE duplicate_alias_check_stdout
+    ERROR_VARIABLE duplicate_alias_check_stderr
+)
+if(duplicate_alias_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted duplicate import alias:\n${duplicate_alias_check_stdout}\n${duplicate_alias_check_stderr}")
+endif()
+string(FIND "${duplicate_alias_check_stderr}" "duplicate import alias 'L'" duplicate_alias_pos)
+if(duplicate_alias_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain duplicate import alias:\n${duplicate_alias_check_stdout}\n${duplicate_alias_check_stderr}")
+endif()
+
 set(qualified_struct_no_use_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-qualified-struct-no-use")
 file(REMOVE_RECURSE "${qualified_struct_no_use_project_dir}")
 file(MAKE_DIRECTORY "${qualified_struct_no_use_project_dir}/src/lib")
