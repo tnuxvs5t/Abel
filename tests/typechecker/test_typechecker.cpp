@@ -197,6 +197,34 @@ private slots:
         QVERIFY(!badBreakArg.diagnostics.isEmpty());
     }
 
+    void acceptsTestBuiltins()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                test_assert(true, "ok");
+                test_eq(4, 4.0, "numeric ok");
+                test_ne("a", "b");
+                true |> test_assert(" via pipe");
+                4 |> test_eq(4, " pipe eq");
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsTestBuiltinMisuse()
+    {
+        auto badCond = checkSource(QStringLiteral("fn int main() { test_assert(1); return 0; }"));
+        QVERIFY(!badCond.diagnostics.isEmpty());
+        auto tooFew = checkSource(QStringLiteral("fn int main() { test_eq(1); return 0; }"));
+        QVERIFY(!tooFew.diagnostics.isEmpty());
+        auto badCompare = checkSource(QStringLiteral("fn int main() { test_eq(1, \"x\"); return 0; }"));
+        QVERIFY(!badCompare.diagnostics.isEmpty());
+    }
+
     void acceptsUserToStrForBuildString()
     {
         const QString src = QStringLiteral(R"ABEL(

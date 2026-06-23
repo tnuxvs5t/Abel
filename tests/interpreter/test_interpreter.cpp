@@ -1032,6 +1032,49 @@ private slots:
         QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
         QCOMPARE(result.exitCode, 1);
     }
+
+    void testAssertionsPassWhenSatisfied()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                test_assert(true, "ok");
+                test_eq(4, 4.0, "numeric");
+                test_ne("a", "b");
+                return 7;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 7);
+    }
+
+    void testEqFailureReportsMessageStackAndSourceLine()
+    {
+        const QString src = QStringLiteral(R"(
+            fn void check() {
+                test_eq("actual", "expected", " label=", 9);
+            }
+
+            fn int main() {
+                check();
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        const auto& diagnostic = result.diagnostics.front();
+        QCOMPARE(diagnostic.code, QStringLiteral("E0599"));
+        QVERIFY(diagnostic.message.contains(QStringLiteral("test_eq failed")));
+        QVERIFY(diagnostic.message.contains(QStringLiteral("expected")));
+        QVERIFY(diagnostic.message.contains(QStringLiteral("actual")));
+        QVERIFY(diagnostic.message.contains(QStringLiteral("label=9")));
+        QVERIFY(diagnostic.primary.sourceLine.contains(QStringLiteral("test_eq(")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn check")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
+        QCOMPARE(result.exitCode, 1);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

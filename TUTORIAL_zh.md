@@ -1196,10 +1196,9 @@ module my.tests.pass;
 use my.lib.math as M;
 
 fn int main() {
-    if (M::helper() == 41) {
-        return 0;
-    }
-    return 1;
+    test_eq(M::helper(), 41, "helper");
+    test_assert(M::helper() > 0, "positive");
+    return 0;
 }
 ```
 
@@ -1576,6 +1575,24 @@ debug_assert(cond, any... message) 要求 cond 是 bool。
 cond 为 true 时继续执行。
 cond 为 false 时报告 E0598，message 会拼进诊断。
 诊断同样带 primary 源码行、caret 和 Abel 调用栈。
+```
+
+当前 `std.test` 第一片也以 builtin 形式提供，主要服务 `abel test`：
+
+```abel
+test_assert(x > 0, "x must > 0");
+test_eq(actual, expected, "case=", id);
+test_ne(left, right, "should differ");
+```
+
+规则：
+
+```text
+test_assert(cond, any... message) 要求 cond 是 bool。
+test_eq(actual, expected, any... message) 要求两值可比较；失败时报 E0599，并显示 expected/got。
+test_ne(actual, expected, any... message) 要求两值可比较；两值相等时报 E0599。
+actual/expected 和 message 都必须可 stringify，struct 需要用户提供 to_str(T)。
+断言失败同样带 primary 源码行、caret 和 Abel 调用栈。
 ```
 
 ### 17.5 修改 parser 后不加错误恢复测试

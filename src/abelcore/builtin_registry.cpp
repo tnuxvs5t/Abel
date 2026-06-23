@@ -90,6 +90,87 @@ std::optional<QString> stringifyValue(BuiltinFunctionCall& call, const AbelValue
     return std::nullopt;
 }
 
+bool valuesEqual(const AbelValue& lhs, const AbelValue& rhs)
+{
+    if (lhs.type().kind == TypeKind::Any)
+        return valuesEqual(lhs.asAny()->value, rhs);
+    if (rhs.type().kind == TypeKind::Any)
+        return valuesEqual(lhs, rhs.asAny()->value);
+    if ((lhs.type().kind == TypeKind::Pointer && rhs.type().kind == TypeKind::Nullptr)
+        || (lhs.type().kind == TypeKind::Nullptr && rhs.type().kind == TypeKind::Pointer)) {
+        AbelLocation* ptr = lhs.type().kind == TypeKind::Pointer ? lhs.asPointer() : rhs.asPointer();
+        return ptr == nullptr;
+    }
+    if (lhs.type().isNumeric() && rhs.type().isNumeric()) {
+        if (lhs.type().kind == TypeKind::F64 || rhs.type().kind == TypeKind::F64)
+            return lhs.asDouble() == rhs.asDouble();
+        return lhs.asInt() == rhs.asInt();
+    }
+    if (lhs.type().kind != rhs.type().kind)
+        return false;
+
+    switch (lhs.type().kind) {
+    case TypeKind::Void:
+        return true;
+    case TypeKind::Bool:
+        return lhs.asBool() == rhs.asBool();
+    case TypeKind::I32:
+    case TypeKind::I64:
+        return lhs.asInt() == rhs.asInt();
+    case TypeKind::F64:
+        return lhs.asDouble() == rhs.asDouble();
+    case TypeKind::Char:
+        return lhs.asChar() == rhs.asChar();
+    case TypeKind::Str:
+        return lhs.asString() == rhs.asString();
+    case TypeKind::Nullptr:
+        return true;
+    case TypeKind::Pointer:
+        return lhs.asPointer() == rhs.asPointer();
+    case TypeKind::Vector: {
+        const auto lhsVector = lhs.asVector();
+        const auto rhsVector = rhs.asVector();
+        if (lhsVector->elements.size() != rhsVector->elements.size())
+            return false;
+        for (size_t i = 0; i < lhsVector->elements.size(); ++i) {
+            if (!valuesEqual(lhsVector->elements[i], rhsVector->elements[i]))
+                return false;
+        }
+        return true;
+    }
+    case TypeKind::Struct: {
+        const auto lhsStruct = lhs.asStruct();
+        const auto rhsStruct = rhs.asStruct();
+        if (lhsStruct->typeName != rhsStruct->typeName || lhsStruct->fieldOrder != rhsStruct->fieldOrder)
+            return false;
+        for (const QString& field : lhsStruct->fieldOrder) {
+            if (!valuesEqual(lhsStruct->fields.value(field), rhsStruct->fields.value(field)))
+                return false;
+        }
+        return true;
+    }
+    case TypeKind::Function:
+        return lhs.asFunction() == rhs.asFunction();
+    case TypeKind::Reference:
+    case TypeKind::Unknown:
+        return false;
+    }
+    return false;
+}
+
+QString joinMessageSuffix(BuiltinFunctionCall& call, size_t start)
+{
+    QString detail;
+    for (size_t i = start; i < call.args.size(); ++i) {
+        const SourceSpan span = i < call.argSpans.size() ? call.argSpans[i] : call.callSpan;
+        auto text = stringifyValue(call, call.args[i], span);
+        if (!text.has_value())
+            return {};
+        detail += *text;
+    }
+    return detail.isEmpty() ? QString() : QStringLiteral(": ") + detail;
+}
+
 AbelValue builtinToStr(BuiltinFunctionCall& call)
 {
     auto text = stringifyValue(call, call.args[0], call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
@@ -211,6 +292,68 @@ AbelValue builtinDebugAssert(BuiltinFunctionCall& call)
 
     call.ctx.error(QStringLiteral("E0598"), message, call.callSpan);
     return AbelValue::makeUnknown();
+}
+
+AbelValue builtinTestAssert(BuiltinFunctionCall& call)
+{
+    const AbelValue& condition = call.args[0];
+    if (condition.type().kind != TypeKind::Bool) {
+        const SourceSpan span = call.argSpans.empty() ? call.callSpan : call.argSpans[0];
+        call.ctx.error(QStringLiteral("E0597"),
+                       QStringLiteral("test_assert condition must be bool, got %1").arg(condition.type().displayName()),
+                       span);
+        return AbelValue::makeUnknown();
+    }
+    if (condition.asBool())
+        return AbelValue::makeVoid();
+
+    QString message = QStringLiteral("test assertion failed");
+    if (call.args.size() > 1) {
+        const QString suffix = joinMessageSuffix(call, 1);
+        if (call.ctx.hasError())
+            return AbelValue::makeUnknown();
+        message += suffix;
+    }
+    call.ctx.error(QStringLiteral("E0599"), message, call.callSpan);
+    return AbelValue::makeUnknown();
+}
+
+AbelValue builtinTestEqNe(BuiltinFunctionCall& call, bool wantEqual)
+{
+    const AbelValue& actual = call.args[0];
+    const AbelValue& expected = call.args[1];
+    const bool equal = valuesEqual(actual, expected);
+    if (equal == wantEqual)
+        return AbelValue::makeVoid();
+
+    const SourceSpan actualSpan = call.argSpans.empty() ? call.callSpan : call.argSpans[0];
+    const SourceSpan expectedSpan = call.argSpans.size() < 2 ? call.callSpan : call.argSpans[1];
+    auto actualText = stringifyValue(call, actual, actualSpan);
+    if (!actualText.has_value())
+        return AbelValue::makeUnknown();
+    auto expectedText = stringifyValue(call, expected, expectedSpan);
+    if (!expectedText.has_value())
+        return AbelValue::makeUnknown();
+
+    QString message = wantEqual
+        ? QStringLiteral("test_eq failed: expected %1, got %2").arg(*expectedText, *actualText)
+        : QStringLiteral("test_ne failed: both were %1").arg(*actualText);
+    const QString suffix = joinMessageSuffix(call, 2);
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    message += suffix;
+    call.ctx.error(QStringLiteral("E0599"), message, call.callSpan);
+    return AbelValue::makeUnknown();
+}
+
+AbelValue builtinTestEq(BuiltinFunctionCall& call)
+{
+    return builtinTestEqNe(call, true);
+}
+
+AbelValue builtinTestNe(BuiltinFunctionCall& call)
+{
+    return builtinTestEqNe(call, false);
 }
 
 AbelValue vectorLen(BuiltinMethodCall& call)
@@ -353,6 +496,9 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("chars_to_str"), 1, 1, false, builtinCharsToStr, QStringLiteral("convert vector<char> to str")});
     registry.registerFunction({QStringLiteral("debug_break"), 0, 0, false, builtinDebugBreak, QStringLiteral("emit a debug breakpoint diagnostic")});
     registry.registerFunction({QStringLiteral("debug_assert"), 1, -1, true, builtinDebugAssert, QStringLiteral("emit a diagnostic when condition is false")});
+    registry.registerFunction({QStringLiteral("test_assert"), 1, -1, true, builtinTestAssert, QStringLiteral("fail current test when condition is false")});
+    registry.registerFunction({QStringLiteral("test_eq"), 2, -1, true, builtinTestEq, QStringLiteral("fail current test when values are not equal")});
+    registry.registerFunction({QStringLiteral("test_ne"), 2, -1, true, builtinTestNe, QStringLiteral("fail current test when values are equal")});
 
     return registry;
 }

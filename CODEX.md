@@ -1025,9 +1025,14 @@ backend 排错顺序：
 ```abel
 debug_break();
 debug_assert(cond, "message=", value);
+test_assert(cond, "message=", value);
+test_eq(actual, expected, "case=", id);
+test_ne(left, right);
 ```
 
 Codex 生成 Abel 用户工程时，可以用 `debug_assert(bool, any...)` 表达必须成立的不变量；不要用它掩盖静态类型错误。`debug_assert` 的 message 使用 `build_string` 同一套 stringify 规则，失败时会输出 Abel 调用栈、源码行和 caret。
+
+在 `tests/**/*.abel` 中，优先用 `test_assert` / `test_eq` / `test_ne` 表达测试条件；它们失败时产生 E0599，并复用 Abel stack/source excerpt/caret。`test_eq(actual, expected, any...)` 的前两个值必须可比较且可 stringify，struct 需要用户提供 `to_str(T)`。
 
 ## 16. 验证命令
 

@@ -127,6 +127,9 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("chars_to_str")));
         QVERIFY(registry.hasFunction(QStringLiteral("debug_break")));
         QVERIFY(registry.hasFunction(QStringLiteral("debug_assert")));
+        QVERIFY(registry.hasFunction(QStringLiteral("test_assert")));
+        QVERIFY(registry.hasFunction(QStringLiteral("test_eq")));
+        QVERIFY(registry.hasFunction(QStringLiteral("test_ne")));
 
         abel::AbelRuntimeContext ctx;
         abel::BuiltinFunctionCall call{
@@ -208,6 +211,62 @@ private slots:
         QCOMPARE(ctx.diagnostics().back().code, QStringLiteral("E0598"));
         QVERIFY(ctx.diagnostics().back().message.contains(QStringLiteral("x=7")));
         QCOMPARE(failValue.type().kind, abel::TypeKind::Unknown);
+    }
+
+    void testAssertionsReportFailures()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+
+        abel::BuiltinFunctionCall okAssert{
+            ctx,
+            QStringLiteral("test_assert"),
+            {abel::AbelValue::makeBool(true), abel::AbelValue::makeString(QStringLiteral("ignored"))},
+            {},
+            {},
+        };
+        auto okAssertValue = registry.callFunction(std::move(okAssert));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(okAssertValue.type().kind, abel::TypeKind::Void);
+
+        abel::BuiltinFunctionCall okEq{
+            ctx,
+            QStringLiteral("test_eq"),
+            {abel::AbelValue::makeInt(7), abel::AbelValue::makeDouble(7.0)},
+            {},
+            {},
+        };
+        auto okEqValue = registry.callFunction(std::move(okEq));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(okEqValue.type().kind, abel::TypeKind::Void);
+
+        abel::BuiltinFunctionCall failEq{
+            ctx,
+            QStringLiteral("test_eq"),
+            {abel::AbelValue::makeString(QStringLiteral("actual")), abel::AbelValue::makeString(QStringLiteral("expected")), abel::AbelValue::makeString(QStringLiteral(" label"))},
+            {},
+            {},
+        };
+        auto failEqValue = registry.callFunction(std::move(failEq));
+        QVERIFY(!ctx.diagnostics().isEmpty());
+        QCOMPARE(ctx.diagnostics().back().code, QStringLiteral("E0599"));
+        QVERIFY(ctx.diagnostics().back().message.contains(QStringLiteral("test_eq failed")));
+        QVERIFY(ctx.diagnostics().back().message.contains(QStringLiteral(" label")));
+        QCOMPARE(failEqValue.type().kind, abel::TypeKind::Unknown);
+
+        abel::AbelRuntimeContext neCtx;
+        abel::BuiltinFunctionCall failNe{
+            neCtx,
+            QStringLiteral("test_ne"),
+            {abel::AbelValue::makeInt(4), abel::AbelValue::makeInt(4)},
+            {},
+            {},
+        };
+        auto failNeValue = registry.callFunction(std::move(failNe));
+        QVERIFY(!neCtx.diagnostics().isEmpty());
+        QCOMPARE(neCtx.diagnostics().back().code, QStringLiteral("E0599"));
+        QVERIFY(neCtx.diagnostics().back().message.contains(QStringLiteral("test_ne failed")));
+        QCOMPARE(failNeValue.type().kind, abel::TypeKind::Unknown);
     }
 };
 

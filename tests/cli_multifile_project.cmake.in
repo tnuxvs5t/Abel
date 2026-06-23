@@ -756,10 +756,9 @@ module cli.tests.pass;
 use cli.testlib.math as M;
 
 fn int main() {
-    if (M::helper() == 41) {
-        return 0;
-    }
-    return 1;
+    test_eq(M::helper(), 41, "helper");
+    test_assert(M::helper() > 0, "positive");
+    return 0;
 }
 ]=])
 
@@ -826,4 +825,52 @@ endif()
 string(FIND "${failing_test_command_stdout}" "0/1 test(s) passed" failing_test_command_summary_pos)
 if(failing_test_command_summary_pos EQUAL -1)
     message(FATAL_ERROR "abel test did not report failing summary:\n${failing_test_command_stdout}\n${failing_test_command_stderr}")
+endif()
+
+set(assertion_test_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-test-command-assertion")
+file(REMOVE_RECURSE "${assertion_test_project_dir}")
+file(MAKE_DIRECTORY "${assertion_test_project_dir}/src")
+file(MAKE_DIRECTORY "${assertion_test_project_dir}/tests")
+
+file(WRITE "${assertion_test_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-test-command-assertion",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${assertion_test_project_dir}/src/main.abel" [=[
+fn int main() {
+    return 0;
+}
+]=])
+
+file(WRITE "${assertion_test_project_dir}/tests/assertion.abel" [=[
+fn int main() {
+    test_eq("actual", "expected", " from test");
+    return 0;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test "${assertion_test_project_dir}"
+    RESULT_VARIABLE assertion_test_command_result
+    OUTPUT_VARIABLE assertion_test_command_stdout
+    ERROR_VARIABLE assertion_test_command_stderr
+)
+if(assertion_test_command_result EQUAL 0)
+    message(FATAL_ERROR "abel test unexpectedly accepted failing assertion:\n${assertion_test_command_stdout}\n${assertion_test_command_stderr}")
+endif()
+string(FIND "${assertion_test_command_stdout}" "test tests/assertion.abel ... FAILED" assertion_test_command_failed_pos)
+if(assertion_test_command_failed_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not report assertion test failure:\n${assertion_test_command_stdout}\n${assertion_test_command_stderr}")
+endif()
+string(FIND "${assertion_test_command_stderr}" "E0599" assertion_test_command_code_pos)
+if(assertion_test_command_code_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not print assertion diagnostic code:\n${assertion_test_command_stdout}\n${assertion_test_command_stderr}")
+endif()
+string(FIND "${assertion_test_command_stderr}" "test_eq failed" assertion_test_command_message_pos)
+if(assertion_test_command_message_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not print assertion diagnostic message:\n${assertion_test_command_stdout}\n${assertion_test_command_stderr}")
 endif()

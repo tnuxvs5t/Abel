@@ -28,6 +28,30 @@ bool isUnknownType(const AbelType& type)
     return type.kind == TypeKind::Unknown;
 }
 
+bool isTestComparable(const AbelType& lhs, const AbelType& rhs)
+{
+    if (lhs.kind == TypeKind::Unknown || rhs.kind == TypeKind::Unknown)
+        return true;
+    if (lhs.kind == TypeKind::Any || rhs.kind == TypeKind::Any)
+        return true;
+    if (lhs.kind == TypeKind::Reference && lhs.pointee)
+        return isTestComparable(*lhs.pointee, rhs);
+    if (rhs.kind == TypeKind::Reference && rhs.pointee)
+        return isTestComparable(lhs, *rhs.pointee);
+    if (lhs.isNumeric() && rhs.isNumeric())
+        return true;
+    if ((lhs.isPointer() && rhs.kind == TypeKind::Nullptr)
+        || (lhs.kind == TypeKind::Nullptr && rhs.isPointer()))
+        return true;
+    if (lhs.kind != rhs.kind)
+        return false;
+    if (lhs.kind == TypeKind::Vector)
+        return lhs.pointee && rhs.pointee && isTestComparable(*lhs.pointee, *rhs.pointee);
+    if (lhs.kind == TypeKind::Struct)
+        return lhs.spelling == rhs.spelling;
+    return lhs == rhs;
+}
+
 ExprType unknownExprType()
 {
     return {makeType(TypeKind::Unknown), ValueCategory::PRValue, false};
@@ -1311,6 +1335,34 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
+        if (name == QStringLiteral("test_assert")) {
+            if (!isUnknownType(lhs.type) && lhs.type.kind != TypeKind::Bool)
+                error(span, QStringLiteral("test_assert condition must be bool, got %1").arg(lhs.type.displayName()));
+            for (const auto& argExpr : args) {
+                ExprType arg = checkExpr(*argExpr);
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
+                    error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (name == QStringLiteral("test_eq") || name == QStringLiteral("test_ne")) {
+            if (args.empty())
+                return errorExpr(span, QStringLiteral("%1 expects at least two arguments").arg(name));
+            ExprType rhs = checkExpr(*args[0]);
+            if (!isTestComparable(lhs.type, rhs.type))
+                error(args[0]->span, QStringLiteral("%1 cannot compare %2 and %3")
+                                          .arg(name, lhs.type.displayName(), rhs.type.displayName()));
+            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
+                error(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
+            if (!isUnknownType(rhs.type) && !isStringifiable(rhs.type))
+                error(args[0]->span, QStringLiteral("cannot stringify %1").arg(rhs.type.displayName()));
+            for (size_t i = 1; i < args.size(); ++i) {
+                ExprType arg = checkExpr(*args[i]);
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
+                    error(args[i]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
     }
 
     return errorExpr(nameSpan, QStringLiteral("unknown pipe target '%1'").arg(name));
@@ -1579,6 +1631,38 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             if (!isUnknownType(cond.type) && cond.type.kind != TypeKind::Bool)
                 error(expr.args[0]->span, QStringLiteral("debug_assert condition must be bool, got %1").arg(cond.type.displayName()));
             for (size_t i = 1; i < expr.args.size(); ++i) {
+                ExprType arg = checkExpr(*expr.args[i]);
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
+                    error(expr.args[i]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (name->name == QStringLiteral("test_assert")) {
+            if (argc < 1)
+                return errorExpr(expr.span, QStringLiteral("test_assert expects at least one argument"));
+            ExprType cond = checkExpr(*expr.args[0]);
+            if (!isUnknownType(cond.type) && cond.type.kind != TypeKind::Bool)
+                error(expr.args[0]->span, QStringLiteral("test_assert condition must be bool, got %1").arg(cond.type.displayName()));
+            for (size_t i = 1; i < expr.args.size(); ++i) {
+                ExprType arg = checkExpr(*expr.args[i]);
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
+                    error(expr.args[i]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (name->name == QStringLiteral("test_eq") || name->name == QStringLiteral("test_ne")) {
+            if (argc < 2)
+                return errorExpr(expr.span, QStringLiteral("%1 expects at least two arguments").arg(name->name));
+            ExprType lhs = checkExpr(*expr.args[0]);
+            ExprType rhs = checkExpr(*expr.args[1]);
+            if (!isTestComparable(lhs.type, rhs.type))
+                error(expr.args[1]->span, QStringLiteral("%1 cannot compare %2 and %3")
+                                           .arg(name->name, lhs.type.displayName(), rhs.type.displayName()));
+            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
+                error(expr.args[0]->span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
+            if (!isUnknownType(rhs.type) && !isStringifiable(rhs.type))
+                error(expr.args[1]->span, QStringLiteral("cannot stringify %1").arg(rhs.type.displayName()));
+            for (size_t i = 2; i < expr.args.size(); ++i) {
                 ExprType arg = checkExpr(*expr.args[i]);
                 if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
                     error(expr.args[i]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
