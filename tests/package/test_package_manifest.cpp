@@ -179,6 +179,192 @@ private slots:
         QVERIFY(QFileInfo(lockedDep.value(QStringLiteral("resolvedPath")).toString()).isDir());
     }
 
+    void resolvesPathDependencyVersionRequirements()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.3",
+                      "entry": "src/main.abel"
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep", "version": "^0.2.0"}
+                      ]
+                  })"));
+
+        auto lock = abel::updatePackageLock(root.absoluteFilePath(QStringLiteral("app")));
+        for (const auto& d : lock.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(lock.diagnostics.isEmpty());
+        QCOMPARE(lock.entries.size(), 1);
+        QCOMPARE(lock.entries.front().name, QStringLiteral("dep"));
+        QCOMPARE(lock.entries.front().version, QStringLiteral("0.2.3"));
+        QCOMPARE(lock.entries.front().versionRequirement, QStringLiteral("^0.2.0"));
+
+        QFile file(lock.lockFile);
+        QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+        const QJsonObject lockedDep = doc.object().value(QStringLiteral("packages")).toArray().at(0).toObject();
+        QCOMPARE(lockedDep.value(QStringLiteral("version")).toString(), QStringLiteral("0.2.3"));
+        QCOMPARE(lockedDep.value(QStringLiteral("versionRequirement")).toString(), QStringLiteral("^0.2.0"));
+
+        auto graph = abel::packageGraphFromDirectory(root.absoluteFilePath(QStringLiteral("app")));
+        for (const auto& d : graph.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(graph.diagnostics.isEmpty());
+        QCOMPARE(graph.dependencies.size(), 1);
+        QCOMPARE(graph.dependencies.front().version, QStringLiteral("0.2.3"));
+    }
+
+    void rejectsUnsatisfiedPathDependencyVersion()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.3.0",
+                      "entry": "src/main.abel"
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep", "version": "^0.2.0"}
+                      ]
+                  })"));
+
+        auto lock = abel::resolvePackageLock(root.absoluteFilePath(QStringLiteral("app")));
+        QVERIFY(!lock.diagnostics.isEmpty());
+        bool sawVersion = false;
+        for (const auto& d : lock.diagnostics)
+            sawVersion = sawVersion || d.message.contains(QStringLiteral("version"));
+        QVERIFY(sawVersion);
+        QCOMPARE(lock.entries.size(), 0);
+    }
+
+    void rejectsSharedPathDependencyVersionConflict()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("core/src")));
+        QVERIFY(root.mkpath(QStringLiteral("left/src")));
+        QVERIFY(root.mkpath(QStringLiteral("right/src")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("core/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("core/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "core",
+                      "version": "1.5.0",
+                      "entry": "src/main.abel"
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("left/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("left/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "left",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "core", "kind": "path", "path": "../core", "version": "^1.0.0"}
+                      ]
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("right/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("right/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "right",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "core", "kind": "path", "path": "../core", "version": "^2.0.0"}
+                      ]
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "left", "kind": "path", "path": "../left"},
+                          {"name": "right", "kind": "path", "path": "../right"}
+                      ]
+                  })"));
+
+        auto lock = abel::resolvePackageLock(root.absoluteFilePath(QStringLiteral("app")));
+        QVERIFY(!lock.diagnostics.isEmpty());
+        bool sawCore = false;
+        for (const auto& d : lock.diagnostics)
+            sawCore = sawCore || d.message.contains(QStringLiteral("core"));
+        QVERIFY(sawCore);
+    }
+
+    void rejectsInvalidVersionRequirementSyntax()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.0",
+                      "entry": "src/main.abel"
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep", "version": "^not-a-version"}
+                      ]
+                  })"));
+
+        auto parsed = abel::packageManifestFromDirectory(root.absoluteFilePath(QStringLiteral("app")));
+        QVERIFY(!parsed.diagnostics.isEmpty());
+        bool sawRequirement = false;
+        for (const auto& d : parsed.diagnostics)
+            sawRequirement = sawRequirement || d.message.contains(QStringLiteral("version requirement"));
+        QVERIFY(sawRequirement);
+    }
+
     void rejectsMissingPathDependency()
     {
         QTemporaryDir dir;
@@ -686,6 +872,58 @@ extern "C" int dep_backend_answer() {
                       "entry": "src/main.abel",
                       "dependencies": [
                           {"name": "other", "kind": "path", "path": "../other"}
+                      ]
+                  })"));
+
+        auto stale = abel::packageGraphFromDirectory(root.absoluteFilePath(QStringLiteral("app")));
+        QVERIFY(!stale.diagnostics.isEmpty());
+        bool sawStale = false;
+        for (const auto& d : stale.diagnostics)
+            sawStale = sawStale || d.message.contains(QStringLiteral("stale"));
+        QVERIFY(sawStale);
+    }
+
+    void packageGraphRejectsStaleLockfileWhenVersionRequirementChanges()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.3",
+                      "entry": "src/main.abel"
+                  })"));
+        const QString appManifest = root.absoluteFilePath(QStringLiteral("app/abel.package.json"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(appManifest,
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep", "version": "^0.2.0"}
+                      ]
+                  })"));
+
+        auto graph = abel::updatePackageGraph(root.absoluteFilePath(QStringLiteral("app")));
+        QVERIFY(graph.diagnostics.isEmpty());
+        QCOMPARE(graph.entries.size(), 1);
+        QCOMPARE(graph.entries.front().versionRequirement, QStringLiteral("^0.2.0"));
+
+        writeText(appManifest,
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep", "version": "~0.2.0"}
                       ]
                   })"));
 

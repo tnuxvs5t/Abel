@@ -65,6 +65,7 @@ struct PackageInitResult {
 struct PackageLockEntry {
     QString name;
     QString version;
+    QString versionRequirement;
     QString kind;
     QString source;
     QString resolvedPath;

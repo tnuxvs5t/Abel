@@ -432,6 +432,229 @@ bool buildBackendArtifact(const PackageResolvedResource& resource,
                              diagnostics);
 }
 
+struct SemVer {
+    int major = 0;
+    int minor = 0;
+    int patch = 0;
+};
+
+bool parseVersionComponent(const QString& text, int& out)
+{
+    if (text.isEmpty())
+        return false;
+    for (const QChar ch : text) {
+        if (!ch.isDigit())
+            return false;
+    }
+    bool ok = false;
+    const int value = text.toInt(&ok);
+    if (!ok)
+        return false;
+    out = value;
+    return true;
+}
+
+bool parseSemVerCore(const QString& text, SemVer& out, int* partsOut = nullptr, bool allowPartial = false)
+{
+    const QString trimmed = text.trimmed();
+    if (trimmed.isEmpty() || trimmed.contains(QLatin1Char('-')) || trimmed.contains(QLatin1Char('+')))
+        return false;
+    const QStringList parts = trimmed.split(QLatin1Char('.'));
+    if (parts.isEmpty() || parts.size() > 3 || (!allowPartial && parts.size() != 3))
+        return false;
+
+    int values[3] = {0, 0, 0};
+    for (qsizetype i = 0; i < parts.size(); ++i) {
+        if (!parseVersionComponent(parts.at(i), values[i]))
+            return false;
+    }
+    out.major = values[0];
+    out.minor = values[1];
+    out.patch = values[2];
+    if (partsOut)
+        *partsOut = static_cast<int>(parts.size());
+    return true;
+}
+
+int compareSemVer(const SemVer& a, const SemVer& b)
+{
+    if (a.major != b.major)
+        return a.major < b.major ? -1 : 1;
+    if (a.minor != b.minor)
+        return a.minor < b.minor ? -1 : 1;
+    if (a.patch != b.patch)
+        return a.patch < b.patch ? -1 : 1;
+    return 0;
+}
+
+QString normalizedVersionRequirement(QString requirement)
+{
+    requirement = requirement.trimmed();
+    for (qsizetype i = 0; i < requirement.size(); ++i) {
+        if (requirement[i].isSpace() || requirement[i] == QLatin1Char(','))
+            requirement[i] = QLatin1Char(' ');
+    }
+    return requirement;
+}
+
+QStringList versionRequirementTokens(const QString& requirement)
+{
+    const QString normalized = normalizedVersionRequirement(requirement);
+    if (normalized.isEmpty())
+        return {};
+    return normalized.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+}
+
+bool parseRequirementVersion(const QString& text, SemVer& out, int* partsOut, QString* error)
+{
+    if (!parseSemVerCore(text, out, partsOut, true)) {
+        if (error)
+            *error = QStringLiteral("invalid SemVer requirement component '%1'").arg(text);
+        return false;
+    }
+    return true;
+}
+
+bool validateVersionRequirementSyntax(const QString& requirement, QString* error = nullptr)
+{
+    const QString trimmed = requirement.trimmed();
+    if (trimmed.isEmpty() || trimmed == QStringLiteral("*"))
+        return true;
+
+    const QStringList tokens = versionRequirementTokens(trimmed);
+    if (tokens.isEmpty())
+        return true;
+
+    for (const QString& token : tokens) {
+        if (token == QStringLiteral("*"))
+            continue;
+
+        QString versionText = token;
+        if (versionText.startsWith(QStringLiteral(">=")) || versionText.startsWith(QStringLiteral("<=")))
+            versionText = versionText.mid(2);
+        else if (versionText.startsWith(QLatin1Char('>'))
+                 || versionText.startsWith(QLatin1Char('<'))
+                 || versionText.startsWith(QLatin1Char('='))
+                 || versionText.startsWith(QLatin1Char('^'))
+                 || versionText.startsWith(QLatin1Char('~'))) {
+            versionText = versionText.mid(1);
+        }
+
+        SemVer ignored;
+        int ignoredParts = 0;
+        if (!parseRequirementVersion(versionText, ignored, &ignoredParts, error))
+            return false;
+    }
+    return true;
+}
+
+bool satisfiesComparator(const SemVer& actual, const QString& op, const SemVer& expected)
+{
+    const int cmp = compareSemVer(actual, expected);
+    if (op == QStringLiteral(">"))
+        return cmp > 0;
+    if (op == QStringLiteral(">="))
+        return cmp >= 0;
+    if (op == QStringLiteral("<"))
+        return cmp < 0;
+    if (op == QStringLiteral("<="))
+        return cmp <= 0;
+    return cmp == 0;
+}
+
+SemVer caretUpperBound(const SemVer& lower)
+{
+    SemVer upper;
+    if (lower.major > 0) {
+        upper.major = lower.major + 1;
+        return upper;
+    }
+    if (lower.minor > 0) {
+        upper.minor = lower.minor + 1;
+        return upper;
+    }
+    upper.patch = lower.patch + 1;
+    return upper;
+}
+
+SemVer tildeUpperBound(const SemVer& lower, int parts)
+{
+    SemVer upper;
+    if (parts <= 1) {
+        upper.major = lower.major + 1;
+        return upper;
+    }
+    upper.major = lower.major;
+    upper.minor = lower.minor + 1;
+    return upper;
+}
+
+bool versionSatisfiesRequirement(const QString& version, const QString& requirement, QString* error = nullptr)
+{
+    if (error)
+        error->clear();
+
+    SemVer actual;
+    if (!parseSemVerCore(version, actual)) {
+        if (error)
+            *error = QStringLiteral("package version '%1' is not supported; expected SemVer major.minor.patch").arg(version);
+        return false;
+    }
+
+    const QString trimmed = requirement.trimmed();
+    if (trimmed.isEmpty() || trimmed == QStringLiteral("*"))
+        return true;
+
+    QString syntaxError;
+    if (!validateVersionRequirementSyntax(trimmed, &syntaxError)) {
+        if (error)
+            *error = syntaxError;
+        return false;
+    }
+
+    for (QString token : versionRequirementTokens(trimmed)) {
+        if (token == QStringLiteral("*"))
+            continue;
+
+        if (token.startsWith(QLatin1Char('^'))) {
+            SemVer lower;
+            int parts = 0;
+            parseRequirementVersion(token.mid(1), lower, &parts, nullptr);
+            const SemVer upper = caretUpperBound(lower);
+            if (compareSemVer(actual, lower) < 0 || compareSemVer(actual, upper) >= 0)
+                return false;
+            continue;
+        }
+
+        if (token.startsWith(QLatin1Char('~'))) {
+            SemVer lower;
+            int parts = 0;
+            parseRequirementVersion(token.mid(1), lower, &parts, nullptr);
+            const SemVer upper = tildeUpperBound(lower, parts);
+            if (compareSemVer(actual, lower) < 0 || compareSemVer(actual, upper) >= 0)
+                return false;
+            continue;
+        }
+
+        QString op = QStringLiteral("=");
+        QString versionText = token;
+        if (token.startsWith(QStringLiteral(">=")) || token.startsWith(QStringLiteral("<="))) {
+            op = token.left(2);
+            versionText = token.mid(2);
+        } else if (token.startsWith(QLatin1Char('>')) || token.startsWith(QLatin1Char('<')) || token.startsWith(QLatin1Char('='))) {
+            op = token.left(1);
+            versionText = token.mid(1);
+        }
+
+        SemVer expected;
+        int parts = 0;
+        parseRequirementVersion(versionText, expected, &parts, nullptr);
+        if (!satisfiesComparator(actual, op, expected))
+            return false;
+    }
+    return true;
+}
+
 PackageDependency parseDependency(const QJsonObject& object,
                                   QList<Diagnostic>& diagnostics,
                                   const SourceSpan& span)
@@ -440,6 +663,13 @@ PackageDependency parseDependency(const QJsonObject& object,
     dependency.name = requiredString(object, QStringLiteral("name"), diagnostics, span);
     dependency.kind = requiredString(object, QStringLiteral("kind"), diagnostics, span);
     dependency.version = optionalString(object, QStringLiteral("version"), QString());
+    QString versionRequirementError;
+    if (!validateVersionRequirementSyntax(dependency.version, &versionRequirementError)) {
+        addPackageError(diagnostics,
+                        QStringLiteral("dependency '%1' has invalid version requirement '%2': %3")
+                            .arg(dependency.name, dependency.version, versionRequirementError),
+                        span);
+    }
     if (dependency.kind != QStringLiteral("path")) {
         addPackageError(diagnostics,
                         QStringLiteral("dependency '%1' kind '%2' is not supported yet; only 'path' is supported")
@@ -547,9 +777,6 @@ void resolvePackageDependencies(const PackageManifest& package,
                             span);
             continue;
         }
-        if (seen.contains(key))
-            continue;
-
         auto parsed = packageManifestFromDirectory(resolvedPath);
         result.diagnostics.append(parsed.diagnostics);
         if (!parsed.ok())
@@ -561,10 +788,24 @@ void resolvePackageDependencies(const PackageManifest& package,
                             span);
             continue;
         }
+        QString versionError;
+        if (!versionSatisfiesRequirement(parsed.package.version, dependency.version, &versionError)) {
+            addPackageError(result.diagnostics,
+                            versionError.isEmpty()
+                                ? QStringLiteral("path dependency '%1' requires version '%2' but package is '%3'")
+                                      .arg(dependency.name, dependency.version, parsed.package.version)
+                                : QStringLiteral("path dependency '%1' version check failed: %2")
+                                      .arg(dependency.name, versionError),
+                            span);
+            continue;
+        }
+        if (seen.contains(key))
+            continue;
 
         PackageLockEntry entry;
         entry.name = parsed.package.name;
         entry.version = parsed.package.version;
+        entry.versionRequirement = dependency.version;
         entry.kind = dependency.kind;
         entry.source = dependency.path;
         entry.resolvedPath = key;
@@ -582,6 +823,8 @@ QJsonObject lockEntryToJson(const PackageLockEntry& entry)
     QJsonObject object;
     object.insert(QStringLiteral("name"), entry.name);
     object.insert(QStringLiteral("version"), entry.version);
+    if (!entry.versionRequirement.isEmpty())
+        object.insert(QStringLiteral("versionRequirement"), entry.versionRequirement);
     object.insert(QStringLiteral("kind"), entry.kind);
     object.insert(QStringLiteral("source"), entry.source);
     object.insert(QStringLiteral("resolvedPath"), entry.resolvedPath);
@@ -625,6 +868,14 @@ PackageLockEntry lockEntryFromJson(const QJsonObject& object,
     PackageLockEntry entry;
     entry.name = requiredString(object, QStringLiteral("name"), diagnostics, span);
     entry.version = requiredString(object, QStringLiteral("version"), diagnostics, span);
+    entry.versionRequirement = optionalString(object, QStringLiteral("versionRequirement"), QString());
+    QString versionRequirementError;
+    if (!validateVersionRequirementSyntax(entry.versionRequirement, &versionRequirementError)) {
+        addPackageError(diagnostics,
+                        QStringLiteral("lockfile package '%1' has invalid version requirement '%2': %3")
+                            .arg(entry.name, entry.versionRequirement, versionRequirementError),
+                        span);
+    }
     entry.kind = requiredString(object, QStringLiteral("kind"), diagnostics, span);
     entry.source = requiredString(object, QStringLiteral("source"), diagnostics, span);
     entry.resolvedPath = requiredString(object, QStringLiteral("resolvedPath"), diagnostics, span);
@@ -648,6 +899,7 @@ bool sameLockEntry(const PackageLockEntry& a, const PackageLockEntry& b)
 {
     return a.name == b.name
         && a.version == b.version
+        && a.versionRequirement == b.versionRequirement
         && a.kind == b.kind
         && a.source == b.source
         && absolutePathFrom(QString(), a.resolvedPath) == absolutePathFrom(QString(), b.resolvedPath);
@@ -1024,6 +1276,17 @@ PackageGraphResult packageGraphFromDirectory(const QString& dir)
                             span);
             continue;
         }
+        QString versionError;
+        if (!versionSatisfiesRequirement(dependency.package.version, entry.versionRequirement, &versionError)) {
+            addPackageError(graph.diagnostics,
+                            versionError.isEmpty()
+                                ? QStringLiteral("lockfile package '%1' requires version '%2' but package is '%3'")
+                                      .arg(entry.name, entry.versionRequirement, dependency.package.version)
+                                : QStringLiteral("lockfile package '%1' version check failed: %2")
+                                      .arg(entry.name, versionError),
+                            span);
+            continue;
+        }
         graph.dependencies.push_back(dependency.package);
         appendPackageArtifacts(dependency.package, graph);
     }
@@ -1299,6 +1562,15 @@ PackageManifestParseResult packageManifestFromJson(const QJsonObject& object,
     result.package.name = requiredString(object, QStringLiteral("name"), result.diagnostics, span);
     result.package.version = requiredString(object, QStringLiteral("version"), result.diagnostics, span);
     result.package.entry = requiredString(object, QStringLiteral("entry"), result.diagnostics, span);
+    if (!result.package.version.isEmpty()) {
+        SemVer ignored;
+        if (!parseSemVerCore(result.package.version, ignored)) {
+            addPackageError(result.diagnostics,
+                            QStringLiteral("package version '%1' is not supported; expected SemVer major.minor.patch")
+                                .arg(result.package.version),
+                            span);
+        }
+    }
 
     const QJsonValue backendArtifacts = object.value(QStringLiteral("backendArtifacts"));
     if (!backendArtifacts.isUndefined()) {

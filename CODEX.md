@@ -22,7 +22,7 @@
 
 不要默认修改 Abel 编译器/解释器源码。
 不要把用户项目扩成大型框架。
-不要幻想 Abel 已经有 registry、semver solver、远程 download cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、lockfile、package graph consumption、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、add/remove/update/build 做成早期闭环。
+不要幻想 Abel 已经有 registry、完整 semver solver、远程 download cache、JIT、模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、SemVer version requirement 第一片、lockfile、package graph consumption、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、add/remove/update/build 做成早期闭环。
 
 当前 Abel 的正确定位：
 
@@ -34,7 +34,7 @@ C/C++ 值模型
 + builtin print / println / build_string
 + backend block 调 Qt/C++ plugin
 + abel.package.json 项目入口骨架
-+ 本地 path dependency + abel.lock.json
++ 本地 path dependency + SemVer version requirement + abel.lock.json
 + package graph 消费依赖 backendArtifacts
 + backendArtifacts[].build 的 CMake 自动构建第一片
 + .abel/cache/backend 项目级 backend artifact 缓存与 .abel-cache.json sidecar
@@ -193,7 +193,7 @@ $ABEL_BIN run .
 - `fn int main()` 的返回值会成为进程退出码；
 - 普通成功建议 `return 0;`；
 - 如果要观察计算结果，优先用 `println(...)` 输出，不要只依赖退出码；
-- 当前项目入口、本地 path dependency、lockfile、backend artifact 项目缓存、sidecar 失效检测与 CMake backend artifact 自动构建只是早期包管理闭环；不要假设已有成熟模块系统、registry、semver solver、远程下载缓存或完整 ABI/版本化缓存失效。
+- 当前项目入口、本地 path dependency、SemVer version requirement、lockfile、backend artifact 项目缓存、sidecar 失效检测与 CMake backend artifact 自动构建只是早期包管理闭环；不要假设已有成熟模块系统、registry、完整 semver solver、远程下载缓存或完整 ABI/版本化缓存失效。
 
 ---
 
