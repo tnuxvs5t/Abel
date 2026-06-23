@@ -32,6 +32,56 @@ ExprType unknownExprType()
     return {makeType(TypeKind::Unknown), ValueCategory::PRValue, false};
 }
 
+bool exprIsLiteralTrue(const ExprNode& expr)
+{
+    auto* literal = dynamic_cast<const LiteralExprNode*>(&expr);
+    return literal
+        && literal->kind == LiteralExprNode::Kind::Bool
+        && literal->text == QStringLiteral("true");
+}
+
+bool blockAlwaysReturns(const BlockStmtNode& block);
+
+bool stmtAlwaysReturns(const StmtNode& stmt)
+{
+    if (dynamic_cast<const ReturnStmtNode*>(&stmt))
+        return true;
+
+    if (auto* block = dynamic_cast<const BlockStmtNode*>(&stmt))
+        return blockAlwaysReturns(*block);
+
+    if (auto* ifStmt = dynamic_cast<const IfStmtNode*>(&stmt)) {
+        if (ifStmt->branches.empty())
+            return false;
+        bool hasElse = false;
+        for (const auto& branch : ifStmt->branches) {
+            if (!branch.condition)
+                hasElse = true;
+            if (!branch.body || !blockAlwaysReturns(*branch.body))
+                return false;
+        }
+        return hasElse;
+    }
+
+    if (auto* whileStmt = dynamic_cast<const WhileStmtNode*>(&stmt)) {
+        return whileStmt->condition
+            && exprIsLiteralTrue(*whileStmt->condition)
+            && whileStmt->body
+            && blockAlwaysReturns(*whileStmt->body);
+    }
+
+    return false;
+}
+
+bool blockAlwaysReturns(const BlockStmtNode& block)
+{
+    for (const auto& stmt : block.statements) {
+        if (stmt && stmtAlwaysReturns(*stmt))
+            return true;
+    }
+    return false;
+}
+
 } // namespace
 
 TypeCheckResult TypeChecker::check(const ProgramNode& program)
@@ -204,6 +254,7 @@ void TypeChecker::checkConstructor(const StructDeclNode& owner, const Constructo
 
 void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNode& method)
 {
+    const qsizetype diagnosticsBeforeCallable = m_diagnostics.size();
     const AbelType returnType = typeFromAst(*method.returnType);
     if (!isSupportedType(returnType)) {
         error(method.returnType->span, QStringLiteral("unsupported return type '%1'").arg(method.returnType->displayName()));
@@ -223,12 +274,21 @@ void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNod
     }
     if (method.body)
         checkBlock(*method.body, false);
+    if (returnType.kind != TypeKind::Void
+        && method.body
+        && m_diagnostics.size() == diagnosticsBeforeCallable
+        && !blockAlwaysReturns(*method.body)) {
+        error(method.span,
+              QStringLiteral("method '%1' may end without returning %2")
+                  .arg(method.name, returnType.displayName()));
+    }
     popScope();
     m_currentStruct.clear();
 }
 
 void TypeChecker::checkFunction(const FunctionDeclNode& fn)
 {
+    const qsizetype diagnosticsBeforeCallable = m_diagnostics.size();
     const AbelType returnType = typeFromAst(*fn.returnType);
     if (!isSupportedType(returnType)) {
         error(fn.returnType->span, QStringLiteral("unsupported return type '%1'").arg(fn.returnType->displayName()));
@@ -261,6 +321,15 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
 
     if (!fn.debt && fn.body)
         checkBlock(*fn.body, false);
+    if (!fn.debt
+        && returnType.kind != TypeKind::Void
+        && fn.body
+        && m_diagnostics.size() == diagnosticsBeforeCallable
+        && !blockAlwaysReturns(*fn.body)) {
+        error(fn.span,
+              QStringLiteral("function '%1' may end without returning %2")
+                  .arg(fn.name, returnType.displayName()));
+    }
     popScope();
 }
 
@@ -1014,6 +1083,7 @@ ExprType TypeChecker::checkFunctionValueCall(const AbelType& functionType,
 
 ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
 {
+    const qsizetype diagnosticsBeforeLambda = m_diagnostics.size();
     AbelType returnType = typeFromAst(*expr.returnType);
     if (!isSupportedType(returnType))
         error(expr.returnType->span, QStringLiteral("unsupported lambda return type '%1'").arg(expr.returnType->displayName()));
@@ -1088,6 +1158,13 @@ ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
     for (size_t i = 0; i < params.size(); ++i)
         defineVariable(expr.paramNames[static_cast<qsizetype>(i)], params[i], false, expr.span);
     checkBlock(*expr.ownedBody, false);
+    if (returnType.kind != TypeKind::Void
+        && m_diagnostics.size() == diagnosticsBeforeLambda
+        && !blockAlwaysReturns(*expr.ownedBody)) {
+        error(expr.span,
+              QStringLiteral("lambda may end without returning %1")
+                  .arg(returnType.displayName()));
+    }
     popScope();
     popScope();
     m_scopes = previousScopes;

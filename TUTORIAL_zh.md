@@ -1412,7 +1412,37 @@ if (x) {
 }
 ```
 
-### 17.3 backend 声明和插件 symbol 不一致
+### 17.3 非 void 函数漏写 return
+
+`fn int`、返回 `str` 的函数、返回非 void 的方法和 lambda 都必须保证所有可静态确认的路径返回值。当前 TypeChecker 已做保守 definite-return 检查：
+
+```abel
+fn int bad() {
+    int x = 1;
+}
+```
+
+`abel check` 会直接报：
+
+```text
+function 'bad' may end without returning int
+```
+
+允许：
+
+```abel
+fn int ok(bool b) {
+    if (b) {
+        return 1;
+    } else {
+        return 2;
+    }
+}
+```
+
+如果函数体已经有根因错误，例如调用未知函数，TypeChecker 不再额外追加“可能缺 return”的噪音，避免一个根因污染成诊断瀑布。运行期仍保留 ended-without-return 防线，但正常 `abel run` 会先执行同一套 check。
+
+### 17.4 backend 声明和插件 symbol 不一致
 
 三处必须咬合：
 
@@ -1424,7 +1454,7 @@ resource symbols:   MathSystem.fast_add
 
 任一处错，ResourceNode/BackendRegistry 应给 E06xx 类诊断。
 
-### 17.4 运行期错误怎么看
+### 17.5 运行期错误怎么看
 
 Abel 的运行期诊断已经包含 Abel 调用栈、源码位置、源码行 excerpt 和 caret。先看 primary error，再沿 `stack:` 往下看调用链：
 

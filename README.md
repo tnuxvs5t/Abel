@@ -8,6 +8,7 @@ Current implementation scope:
 - C/C++-style value model with storage, lvalues/prvalues, pointers, references, structs, and vector values;
 - `any`, `any...`, lambda/function values, control flow, and core builtins such as `build_string`, `print`, and vector methods;
 - backend blocks, resource-node JSON, `QPluginLoader` loading, and Qt/C++ plugin dispatch through `libabelcore.so`;
+- static definite-return checking for functions, methods, and lambdas, so non-void callables missing a return are rejected by `abel check` before `abel run`;
 - runtime diagnostics with Abel stack frames, `file:line:column`, source-line excerpts, and caret lines for the primary error and stack call sites;
 - `std.debug` first slice through builtins `debug_break()` and `debug_assert(bool, any...)`, both reporting through the same runtime diagnostic/stack/source-location path;
 - v1 package skeleton with `abel init [project-dir]`, `abel.package.json`, `abel add/remove/update/build`, local path dependencies, local registry dependencies that pick the highest satisfying SemVer version into `.abel/cache/packages`, `abel.lock.json`, package graph consumption, CMake backend artifact auto-build metadata, and project-local backend artifact cache under `.abel/cache/backend` with `.abel-cache.json` sidecar validation;

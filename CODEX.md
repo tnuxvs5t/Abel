@@ -240,6 +240,16 @@ fn void main() {
 }
 ```
 
+非 `void` 函数、方法和 lambda 必须保证所有可静态确认的路径返回值。生成 Abel 代码时不要写这种函数：
+
+```abel
+fn int bad() {
+    int x = 1;
+}
+```
+
+`abel check` 会在运行前报 `may end without returning ...`。如果函数体已有根因类型错误，Abel 会尽量避免再追加缺 return 噪音；Codex 修代码时应先修第一条根因诊断。
+
 ### 5.3 注释
 
 不要在生成的 Abel 源码里写 `//` 或 `/* */` 注释，除非你已经用当前 Abel lexer 验证过注释支持。
@@ -991,6 +1001,7 @@ backend 排错顺序：
 运行期错误排错顺序：
 
 ```text
+0. 若 abel check 已经报错，先修静态错误；例如 non-void callable 缺 return 会在 check 阶段被挡住。
 1. 先读 primary diagnostic 的源码行 excerpt 和 caret；那是当前崩溃点。
 2. 再读 stack 第一帧的源码行；那是直接调用点。
 3. 继续沿 stack 往下找 main / method / lambda / backend 的进入路径。

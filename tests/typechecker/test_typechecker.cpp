@@ -330,6 +330,94 @@ private slots:
         QCOMPARE(countMessagesContaining(result, QStringLiteral("requires vector receiver")), 0);
     }
 
+    void rejectsMissingReturnInFunctionAtCheckTime()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int f() {
+                int x = 1;
+            }
+
+            fn int main() {
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QCOMPARE(result.diagnostics.size(), 1);
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("function 'f' may end without returning int")));
+    }
+
+    void acceptsDefiniteReturnThroughIfElseAndInfiniteWhile()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int choose(bool b) {
+                if (b) {
+                    return 1;
+                } else {
+                    return 2;
+                }
+            }
+
+            fn int spin() {
+                while (true) {
+                    return 3;
+                }
+            }
+
+            fn int main() {
+                return choose(true) + spin();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsMissingReturnInMethodAndLambdaAtCheckTime()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                fn int get() {
+                    int x = 1;
+                }
+            }
+
+            fn int main() {
+                func int() f = lambda [] int() {
+                    int y = 2;
+                };
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QCOMPARE(result.diagnostics.size(), 2);
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("method 'get' may end without returning int")), 1);
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("lambda may end without returning int")), 1);
+    }
+
+    void suppressesMissingReturnWhenBodyAlreadyHasRootError()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int f() {
+                missing();
+            }
+
+            fn int main() {
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QCOMPARE(result.diagnostics.size(), 1);
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("unknown function 'missing'")));
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("may end without returning")), 0);
+    }
+
     void rejectsBreakOutsideLoop()
     {
         auto result = checkSource(QStringLiteral("fn int main() { break; return 0; }"));
