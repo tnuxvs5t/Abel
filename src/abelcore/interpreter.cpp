@@ -484,19 +484,19 @@ bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext
         if (!backend)
             continue;
         const auto existing = m_backends.value(backend->name);
-        bool duplicateInPackage = false;
+        bool duplicateInModule = false;
         for (const auto& other : existing) {
-            if (other.decl && other.decl->packageName == backend->packageName) {
+            if (other.decl && sameDeclNamespace(*other.decl, *backend)) {
                 ctx.error(QStringLiteral("E0601"),
-                          QStringLiteral("duplicate backend '%1' in package '%2'")
-                              .arg(backend->name, backend->packageName),
+                          QStringLiteral("duplicate backend '%1' in package '%2' module '%3'")
+                              .arg(backend->name, backend->packageName, backend->moduleName),
                           backend->span);
                 ok = false;
-                duplicateInPackage = true;
+                duplicateInModule = true;
                 break;
             }
         }
-        if (duplicateInPackage)
+        if (duplicateInModule)
             continue;
         BackendRuntimeInfo info;
         info.decl = backend;

@@ -2,6 +2,7 @@
 
 #include <QSet>
 
+#include <algorithm>
 #include <optional>
 
 namespace abel {
@@ -175,6 +176,59 @@ bool blockAlwaysReturns(const BlockStmtNode& block)
     return false;
 }
 
+QString declOrigin(const DeclNode& decl, const QString& symbolName)
+{
+    const QString qualified = decl.moduleName.isEmpty()
+        ? symbolName
+        : decl.moduleName + QStringLiteral("::") + symbolName;
+    if (decl.packageName.isEmpty())
+        return qualified;
+    return QStringLiteral("%1 (package %2)").arg(qualified, decl.packageName);
+}
+
+template <typename DeclPtr>
+QStringList declOriginList(const QList<DeclPtr>& decls, auto nameOf)
+{
+    QStringList origins;
+    for (const auto* decl : decls) {
+        if (!decl)
+            continue;
+        origins.push_back(declOrigin(*decl, nameOf(*decl)));
+    }
+    origins.removeDuplicates();
+    std::sort(origins.begin(), origins.end());
+    return origins;
+}
+
+template <typename DeclPtr>
+QList<SourceSpan> declSpanList(const QList<DeclPtr>& decls)
+{
+    QList<SourceSpan> spans;
+    for (const auto* decl : decls) {
+        if (decl)
+            spans.push_back(decl->span);
+    }
+    return spans;
+}
+
+QString ambiguityExplanation(const QString& kind, const QStringList& origins)
+{
+    return QStringLiteral("candidate %1s: %2").arg(kind, origins.join(QStringLiteral(", ")));
+}
+
+QStringList qualifySuggestions(const QString& kind, const QStringList& origins)
+{
+    QStringList suggestions;
+    QString example = origins.isEmpty() ? QStringLiteral("<module>::<symbol>") : origins.front();
+    const int packageDetail = example.indexOf(QStringLiteral(" (package "));
+    if (packageDetail >= 0)
+        example = example.left(packageDetail);
+    suggestions.push_back(QStringLiteral("Qualify the %1 with one candidate module, for example: %2")
+                              .arg(kind, example));
+    suggestions.push_back(QStringLiteral("Remove one conflicting use declaration or rename/re-export one candidate."));
+    return suggestions;
+}
+
 } // namespace
 
 TypeCheckResult TypeChecker::check(const ProgramNode& program)
@@ -327,15 +381,27 @@ const FunctionDeclNode* TypeChecker::resolveFunction(const QString& name, const 
     if (current.size() == 1)
         return current.front();
     if (current.size() > 1) {
-        if (diagnose)
-            error(span, QStringLiteral("function '%1' is ambiguous in current module").arg(name));
+        if (diagnose) {
+            const QStringList origins = declOriginList(current, [](const FunctionDeclNode& fn) { return fn.name; });
+            errorDetailed(span,
+                          QStringLiteral("function '%1' is ambiguous in current module").arg(name),
+                          declSpanList(current),
+                          ambiguityExplanation(QStringLiteral("function"), origins),
+                          qualifySuggestions(QStringLiteral("function"), origins));
+        }
         return nullptr;
     }
     if (visible.size() == 1)
         return visible.front();
     if (visible.size() > 1) {
-        if (diagnose)
-            error(span, QStringLiteral("function '%1' is ambiguous across imported modules").arg(name));
+        if (diagnose) {
+            const QStringList origins = declOriginList(visible, [](const FunctionDeclNode& fn) { return fn.name; });
+            errorDetailed(span,
+                          QStringLiteral("function '%1' is ambiguous across imported modules").arg(name),
+                          declSpanList(visible),
+                          ambiguityExplanation(QStringLiteral("function"), origins),
+                          qualifySuggestions(QStringLiteral("function"), origins));
+        }
         return nullptr;
     }
     if (hidden.size() == 1) {
@@ -370,8 +436,14 @@ const FunctionDeclNode* TypeChecker::resolveFunctionInModule(const QString& modu
     if (visible.size() == 1)
         return visible.front();
     if (visible.size() > 1) {
-        if (diagnose)
-            error(span, QStringLiteral("function '%1::%2' is ambiguous").arg(moduleName, name));
+        if (diagnose) {
+            const QStringList origins = declOriginList(visible, [](const FunctionDeclNode& fn) { return fn.name; });
+            errorDetailed(span,
+                          QStringLiteral("function '%1::%2' is ambiguous").arg(moduleName, name),
+                          declSpanList(visible),
+                          ambiguityExplanation(QStringLiteral("function"), origins),
+                          qualifySuggestions(QStringLiteral("function"), origins));
+        }
         return nullptr;
     }
     if (hidden.size() == 1) {
@@ -411,8 +483,17 @@ const TypeChecker::StructInfo* TypeChecker::resolveStructInModule(const QString&
     if (visible.size() == 1)
         return visible.front();
     if (visible.size() > 1) {
-        if (diagnose)
-            error(span, QStringLiteral("struct '%1::%2' is ambiguous").arg(moduleName, name));
+        if (diagnose) {
+            QList<const StructDeclNode*> decls;
+            for (const StructInfo* info : visible)
+                decls.push_back(info->decl);
+            const QStringList origins = declOriginList(decls, [](const StructDeclNode& decl) { return decl.name; });
+            errorDetailed(span,
+                          QStringLiteral("struct '%1::%2' is ambiguous").arg(moduleName, name),
+                          declSpanList(decls),
+                          ambiguityExplanation(QStringLiteral("struct"), origins),
+                          qualifySuggestions(QStringLiteral("struct"), origins));
+        }
         return nullptr;
     }
     if (hidden.size() == 1) {
@@ -450,8 +531,17 @@ const TypeChecker::StructInfo* TypeChecker::resolveStructInPackage(const QString
     if (visible.size() == 1)
         return visible.front();
     if (visible.size() > 1) {
-        if (diagnose)
-            error(span, QStringLiteral("struct '%1' is ambiguous across imported modules").arg(name));
+        if (diagnose) {
+            QList<const StructDeclNode*> decls;
+            for (const StructInfo* info : visible)
+                decls.push_back(info->decl);
+            const QStringList origins = declOriginList(decls, [](const StructDeclNode& decl) { return decl.name; });
+            errorDetailed(span,
+                          QStringLiteral("struct '%1' is ambiguous across imported modules").arg(name),
+                          declSpanList(decls),
+                          ambiguityExplanation(QStringLiteral("struct"), origins),
+                          qualifySuggestions(QStringLiteral("struct"), origins));
+        }
         return nullptr;
     }
     if (hidden.size() == 1) {
@@ -506,8 +596,17 @@ const TypeChecker::BackendInfo* TypeChecker::resolveBackendInModule(const QStrin
     if (visible.size() == 1)
         return visible.front();
     if (visible.size() > 1) {
-        if (diagnose)
-            error(span, QStringLiteral("backend '%1::%2' is ambiguous").arg(moduleName, name));
+        if (diagnose) {
+            QList<const BackendBlockNode*> decls;
+            for (const BackendInfo* info : visible)
+                decls.push_back(info->decl);
+            const QStringList origins = declOriginList(decls, [](const BackendBlockNode& decl) { return decl.name; });
+            errorDetailed(span,
+                          QStringLiteral("backend '%1::%2' is ambiguous").arg(moduleName, name),
+                          declSpanList(decls),
+                          ambiguityExplanation(QStringLiteral("backend"), origins),
+                          qualifySuggestions(QStringLiteral("backend"), origins));
+        }
         return nullptr;
     }
     if (hidden.size() == 1) {
@@ -545,8 +644,17 @@ const TypeChecker::BackendInfo* TypeChecker::resolveBackendInPackage(const QStri
     if (visible.size() == 1)
         return visible.front();
     if (visible.size() > 1) {
-        if (diagnose)
-            error(span, QStringLiteral("backend '%1' is ambiguous across imported modules").arg(name));
+        if (diagnose) {
+            QList<const BackendBlockNode*> decls;
+            for (const BackendInfo* info : visible)
+                decls.push_back(info->decl);
+            const QStringList origins = declOriginList(decls, [](const BackendBlockNode& decl) { return decl.name; });
+            errorDetailed(span,
+                          QStringLiteral("backend '%1' is ambiguous across imported modules").arg(name),
+                          declSpanList(decls),
+                          ambiguityExplanation(QStringLiteral("backend"), origins),
+                          qualifySuggestions(QStringLiteral("backend"), origins));
+        }
         return nullptr;
     }
     if (hidden.size() == 1) {
@@ -616,16 +724,16 @@ void TypeChecker::collectBackends(const ProgramNode& program)
         if (!backend)
             continue;
         const auto existing = m_backends.value(backend->name);
-        bool duplicateInPackage = false;
+        bool duplicateInModule = false;
         for (const auto& other : existing) {
-            if (other.decl && other.decl->packageName == backend->packageName) {
-                error(backend->span, QStringLiteral("duplicate backend '%1' in package '%2'")
-                                        .arg(backend->name, backend->packageName));
-                duplicateInPackage = true;
+            if (other.decl && sameDeclNamespace(*other.decl, *backend)) {
+                error(backend->span, QStringLiteral("duplicate backend '%1' in package '%2' module '%3'")
+                                        .arg(backend->name, backend->packageName, backend->moduleName));
+                duplicateInModule = true;
                 break;
             }
         }
-        if (duplicateInPackage)
+        if (duplicateInModule)
             continue;
         BackendInfo info;
         info.decl = backend;
@@ -2157,6 +2265,24 @@ void TypeChecker::error(const SourceSpan& span, const QString& message, const QS
     d.code = code;
     d.message = message;
     d.primary = span;
+    m_diagnostics.push_back(d);
+}
+
+void TypeChecker::errorDetailed(const SourceSpan& span,
+                                const QString& message,
+                                const QList<SourceSpan>& related,
+                                const QString& explanation,
+                                const QStringList& suggestions,
+                                const QString& code)
+{
+    Diagnostic d;
+    d.severity = Severity::Error;
+    d.code = code;
+    d.message = message;
+    d.primary = span;
+    d.related = related;
+    d.explanation = explanation;
+    d.suggestions = suggestions;
     m_diagnostics.push_back(d);
 }
 

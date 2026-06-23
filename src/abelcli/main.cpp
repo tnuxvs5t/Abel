@@ -49,6 +49,24 @@ static void printDiagnostic(const abel::Diagnostic& d)
     }
     err << Qt::endl;
     printSourceExcerpt(err, d.primary, QString());
+    if (!d.explanation.isEmpty())
+        err << "explanation: " << d.explanation << Qt::endl;
+    if (!d.related.isEmpty()) {
+        err << "related:" << Qt::endl;
+        for (const auto& span : d.related) {
+            err << "  at";
+            if (!span.file.isEmpty()) {
+                err << " " << span.file << ":" << span.startLine << ":" << span.startColumn;
+            }
+            err << Qt::endl;
+            printSourceExcerpt(err, span, QStringLiteral("    "));
+        }
+    }
+    if (!d.suggestions.isEmpty()) {
+        err << "suggestions:" << Qt::endl;
+        for (const QString& suggestion : d.suggestions)
+            err << "  - " << suggestion << Qt::endl;
+    }
     if (!d.stackTrace.isEmpty()) {
         err << "stack:" << Qt::endl;
         for (const auto& frame : d.stackTrace) {

@@ -177,6 +177,12 @@ private:
     AbelType valueTypeOfVariable(const AbelType& type) const;
     ExprType errorExpr(const SourceSpan& span, const QString& message);
     void error(const SourceSpan& span, const QString& message, const QString& code = QStringLiteral("E0301"));
+    void errorDetailed(const SourceSpan& span,
+                       const QString& message,
+                       const QList<SourceSpan>& related,
+                       const QString& explanation = {},
+                       const QStringList& suggestions = {},
+                       const QString& code = QStringLiteral("E0301"));
 };
 
 } // namespace abel

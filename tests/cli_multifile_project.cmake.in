@@ -240,6 +240,19 @@ string(FIND "${ambiguous_check_stderr}" "ambiguous across imported modules" ambi
 if(ambiguous_pos EQUAL -1)
     message(FATAL_ERROR "abel check did not explain ambiguous imported call:\n${ambiguous_check_stdout}\n${ambiguous_check_stderr}")
 endif()
+string(FIND "${ambiguous_check_stderr}" "candidate functions" ambiguous_candidates_pos)
+if(ambiguous_candidates_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not list ambiguous function candidates:\n${ambiguous_check_stdout}\n${ambiguous_check_stderr}")
+endif()
+string(FIND "${ambiguous_check_stderr}" "cli.lib.a::value" ambiguous_candidate_a_pos)
+string(FIND "${ambiguous_check_stderr}" "cli.lib.b::value" ambiguous_candidate_b_pos)
+if(ambiguous_candidate_a_pos EQUAL -1 OR ambiguous_candidate_b_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not name both ambiguous function candidates:\n${ambiguous_check_stdout}\n${ambiguous_check_stderr}")
+endif()
+string(FIND "${ambiguous_check_stderr}" "related:" ambiguous_related_pos)
+if(ambiguous_related_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not print related spans for ambiguous function:\n${ambiguous_check_stdout}\n${ambiguous_check_stderr}")
+endif()
 
 set(qualified_backend_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-qualified-backend")
 file(REMOVE_RECURSE "${qualified_backend_project_dir}")
@@ -344,6 +357,78 @@ endif()
 string(FIND "${qualified_backend_no_use_check_stderr}" "backend 'MathSystem' is not visible from current module" qualified_backend_no_use_not_visible_pos)
 if(qualified_backend_no_use_not_visible_pos EQUAL -1)
     message(FATAL_ERROR "abel check did not explain missing use for qualified backend call:\n${qualified_backend_no_use_check_stdout}\n${qualified_backend_no_use_check_stderr}")
+endif()
+
+set(ambiguous_backend_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-ambiguous-backend")
+file(REMOVE_RECURSE "${ambiguous_backend_project_dir}")
+file(MAKE_DIRECTORY "${ambiguous_backend_project_dir}/src/lib")
+
+file(WRITE "${ambiguous_backend_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-ambiguous-backend",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "backendArtifacts": [
+    {
+      "backendId": "MathSystem",
+      "path": "@CMAKE_BINARY_DIR@/plugins/libmath_backend.so",
+      "symbols": ["fast_add"]
+    }
+  ]
+}
+]=])
+
+file(WRITE "${ambiguous_backend_project_dir}/src/lib/a.abel" [=[
+module cli.lib.a;
+
+backend MathSystem {
+    fn int fast_add(int a, int b);
+}
+]=])
+
+file(WRITE "${ambiguous_backend_project_dir}/src/lib/b.abel" [=[
+module cli.lib.b;
+
+backend MathSystem {
+    fn int fast_add(int a, int b);
+}
+]=])
+
+file(WRITE "${ambiguous_backend_project_dir}/src/main.abel" [=[
+module cli.main;
+use cli.lib.a;
+use cli.lib.b;
+
+fn int main() {
+    return MathSystem::fast_add(19, 23);
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${ambiguous_backend_project_dir}"
+    RESULT_VARIABLE ambiguous_backend_check_result
+    OUTPUT_VARIABLE ambiguous_backend_check_stdout
+    ERROR_VARIABLE ambiguous_backend_check_stderr
+)
+if(ambiguous_backend_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted ambiguous unqualified imported backend:\n${ambiguous_backend_check_stdout}\n${ambiguous_backend_check_stderr}")
+endif()
+string(FIND "${ambiguous_backend_check_stderr}" "backend 'MathSystem' is ambiguous across imported modules" ambiguous_backend_pos)
+if(ambiguous_backend_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain ambiguous imported backend:\n${ambiguous_backend_check_stdout}\n${ambiguous_backend_check_stderr}")
+endif()
+string(FIND "${ambiguous_backend_check_stderr}" "candidate backends" ambiguous_backend_candidates_pos)
+if(ambiguous_backend_candidates_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not list ambiguous backend candidates:\n${ambiguous_backend_check_stdout}\n${ambiguous_backend_check_stderr}")
+endif()
+string(FIND "${ambiguous_backend_check_stderr}" "cli.lib.a::MathSystem" ambiguous_backend_candidate_a_pos)
+string(FIND "${ambiguous_backend_check_stderr}" "cli.lib.b::MathSystem" ambiguous_backend_candidate_b_pos)
+if(ambiguous_backend_candidate_a_pos EQUAL -1 OR ambiguous_backend_candidate_b_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not name both ambiguous backend candidates:\n${ambiguous_backend_check_stdout}\n${ambiguous_backend_check_stderr}")
+endif()
+string(FIND "${ambiguous_backend_check_stderr}" "related:" ambiguous_backend_related_pos)
+if(ambiguous_backend_related_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not print related spans for ambiguous backend:\n${ambiguous_backend_check_stdout}\n${ambiguous_backend_check_stderr}")
 endif()
 
 set(qualified_struct_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-qualified-struct")
@@ -500,4 +585,17 @@ endif()
 string(FIND "${ambiguous_struct_check_stderr}" "struct 'Point' is ambiguous across imported modules" ambiguous_struct_pos)
 if(ambiguous_struct_pos EQUAL -1)
     message(FATAL_ERROR "abel check did not explain ambiguous imported struct:\n${ambiguous_struct_check_stdout}\n${ambiguous_struct_check_stderr}")
+endif()
+string(FIND "${ambiguous_struct_check_stderr}" "candidate structs" ambiguous_struct_candidates_pos)
+if(ambiguous_struct_candidates_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not list ambiguous struct candidates:\n${ambiguous_struct_check_stdout}\n${ambiguous_struct_check_stderr}")
+endif()
+string(FIND "${ambiguous_struct_check_stderr}" "cli.lib.a::Point" ambiguous_struct_candidate_a_pos)
+string(FIND "${ambiguous_struct_check_stderr}" "cli.lib.b::Point" ambiguous_struct_candidate_b_pos)
+if(ambiguous_struct_candidate_a_pos EQUAL -1 OR ambiguous_struct_candidate_b_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not name both ambiguous struct candidates:\n${ambiguous_struct_check_stdout}\n${ambiguous_struct_check_stderr}")
+endif()
+string(FIND "${ambiguous_struct_check_stderr}" "related:" ambiguous_struct_related_pos)
+if(ambiguous_struct_related_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not print related spans for ambiguous struct:\n${ambiguous_struct_check_stdout}\n${ambiguous_struct_check_stderr}")
 endif()
