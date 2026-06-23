@@ -76,6 +76,10 @@ private:
                                                     const SourceSpan& span,
                                                     bool diagnose = true);
     const StructInfo* resolveStruct(const QString& name, const SourceSpan& span, bool diagnose = true);
+    const StructInfo* resolveStructInModule(const QString& moduleName,
+                                            const QString& name,
+                                            const SourceSpan& span,
+                                            bool diagnose = true);
     const StructInfo* resolveStructInPackage(const QString& name,
                                              const QString& packageName,
                                              const SourceSpan& span,
@@ -136,6 +140,10 @@ private:
     ExprType checkQualifiedFunctionCall(const QString& moduleName,
                                         const SourceSpan& moduleSpan,
                                         const QString& name,
+                                        const std::vector<std::unique_ptr<ExprNode>>& args,
+                                        const SourceSpan& span);
+    ExprType checkStructConstructorCall(const QString& displayName,
+                                        const StructInfo& info,
                                         const std::vector<std::unique_ptr<ExprNode>>& args,
                                         const SourceSpan& span);
     ExprType checkFunctionValueCall(const AbelType& functionType, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);

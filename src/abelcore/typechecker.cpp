@@ -32,16 +32,20 @@ ExprType unknownExprType()
     return {makeType(TypeKind::Unknown), ValueCategory::PRValue, false};
 }
 
-QString packageQualifiedName(const QString& packageName, const QString& name)
+QString declarationQualifiedName(const DeclNode& decl, const QString& name)
 {
-    return packageName.isEmpty()
-        ? name
-        : packageName + QStringLiteral("::") + name;
+    QStringList parts;
+    if (!decl.packageName.isEmpty())
+        parts.push_back(decl.packageName);
+    if (!decl.moduleName.isEmpty())
+        parts.push_back(decl.moduleName);
+    parts.push_back(name);
+    return parts.join(QStringLiteral("::"));
 }
 
 QString structTypeName(const StructDeclNode& decl)
 {
-    return packageQualifiedName(decl.packageName, decl.name);
+    return declarationQualifiedName(decl, decl.name);
 }
 
 class DeclContextGuard {
@@ -106,6 +110,19 @@ QString staticAccessName(const ExprNode& expr)
 QString staticAccessModuleName(const StaticAccessExprNode& access)
 {
     return staticAccessName(*access.base).replace(QStringLiteral("::"), QStringLiteral("."));
+}
+
+std::optional<QPair<QString, QString>> splitQualifiedSymbol(QString name)
+{
+    const int sep = name.lastIndexOf(QStringLiteral("::"));
+    if (sep < 0)
+        return std::nullopt;
+    QString moduleName = name.left(sep);
+    moduleName.replace(QStringLiteral("::"), QStringLiteral("."));
+    const QString symbolName = name.mid(sep + 2);
+    if (moduleName.isEmpty() || symbolName.isEmpty())
+        return std::nullopt;
+    return QPair<QString, QString>{moduleName, symbolName};
 }
 
 bool exprIsLiteralTrue(const ExprNode& expr)
@@ -211,16 +228,16 @@ void TypeChecker::collectStructs(const ProgramNode& program)
         if (!s)
             continue;
         const auto existing = m_structs.value(s->name);
-        bool duplicateInPackage = false;
+        bool duplicateInModule = false;
         for (const auto& other : existing) {
-            if (other.decl && other.decl->packageName == s->packageName) {
-                error(s->span, QStringLiteral("duplicate struct '%1' in package '%2'")
-                                    .arg(s->name, s->packageName));
-                duplicateInPackage = true;
+            if (other.decl && sameDeclNamespace(*other.decl, *s)) {
+                error(s->span, QStringLiteral("duplicate struct '%1' in package '%2' module '%3'")
+                                    .arg(s->name, s->packageName, s->moduleName));
+                duplicateInModule = true;
                 break;
             }
         }
-        if (duplicateInPackage)
+        if (duplicateInModule)
             continue;
         StructInfo info;
         info.decl = s;
@@ -367,7 +384,43 @@ const FunctionDeclNode* TypeChecker::resolveFunctionInModule(const QString& modu
 
 const TypeChecker::StructInfo* TypeChecker::resolveStruct(const QString& name, const SourceSpan& span, bool diagnose)
 {
+    if (const auto qualified = splitQualifiedSymbol(name))
+        return resolveStructInModule(qualified->first, qualified->second, span, diagnose);
     return resolveStructInPackage(name, m_currentPackage, span, diagnose);
+}
+
+const TypeChecker::StructInfo* TypeChecker::resolveStructInModule(const QString& moduleName,
+                                                                  const QString& name,
+                                                                  const SourceSpan& span,
+                                                                  bool diagnose)
+{
+    auto found = m_structs.constFind(name);
+    if (found == m_structs.constEnd() || found->isEmpty())
+        return nullptr;
+
+    QList<const StructInfo*> visible;
+    QList<const StructInfo*> hidden;
+    for (const auto& info : found.value()) {
+        if (!info.decl || info.decl->moduleName != moduleName)
+            continue;
+        if (isStructVisible(*info.decl))
+            visible.push_back(&info);
+        else
+            hidden.push_back(&info);
+    }
+    if (visible.size() == 1)
+        return visible.front();
+    if (visible.size() > 1) {
+        if (diagnose)
+            error(span, QStringLiteral("struct '%1::%2' is ambiguous").arg(moduleName, name));
+        return nullptr;
+    }
+    if (hidden.size() == 1) {
+        if (diagnose)
+            requireStructVisible(*hidden.front()->decl, span);
+        return nullptr;
+    }
+    return nullptr;
 }
 
 const TypeChecker::StructInfo* TypeChecker::resolveStructInPackage(const QString& name,
@@ -536,8 +589,12 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
 
     AbelType base = typeFromName(node.name);
     if (base.kind == TypeKind::Struct) {
-        if (const StructInfo* info = resolveStructInPackage(node.name, packageName, node.span, diagnose))
+        if (const auto qualified = splitQualifiedSymbol(node.name)) {
+            if (const StructInfo* info = resolveStructInModule(qualified->first, qualified->second, node.span, diagnose))
+                base = makeStructType(structTypeName(*info->decl));
+        } else if (const StructInfo* info = resolveStructInPackage(node.name, packageName, node.span, diagnose)) {
             base = makeStructType(structTypeName(*info->decl));
+        }
     }
     for (int i = 0; i < node.pointerDepth; ++i)
         base = makePointerType(base);
@@ -1440,6 +1497,20 @@ ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee,
 
     QString moduleName = baseName;
     moduleName.replace(QStringLiteral("::"), QStringLiteral("."));
+
+    const auto structs = m_structs.value(callee.member);
+    for (const auto& info : structs) {
+        if (info.decl && info.decl->moduleName == moduleName) {
+            const StructInfo* resolved = resolveStructInModule(moduleName, callee.member, callee.base->span);
+            if (!resolved) {
+                for (const auto& argExpr : args)
+                    checkExpr(*argExpr);
+                return unknownExprType();
+            }
+            return checkStructConstructorCall(moduleName + QStringLiteral("::") + callee.member, *resolved, args, span);
+        }
+    }
+
     const auto functions = m_functions.value(callee.member);
     for (const FunctionDeclNode* fn : functions) {
         if (fn->moduleName == moduleName)
@@ -1447,6 +1518,39 @@ ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee,
     }
 
     return checkBackendCallByName(baseName, callee.base->span, callee.member, args, span);
+}
+
+ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
+                                                 const StructInfo& info,
+                                                 const std::vector<std::unique_ptr<ExprNode>>& args,
+                                                 const SourceSpan& span)
+{
+    const size_t argc = args.size();
+    if (!info.constructor) {
+        if (argc == 0) {
+            if (!isDefaultConstructible(makeStructType(structTypeName(*info.decl))))
+                return errorExpr(span, QStringLiteral("constructor '%1' is not default-constructible").arg(displayName));
+        } else {
+            if (argc != info.fields.size())
+                return errorExpr(span, QStringLiteral("constructor '%1' expects 0 or %2 argument(s)").arg(displayName).arg(info.fields.size()));
+            for (size_t i = 0; i < argc; ++i) {
+                const QString& fieldName = info.decl->fields[i]->name;
+                ExprType arg = checkExpr(*args[i]);
+                if (!isUnknownType(arg.type) && !isAssignable(info.fields.value(fieldName).type, arg.type))
+                    error(args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
+            }
+        }
+    } else {
+        if (argc != info.constructor->params.size())
+            return errorExpr(span, QStringLiteral("constructor '%1' called with wrong argument count").arg(displayName));
+        for (size_t i = 0; i < argc; ++i) {
+            AbelType paramType = typeFromAstForDecl(*info.constructor->params[i]->type, *info.decl);
+            ExprType arg = checkExpr(*args[i]);
+            if (!isUnknownType(arg.type) && !isAssignable(paramType, arg.type))
+                error(args[i]->span, QStringLiteral("cannot pass %1 to constructor parameter %2").arg(arg.type.displayName(), paramType.displayName()));
+        }
+    }
+    return {makeStructType(structTypeName(*info.decl)), ValueCategory::PRValue, false};
 }
 
 ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,

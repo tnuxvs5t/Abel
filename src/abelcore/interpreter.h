@@ -53,6 +53,7 @@ private:
     const FunctionDeclNode* resolveFunction(const QString& name) const;
     const FunctionDeclNode* resolveFunctionInModule(const QString& moduleName, const QString& name) const;
     const StructRuntimeInfo* resolveStruct(const QString& name) const;
+    const StructRuntimeInfo* resolveStructInModule(const QString& moduleName, const QString& name) const;
     const StructRuntimeInfo* resolveStructInPackage(const QString& name, const QString& packageName) const;
     const StructRuntimeInfo* structInfoForType(const AbelType& type) const;
     const BackendRuntimeInfo* resolveBackend(const QString& name) const;
@@ -96,6 +97,10 @@ private:
                                         const QString& name,
                                         const std::vector<std::unique_ptr<ExprNode>>& args,
                                         const SourceSpan& span);
+    AbelValue evalQualifiedStructConstructor(const QString& moduleName,
+                                             const QString& name,
+                                             const std::vector<std::unique_ptr<ExprNode>>& args,
+                                             const SourceSpan& span);
     AbelValue evalLambda(const LambdaExprNode& expr);
     AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     AbelValue evalStructConstructor(const QString& name, const StructRuntimeInfo& info, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);

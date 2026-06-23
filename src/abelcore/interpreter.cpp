@@ -33,16 +33,20 @@ QString backendFrameSymbol(const QString& backendId, const QString& symbol)
     return QStringLiteral("backend %1::%2").arg(backendId, symbol);
 }
 
-QString packageQualifiedName(const QString& packageName, const QString& name)
+QString declarationQualifiedName(const DeclNode& decl, const QString& name)
 {
-    return packageName.isEmpty()
-        ? name
-        : packageName + QStringLiteral("::") + name;
+    QStringList parts;
+    if (!decl.packageName.isEmpty())
+        parts.push_back(decl.packageName);
+    if (!decl.moduleName.isEmpty())
+        parts.push_back(decl.moduleName);
+    parts.push_back(name);
+    return parts.join(QStringLiteral("::"));
 }
 
 QString structTypeName(const StructDeclNode& decl)
 {
-    return packageQualifiedName(decl.packageName, decl.name);
+    return declarationQualifiedName(decl, decl.name);
 }
 
 bool sameDeclNamespace(const DeclNode& lhs, const DeclNode& rhs)
@@ -73,6 +77,19 @@ QString staticAccessName(const ExprNode& expr)
 QString staticAccessModuleName(const StaticAccessExprNode& access)
 {
     return staticAccessName(*access.base).replace(QStringLiteral("::"), QStringLiteral("."));
+}
+
+std::optional<QPair<QString, QString>> splitQualifiedSymbol(QString name)
+{
+    const int sep = name.lastIndexOf(QStringLiteral("::"));
+    if (sep < 0)
+        return std::nullopt;
+    QString moduleName = name.left(sep);
+    moduleName.replace(QStringLiteral("::"), QStringLiteral("."));
+    const QString symbolName = name.mid(sep + 2);
+    if (moduleName.isEmpty() || symbolName.isEmpty())
+        return std::nullopt;
+    return QPair<QString, QString>{moduleName, symbolName};
 }
 
 class DeclContextGuard {
@@ -229,19 +246,19 @@ bool Interpreter::collectStructs(const ProgramNode& program, AbelRuntimeContext&
         if (!s)
             continue;
         const auto existing = m_structs.value(s->name);
-        bool duplicateInPackage = false;
+        bool duplicateInModule = false;
         for (const auto& other : existing) {
-            if (other.decl && other.decl->packageName == s->packageName) {
+            if (other.decl && sameDeclNamespace(*other.decl, *s)) {
                 ctx.error(QStringLiteral("E0565"),
-                          QStringLiteral("duplicate struct '%1' in package '%2'")
-                              .arg(s->name, s->packageName),
+                          QStringLiteral("duplicate struct '%1' in package '%2' module '%3'")
+                              .arg(s->name, s->packageName, s->moduleName),
                           s->span);
                 ok = false;
-                duplicateInPackage = true;
+                duplicateInModule = true;
                 break;
             }
         }
-        if (duplicateInPackage)
+        if (duplicateInModule)
             continue;
         StructRuntimeInfo info;
         info.decl = s;
@@ -325,7 +342,22 @@ const FunctionDeclNode* Interpreter::resolveFunctionInModule(const QString& modu
 
 const Interpreter::StructRuntimeInfo* Interpreter::resolveStruct(const QString& name) const
 {
+    if (const auto qualified = splitQualifiedSymbol(name))
+        return resolveStructInModule(qualified->first, qualified->second);
     return resolveStructInPackage(name, m_currentPackage);
+}
+
+const Interpreter::StructRuntimeInfo* Interpreter::resolveStructInModule(const QString& moduleName, const QString& name) const
+{
+    auto found = m_structs.constFind(name);
+    if (found == m_structs.constEnd() || found->isEmpty())
+        return nullptr;
+    QList<const StructRuntimeInfo*> visible;
+    for (const auto& info : found.value()) {
+        if (info.decl && info.decl->moduleName == moduleName && isDeclVisible(*info.decl, info.decl->exported))
+            visible.push_back(&info);
+    }
+    return visible.size() == 1 ? visible.front() : nullptr;
 }
 
 const Interpreter::StructRuntimeInfo* Interpreter::resolveStructInPackage(const QString& name, const QString& packageName) const
@@ -424,8 +456,12 @@ AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& 
 
     AbelType base = typeFromName(node.name);
     if (base.kind == TypeKind::Struct) {
-        if (const StructRuntimeInfo* info = resolveStructInPackage(node.name, packageName))
+        if (const auto qualified = splitQualifiedSymbol(node.name)) {
+            if (const StructRuntimeInfo* info = resolveStructInModule(qualified->first, qualified->second))
+                base = makeStructType(structTypeName(*info->decl));
+        } else if (const StructRuntimeInfo* info = resolveStructInPackage(node.name, packageName)) {
             base = makeStructType(structTypeName(*info->decl));
+        }
     }
     for (int i = 0; i < node.pointerDepth; ++i)
         base = makePointerType(base);
@@ -1720,6 +1756,10 @@ AbelValue Interpreter::evalStaticCall(const StaticAccessExprNode& callee,
 
     QString moduleName = baseName;
     moduleName.replace(QStringLiteral("::"), QStringLiteral("."));
+
+    if (const StructRuntimeInfo* info = resolveStructInModule(moduleName, callee.member))
+        return evalQualifiedStructConstructor(moduleName, callee.member, args, span);
+
     const auto functions = m_functions.value(callee.member);
     for (const FunctionDeclNode* fn : functions) {
         if (fn->moduleName == moduleName)
@@ -1834,6 +1874,19 @@ AbelValue Interpreter::evalQualifiedFunctionCall(const QString& moduleName,
         return AbelValue::makeUnknown();
     }
     return callFunctionExpr(*fn, args, span).value;
+}
+
+AbelValue Interpreter::evalQualifiedStructConstructor(const QString& moduleName,
+                                                      const QString& name,
+                                                      const std::vector<std::unique_ptr<ExprNode>>& args,
+                                                      const SourceSpan& span)
+{
+    const StructRuntimeInfo* info = resolveStructInModule(moduleName, name);
+    if (!info) {
+        error(QStringLiteral("E0580"), QStringLiteral("unknown struct '%1::%2'").arg(moduleName, name), span);
+        return AbelValue::makeUnknown();
+    }
+    return evalStructConstructor(moduleName + QStringLiteral("::") + name, *info, args, span);
 }
 
 AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)

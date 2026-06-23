@@ -42,6 +42,7 @@ private:
     std::unique_ptr<BackendBlockNode> parseBackend(bool exported);
     std::unique_ptr<ParameterNode> parseParameter();
     std::unique_ptr<TypeNode> parseType();
+    QString parseTypeName();
     std::unique_ptr<BlockStmtNode> parseBlock();
     std::unique_ptr<StmtNode> parseStatement();
     std::unique_ptr<StmtNode> parseIf();
@@ -61,6 +62,7 @@ private:
     std::unique_ptr<ExprNode> parseLambda();
 
     bool looksLikeType() const;
+    bool looksLikeQualifiedTypeName() const;
     int precedence(TokenKind kind) const;
     QString opText(const Token& token) const;
 };

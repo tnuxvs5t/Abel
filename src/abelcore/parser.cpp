@@ -278,7 +278,7 @@ std::unique_ptr<TypeNode> Parser::parseType()
     } else if (match(TokenKind::KwAny)) {
         t->name = QStringLiteral("any");
     } else {
-        t->name = consume(TokenKind::Identifier, QStringLiteral("expected type name")).text;
+        t->name = parseTypeName();
     }
     while (match(TokenKind::Star))
         ++t->pointerDepth;
@@ -286,6 +286,21 @@ std::unique_ptr<TypeNode> Parser::parseType()
         t->isReference = true;
     t->span = mergeSpans(startSpan, previous().span);
     return t;
+}
+
+QString Parser::parseTypeName()
+{
+    QString out = consume(TokenKind::Identifier, QStringLiteral("expected type name")).text;
+    for (;;) {
+        if (match(TokenKind::Dot)) {
+            out += QStringLiteral(".") + consume(TokenKind::Identifier, QStringLiteral("expected identifier after '.' in type name")).text;
+        } else if (match(TokenKind::Scope)) {
+            out += QStringLiteral("::") + consume(TokenKind::Identifier, QStringLiteral("expected identifier after '::' in type name")).text;
+        } else {
+            break;
+        }
+    }
+    return out;
 }
 
 std::unique_ptr<BlockStmtNode> Parser::parseBlock()
@@ -439,11 +454,38 @@ bool Parser::looksLikeType() const
 {
     if (check(TokenKind::KwConst) || check(TokenKind::KwVector) || check(TokenKind::KwAny) || check(TokenKind::KwFunc))
         return true;
+    if (looksLikeQualifiedTypeName())
+        return true;
     if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::Identifier)
         return true;
     if (check(TokenKind::Identifier) && (peek(1).kind == TokenKind::Star || peek(1).kind == TokenKind::Amp))
         return true;
     return false;
+}
+
+bool Parser::looksLikeQualifiedTypeName() const
+{
+    if (!check(TokenKind::Identifier))
+        return false;
+
+    qsizetype pos = m_pos + 1;
+    bool qualified = false;
+    while (pos + 1 < m_tokens.size()) {
+        const TokenKind sep = m_tokens[pos].kind;
+        if (sep != TokenKind::Dot && sep != TokenKind::Scope)
+            break;
+        if (m_tokens[pos + 1].kind != TokenKind::Identifier)
+            return false;
+        qualified = true;
+        pos += 2;
+    }
+    if (!qualified)
+        return false;
+    while (pos < m_tokens.size() && m_tokens[pos].kind == TokenKind::Star)
+        ++pos;
+    if (pos < m_tokens.size() && m_tokens[pos].kind == TokenKind::Amp)
+        ++pos;
+    return pos < m_tokens.size() && m_tokens[pos].kind == TokenKind::Identifier;
 }
 
 std::unique_ptr<StmtNode> Parser::parseVarOrExprStatement()

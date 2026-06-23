@@ -345,3 +345,159 @@ string(FIND "${qualified_backend_no_use_check_stderr}" "backend 'MathSystem' is 
 if(qualified_backend_no_use_not_visible_pos EQUAL -1)
     message(FATAL_ERROR "abel check did not explain missing use for qualified backend call:\n${qualified_backend_no_use_check_stdout}\n${qualified_backend_no_use_check_stderr}")
 endif()
+
+set(qualified_struct_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-qualified-struct")
+file(REMOVE_RECURSE "${qualified_struct_project_dir}")
+file(MAKE_DIRECTORY "${qualified_struct_project_dir}/src/lib")
+
+file(WRITE "${qualified_struct_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-qualified-struct",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${qualified_struct_project_dir}/src/lib/a.abel" [=[
+module cli.lib.a;
+
+struct Point {
+    int x;
+}
+]=])
+
+file(WRITE "${qualified_struct_project_dir}/src/lib/b.abel" [=[
+module cli.lib.b;
+
+struct Point {
+    int x;
+}
+]=])
+
+file(WRITE "${qualified_struct_project_dir}/src/main.abel" [=[
+module cli.main;
+use cli.lib.a;
+use cli.lib.b;
+
+fn int main() {
+    cli.lib.a::Point pa = cli.lib.a::Point(10);
+    cli.lib.b::Point pb = cli.lib.b::Point(30);
+    return pa.x + pb.x + 2;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${qualified_struct_project_dir}"
+    RESULT_VARIABLE qualified_struct_check_result
+    OUTPUT_VARIABLE qualified_struct_check_stdout
+    ERROR_VARIABLE qualified_struct_check_stderr
+)
+if(NOT qualified_struct_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check rejected qualified module struct type/constructor:\n${qualified_struct_check_stdout}\n${qualified_struct_check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${qualified_struct_project_dir}"
+    RESULT_VARIABLE qualified_struct_run_result
+    OUTPUT_VARIABLE qualified_struct_run_stdout
+    ERROR_VARIABLE qualified_struct_run_stderr
+)
+if(NOT qualified_struct_run_result EQUAL 42)
+    message(FATAL_ERROR "abel run expected qualified struct project exit code 42, got ${qualified_struct_run_result}:\n${qualified_struct_run_stdout}\n${qualified_struct_run_stderr}")
+endif()
+
+set(qualified_struct_no_use_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-qualified-struct-no-use")
+file(REMOVE_RECURSE "${qualified_struct_no_use_project_dir}")
+file(MAKE_DIRECTORY "${qualified_struct_no_use_project_dir}/src/lib")
+
+file(WRITE "${qualified_struct_no_use_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-qualified-struct-no-use",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${qualified_struct_no_use_project_dir}/src/lib/a.abel" [=[
+module cli.lib.a;
+
+struct Point {
+    int x;
+}
+]=])
+
+file(WRITE "${qualified_struct_no_use_project_dir}/src/main.abel" [=[
+module cli.main;
+
+fn int main() {
+    cli.lib.a::Point p = cli.lib.a::Point(40);
+    return p.x + 2;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${qualified_struct_no_use_project_dir}"
+    RESULT_VARIABLE qualified_struct_no_use_check_result
+    OUTPUT_VARIABLE qualified_struct_no_use_check_stdout
+    ERROR_VARIABLE qualified_struct_no_use_check_stderr
+)
+if(qualified_struct_no_use_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted qualified struct without use:\n${qualified_struct_no_use_check_stdout}\n${qualified_struct_no_use_check_stderr}")
+endif()
+string(FIND "${qualified_struct_no_use_check_stderr}" "struct 'Point' is not visible from current module" qualified_struct_no_use_not_visible_pos)
+if(qualified_struct_no_use_not_visible_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain missing use for qualified struct:\n${qualified_struct_no_use_check_stdout}\n${qualified_struct_no_use_check_stderr}")
+endif()
+
+set(ambiguous_struct_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-ambiguous-struct")
+file(REMOVE_RECURSE "${ambiguous_struct_project_dir}")
+file(MAKE_DIRECTORY "${ambiguous_struct_project_dir}/src/lib")
+
+file(WRITE "${ambiguous_struct_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-ambiguous-struct",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${ambiguous_struct_project_dir}/src/lib/a.abel" [=[
+module cli.lib.a;
+
+struct Point {
+    int x;
+}
+]=])
+
+file(WRITE "${ambiguous_struct_project_dir}/src/lib/b.abel" [=[
+module cli.lib.b;
+
+struct Point {
+    int x;
+}
+]=])
+
+file(WRITE "${ambiguous_struct_project_dir}/src/main.abel" [=[
+module cli.main;
+use cli.lib.a;
+use cli.lib.b;
+
+fn int main() {
+    Point p = Point(40);
+    return p.x + 2;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${ambiguous_struct_project_dir}"
+    RESULT_VARIABLE ambiguous_struct_check_result
+    OUTPUT_VARIABLE ambiguous_struct_check_stdout
+    ERROR_VARIABLE ambiguous_struct_check_stderr
+)
+if(ambiguous_struct_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted ambiguous unqualified imported struct:\n${ambiguous_struct_check_stdout}\n${ambiguous_struct_check_stderr}")
+endif()
+string(FIND "${ambiguous_struct_check_stderr}" "struct 'Point' is ambiguous across imported modules" ambiguous_struct_pos)
+if(ambiguous_struct_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain ambiguous imported struct:\n${ambiguous_struct_check_stdout}\n${ambiguous_struct_check_stderr}")
+endif()
