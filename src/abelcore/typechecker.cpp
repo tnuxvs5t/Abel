@@ -1110,7 +1110,10 @@ void TypeChecker::checkRangeFor(const RangeForStmtNode& stmt)
     }
 
     pushScope();
-    defineVariable(stmt.variable, makeReferenceType(*range.type.pointee), !range.isMutable, stmt.span);
+    defineVariable(stmt.variable,
+                   makeReferenceType(*range.type.pointee),
+                   !range.isMutable || range.type.pointee->isConst,
+                   stmt.span);
     ++m_loopDepth;
     checkBlock(*stmt.body, true);
     --m_loopDepth;
@@ -2054,7 +2057,9 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
     if (callee.field == QStringLiteral("front") || callee.field == QStringLiteral("back")) {
         if (!args.empty())
             return errorExpr(callee.span, QStringLiteral("vector.%1 expects no arguments").arg(callee.field));
-        return {element, ValueCategory::LValue, receiver.category == ValueCategory::PRValue || receiver.isMutable};
+        return {element,
+                ValueCategory::LValue,
+                (receiver.category == ValueCategory::PRValue || receiver.isMutable) && !element.isConst};
     }
     return errorExpr(callee.span, QStringLiteral("unsupported builtin method '%1'").arg(callee.field));
 }
@@ -2069,7 +2074,9 @@ ExprType TypeChecker::checkIndex(const IndexExprNode& expr)
         return errorExpr(expr.span, QStringLiteral("indexing requires vector"));
     if (!isUnknownType(index.type) && !index.type.isInteger())
         error(expr.index->span, QStringLiteral("vector index must be integer"));
-    return {*base.type.pointee, ValueCategory::LValue, base.category == ValueCategory::PRValue || base.isMutable};
+    return {*base.type.pointee,
+            ValueCategory::LValue,
+            (base.category == ValueCategory::PRValue || base.isMutable) && !base.type.pointee->isConst};
 }
 
 ExprType TypeChecker::checkInitListAgainst(const InitListExprNode& init, const AbelType& target)
@@ -2158,11 +2165,12 @@ ExprType TypeChecker::checkFieldAccess(const FieldAccessExprNode& expr)
     if (isUnknownType(base.type))
         return unknownExprType();
     AbelType objectType = base.type;
-    bool mutableBase = base.isMutable;
+    bool mutableBase = base.isMutable && !objectType.isConst;
     if (expr.pointer) {
         if (!objectType.isPointer() || !objectType.pointee)
             return errorExpr(expr.span, QStringLiteral("operator -> requires pointer receiver"));
         objectType = *objectType.pointee;
+        mutableBase = !objectType.isConst;
     }
     if (isUnknownType(objectType))
         return unknownExprType();

@@ -568,6 +568,12 @@ AbelValue BuiltinRegistry::callMethod(BuiltinMethodCall call) const
                        call.callSpan);
         return AbelValue::makeUnknown();
     }
+    if (desc->mutatesReceiver && call.receiverLocation && call.receiverLocation->isReadOnly) {
+        call.ctx.error(QStringLiteral("E0417"),
+                       QStringLiteral("builtin method '%1' requires mutable receiver").arg(call.name),
+                       call.callSpan);
+        return AbelValue::makeUnknown();
+    }
 
     return desc->runtime(call);
 }

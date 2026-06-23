@@ -116,6 +116,7 @@ private:
     bool isModuleImported(const QString& moduleName) const;
     QString resolveModuleName(const QString& moduleName) const;
     bool isDeclVisible(const DeclNode& decl, bool exportedSymbol) const;
+    bool structFieldReadOnly(const AbelType& structType, const QString& fieldName);
 
     bool requireBool(const AbelValue& value, const SourceSpan& span, bool& out);
     bool requireInteger(const AbelValue& value, const SourceSpan& span, qint64& out);

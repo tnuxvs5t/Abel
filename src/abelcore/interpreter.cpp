@@ -92,6 +92,37 @@ std::optional<QPair<QString, QString>> splitQualifiedSymbol(QString name)
     return QPair<QString, QString>{moduleName, symbolName};
 }
 
+bool exprCanHaveRuntimeLocation(const ExprNode& expr)
+{
+    if (dynamic_cast<const NameExprNode*>(&expr))
+        return true;
+    if (dynamic_cast<const FieldAccessExprNode*>(&expr))
+        return true;
+    if (dynamic_cast<const IndexExprNode*>(&expr))
+        return true;
+    if (auto* unary = dynamic_cast<const UnaryExprNode*>(&expr))
+        return unary->op == QStringLiteral("*");
+    if (auto* call = dynamic_cast<const CallExprNode*>(&expr)) {
+        auto* field = dynamic_cast<const FieldAccessExprNode*>(call->callee.get());
+        return field && (field->field == QStringLiteral("front") || field->field == QStringLiteral("back"));
+    }
+    return false;
+}
+
+AbelLocation* readonlyAlias(AbelRuntimeContext& ctx, AbelLocation* location, bool isReadOnly)
+{
+    if (!location || !isReadOnly)
+        return location;
+    return ctx.createAliasLocation(location, true);
+}
+
+bool vectorElementReadOnly(const AbelValue& vectorValue, bool receiverReadOnly)
+{
+    return receiverReadOnly
+        || vectorValue.type().isConst
+        || (vectorValue.type().pointee && vectorValue.type().pointee->isConst);
+}
+
 class DeclContextGuard {
 public:
     DeclContextGuard(QString& currentPackage,
@@ -596,9 +627,7 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
             AbelLocation* loc = evalLocation(*args[i]);
             if (!loc)
                 continue;
-            const auto* argName = dynamic_cast<const NameExprNode*>(args[i].get());
-            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
-            if (!prepared[i].isConst && argSlot && argSlot->isConst) {
+            if (!prepared[i].isConst && loc->isReadOnly) {
                 error(QStringLiteral("E0566"),
                       QStringLiteral("non-const method parameter '%1' cannot bind to const lvalue").arg(p.name),
                       args[i]->span);
@@ -629,10 +658,16 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
     }
 
     RuntimeFrameGuard frame(*m_ctx, true, methodFrameSymbol(fn), span);
-    m_ctx->defineVariable(QStringLiteral("this"), self, fn.isConstMethod, false, span);
+    m_ctx->defineVariable(QStringLiteral("this"), self, fn.isConstMethod || self->isReadOnly, false, span);
     auto object = selfValue.asStruct();
     for (const auto& fieldName : object->fieldOrder)
-        m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(object.get(), fieldName), fn.isConstMethod, false, span);
+        m_ctx->defineVariable(fieldName,
+                              m_ctx->createStructFieldLocation(object.get(),
+                                                               fieldName,
+                                                               fn.isConstMethod || self->isReadOnly || structFieldReadOnly(selfValue.type(), fieldName)),
+                              fn.isConstMethod || self->isReadOnly || structFieldReadOnly(selfValue.type(), fieldName),
+                              false,
+                              span);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         if (prepared[i].byReference)
@@ -778,9 +813,7 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
             AbelLocation* loc = evalLocation(*args[i]);
             if (!loc)
                 continue;
-            const auto* argName = dynamic_cast<const NameExprNode*>(args[i].get());
-            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
-            if (!prepared[i].isConst && argSlot && argSlot->isConst) {
+            if (!prepared[i].isConst && loc->isReadOnly) {
                 error(QStringLiteral("E0541"),
                       QStringLiteral("non-const parameter '%1' cannot bind to const lvalue").arg(p.name),
                       args[i]->span);
@@ -896,9 +929,7 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
             AbelLocation* loc = evalLocation(arg);
             if (!loc)
                 continue;
-            const auto* argName = dynamic_cast<const NameExprNode*>(&arg);
-            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
-            if (!prepared[i].isConst && argSlot && argSlot->isConst) {
+            if (!prepared[i].isConst && loc->isReadOnly) {
                 error(QStringLiteral("E0541"),
                       QStringLiteral("non-const parameter '%1' cannot bind to const lvalue").arg(p.name),
                       arg.span);
@@ -995,9 +1026,7 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
             AbelLocation* loc = evalLocation(*args[i]);
             if (!loc)
                 continue;
-            const auto* argName = dynamic_cast<const NameExprNode*>(args[i].get());
-            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
-            if (!paramConst[i] && argSlot && argSlot->isConst) {
+            if (!paramConst[i] && loc->isReadOnly) {
                 error(QStringLiteral("E0583"), QStringLiteral("non-const function parameter cannot bind to const lvalue"), args[i]->span);
                 continue;
             }
@@ -1097,9 +1126,7 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
             AbelLocation* loc = evalLocation(arg);
             if (!loc)
                 continue;
-            const auto* argName = dynamic_cast<const NameExprNode*>(&arg);
-            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
-            if (!paramConst[i] && argSlot && argSlot->isConst) {
+            if (!paramConst[i] && loc->isReadOnly) {
                 error(QStringLiteral("E0583"), QStringLiteral("non-const function parameter cannot bind to const lvalue"), arg.span);
                 continue;
             }
@@ -1275,9 +1302,7 @@ ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
             return ExecResult::normal();
         }
         const bool bindingConst = isReadOnlyBinding(type, stmt.isConst || stmt.type->isConst);
-        const auto* initName = dynamic_cast<const NameExprNode*>(stmt.init.get());
-        const VariableSlot* initSlot = initName ? m_ctx->lookupVariable(initName->name) : nullptr;
-        if (!bindingConst && initSlot && initSlot->isConst) {
+        if (!bindingConst && loc->isReadOnly) {
             error(QStringLiteral("E0534"),
                   QStringLiteral("non-const reference variable '%1' cannot bind to const lvalue").arg(stmt.name),
                   stmt.init->span);
@@ -1363,12 +1388,20 @@ ExecResult Interpreter::execRangeFor(const RangeForStmtNode& stmt)
         return ExecResult::normal();
     }
 
+    bool rangeReadOnly = range.type().isConst || (range.type().pointee && range.type().pointee->isConst);
+    if (exprCanHaveRuntimeLocation(*stmt.range)) {
+        AbelLocation* rangeLoc = evalLocation(*stmt.range);
+        if (!rangeLoc)
+            return ExecResult::normal();
+        range = rangeLoc->read();
+        rangeReadOnly = rangeReadOnly || rangeLoc->isReadOnly;
+    }
     auto vector = range.asVector();
     m_ctx->pushFrame();
     for (size_t i = 0; i < vector->elements.size(); ++i) {
-        AbelLocation* loc = m_ctx->createVectorElementLocation(vector.get(), i);
+        AbelLocation* loc = m_ctx->createVectorElementLocation(vector.get(), i, rangeReadOnly);
         m_ctx->pushFrame();
-        m_ctx->defineVariable(stmt.variable, loc, range.type().isConst, true, stmt.span);
+        m_ctx->defineVariable(stmt.variable, loc, rangeReadOnly, true, stmt.span);
         ExecResult r = execBlock(*stmt.body);
         m_ctx->popFrame();
         if (r.kind == FlowKind::Return) {
@@ -1464,6 +1497,7 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
     if (auto* e = dynamic_cast<const FieldAccessExprNode*>(&expr)) {
         AbelValue base;
         AbelStructValue* object = nullptr;
+        bool baseReadOnly = false;
         if (e->pointer) {
             AbelValue ptr = evalExpr(*e->base);
             if (!ptr.type().isPointer() || !ptr.type().pointee || ptr.type().pointee->kind != TypeKind::Struct) {
@@ -1475,11 +1509,13 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
                 error(QStringLiteral("E0572"), QStringLiteral("cannot dereference nullptr struct pointer"), e->span);
                 return nullptr;
             }
+            baseReadOnly = pointee->isReadOnly || ptr.type().pointee->isConst;
             base = pointee->read();
         } else {
             AbelLocation* baseLoc = evalLocation(*e->base);
             if (!baseLoc)
                 return nullptr;
+            baseReadOnly = baseLoc->isReadOnly;
             base = baseLoc->read();
         }
         if (base.type().kind != TypeKind::Struct) {
@@ -1491,7 +1527,8 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
             error(QStringLiteral("E0574"), QStringLiteral("unknown field '%1'").arg(e->field), e->span);
             return nullptr;
         }
-        return m_ctx->createStructFieldLocation(object, e->field);
+        const bool fieldReadOnly = baseReadOnly || base.type().isConst || structFieldReadOnly(base.type(), e->field);
+        return m_ctx->createStructFieldLocation(object, e->field, fieldReadOnly);
     }
     if (auto* e = dynamic_cast<const UnaryExprNode*>(&expr); e && e->op == QStringLiteral("*")) {
         AbelValue ptr = evalExpr(*e->expr);
@@ -1504,10 +1541,20 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
             error(QStringLiteral("E0537"), QStringLiteral("cannot dereference nullptr"), e->span);
             return nullptr;
         }
-        return loc;
+        return readonlyAlias(*m_ctx, loc, ptr.type().pointee && ptr.type().pointee->isConst);
     }
     if (auto* e = dynamic_cast<const IndexExprNode*>(&expr)) {
-        AbelValue base = evalExpr(*e->base);
+        AbelValue base;
+        bool baseReadOnly = false;
+        if (exprCanHaveRuntimeLocation(*e->base)) {
+            AbelLocation* baseLoc = evalLocation(*e->base);
+            if (!baseLoc)
+                return nullptr;
+            baseReadOnly = baseLoc->isReadOnly;
+            base = baseLoc->read();
+        } else {
+            base = evalExpr(*e->base);
+        }
         if (base.type().kind != TypeKind::Vector || !base.type().pointee) {
             error(QStringLiteral("E0546"), QStringLiteral("indexing requires vector value"), e->span);
             return nullptr;
@@ -1521,7 +1568,7 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
             error(QStringLiteral("E0547"), QStringLiteral("vector index out of range"), e->span);
             return nullptr;
         }
-        return m_ctx->createVectorElementLocation(vector.get(), static_cast<size_t>(idx));
+        return m_ctx->createVectorElementLocation(vector.get(), static_cast<size_t>(idx), vectorElementReadOnly(base, baseReadOnly));
     }
     if (auto* e = dynamic_cast<const CallExprNode*>(&expr)) {
         auto* field = dynamic_cast<FieldAccessExprNode*>(e->callee.get());
@@ -1530,7 +1577,17 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
                 error(QStringLiteral("E0562"), QStringLiteral("vector.%1 expects no arguments").arg(field->field), e->span);
                 return nullptr;
             }
-            AbelValue base = evalExpr(*field->base);
+            AbelValue base;
+            bool baseReadOnly = false;
+            if (exprCanHaveRuntimeLocation(*field->base)) {
+                AbelLocation* baseLoc = evalLocation(*field->base);
+                if (!baseLoc)
+                    return nullptr;
+                baseReadOnly = baseLoc->isReadOnly;
+                base = baseLoc->read();
+            } else {
+                base = evalExpr(*field->base);
+            }
             if (base.type().kind != TypeKind::Vector || !base.type().pointee) {
                 error(QStringLiteral("E0563"), QStringLiteral("vector.%1 requires vector receiver").arg(field->field), field->span);
                 return nullptr;
@@ -1542,7 +1599,7 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
                 return nullptr;
             }
             const size_t index = field->field == QStringLiteral("front") ? 0 : vector->elements.size() - 1;
-            return m_ctx->createVectorElementLocation(vector.get(), index);
+            return m_ctx->createVectorElementLocation(vector.get(), index, vectorElementReadOnly(base, baseReadOnly));
         }
     }
     error(QStringLiteral("E0538"), QStringLiteral("expression is not an lvalue"), expr.span);
@@ -1947,9 +2004,7 @@ AbelValue Interpreter::evalBackendCallByName(const QString& backendName,
                 continue;
             }
             const bool paramConst = isReadOnlyBinding(target, param.type->isConst);
-            const auto* argName = dynamic_cast<const NameExprNode*>(args[i].get());
-            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
-            if (!paramConst && argSlot && argSlot->isConst) {
+            if (!paramConst && loc->isReadOnly) {
                 error(QStringLiteral("E0609"),
                       QStringLiteral("non-const backend parameter '%1' cannot bind to const lvalue").arg(param.name),
                       args[i]->span);
@@ -2139,9 +2194,7 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
             AbelLocation* loc = evalLocation(*args[i]);
             if (!loc)
                 continue;
-            const auto* argName = dynamic_cast<const NameExprNode*>(args[i].get());
-            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
-            if (!prepared[i].isConst && argSlot && argSlot->isConst) {
+            if (!prepared[i].isConst && loc->isReadOnly) {
                 error(QStringLiteral("E0576"),
                       QStringLiteral("non-const constructor parameter '%1' cannot bind to const lvalue").arg(p.name),
                       args[i]->span);
@@ -2176,7 +2229,13 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
     m_ctx->defineVariable(QStringLiteral("this"), self, false, false, span);
     auto structValue = self->read().asStruct();
     for (const auto& fieldName : structValue->fieldOrder)
-        m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(structValue.get(), fieldName), false, false, span);
+        m_ctx->defineVariable(fieldName,
+                              m_ctx->createStructFieldLocation(structValue.get(),
+                                                               fieldName,
+                                                               structFieldReadOnly(object.type(), fieldName)),
+                              structFieldReadOnly(object.type(), fieldName),
+                              false,
+                              span);
     for (size_t i = 0; i < args.size(); ++i) {
         const ParameterNode& p = *info.constructor->params[i];
         if (prepared[i].byReference)
@@ -2217,15 +2276,29 @@ AbelValue Interpreter::evalStructMethod(const FieldAccessExprNode& callee,
         error(QStringLiteral("E0579"), QStringLiteral("unknown method '%1'").arg(callee.field), callee.span);
         return AbelValue::makeUnknown();
     }
+    if (self->isReadOnly && !method->isConstMethod) {
+        error(QStringLiteral("E0579"), QStringLiteral("method '%1' requires mutable receiver").arg(callee.field), callee.span);
+        return AbelValue::makeUnknown();
+    }
     return callStructFunction(*method, self, args, span).value;
 }
 
 AbelValue Interpreter::evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args)
 {
-    AbelValue receiver = evalExpr(*callee.base);
+    AbelValue receiver;
+    AbelLocation* baseLoc = nullptr;
+    if (exprCanHaveRuntimeLocation(*callee.base)) {
+        baseLoc = evalLocation(*callee.base);
+        if (!baseLoc)
+            return AbelValue::makeUnknown();
+        receiver = baseLoc->read();
+    } else {
+        receiver = evalExpr(*callee.base);
+    }
     if (receiver.type().kind == TypeKind::Unknown)
         return AbelValue::makeUnknown();
-    AbelLocation* baseLoc = m_ctx->createStorage(receiver);
+    if (!baseLoc)
+        baseLoc = m_ctx->createStorage(receiver, receiver.type().isConst);
     BuiltinMethodCall call{
         *m_ctx,
         baseLoc,
@@ -2269,6 +2342,10 @@ AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
     }
     AbelValue current = lhs->read();
     AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.rhs->span);
+    if (lhs->isReadOnly) {
+        error(QStringLiteral("E0526"), QStringLiteral("cannot assign to readonly lvalue"), expr.span);
+        return AbelValue::makeUnknown();
+    }
     lhs->write(rhs);
     return rhs;
 }
@@ -2319,7 +2396,13 @@ AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceS
             m_ctx->defineVariable(QStringLiteral("this"), self, false, false, span);
             auto structValue = self->read().asStruct();
             for (const auto& fieldName : structValue->fieldOrder)
-                m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(structValue.get(), fieldName), false, false, span);
+                m_ctx->defineVariable(fieldName,
+                                      m_ctx->createStructFieldLocation(structValue.get(),
+                                                                       fieldName,
+                                                                       structFieldReadOnly(object.type(), fieldName)),
+                                      structFieldReadOnly(object.type(), fieldName),
+                                      false,
+                                      span);
             if (!m_ctx->hasError()) {
                 DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, *info->decl);
                 ExecResult flow = execBlock(*info->constructor->body);
@@ -2398,6 +2481,20 @@ bool Interpreter::isDeclVisible(const DeclNode& decl, bool exportedSymbol) const
     if (decl.packageName == m_currentPackage)
         return true;
     return exportedSymbol;
+}
+
+bool Interpreter::structFieldReadOnly(const AbelType& structType, const QString& fieldName)
+{
+    const StructRuntimeInfo* info = structInfoForType(structType);
+    if (!info || !info->decl)
+        return false;
+    for (const auto& field : info->decl->fields) {
+        if (field->name != fieldName)
+            continue;
+        const AbelType fieldType = typeFromAstForDecl(*field->type, *info->decl);
+        return isReadOnlyBinding(fieldType, field->type->isConst);
+    }
+    return false;
 }
 
 void Interpreter::attachStringifier(BuiltinFunctionCall& call)

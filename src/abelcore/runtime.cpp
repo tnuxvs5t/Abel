@@ -69,7 +69,7 @@ void AbelRuntimeContext::popFrame()
         m_frames.pop_back();
 }
 
-AbelLocation* AbelRuntimeContext::createStorage(const AbelValue& value)
+AbelLocation* AbelRuntimeContext::createStorage(const AbelValue& value, bool isReadOnly)
 {
     auto storage = std::make_unique<AbelStorage>();
     storage->value = value;
@@ -77,26 +77,40 @@ AbelLocation* AbelRuntimeContext::createStorage(const AbelValue& value)
     m_storage.push_back(std::move(storage));
     auto location = std::make_unique<AbelLocation>();
     location->storage = raw;
+    location->isReadOnly = isReadOnly;
     AbelLocation* loc = location.get();
     m_locations.push_back(std::move(location));
     return loc;
 }
 
-AbelLocation* AbelRuntimeContext::createVectorElementLocation(AbelVectorValue* vector, size_t index)
+AbelLocation* AbelRuntimeContext::createVectorElementLocation(AbelVectorValue* vector, size_t index, bool isReadOnly)
 {
     auto location = std::make_unique<AbelLocation>();
     location->vector = vector;
     location->index = index;
+    location->isReadOnly = isReadOnly;
     AbelLocation* loc = location.get();
     m_locations.push_back(std::move(location));
     return loc;
 }
 
-AbelLocation* AbelRuntimeContext::createStructFieldLocation(AbelStructValue* object, const QString& fieldName)
+AbelLocation* AbelRuntimeContext::createStructFieldLocation(AbelStructValue* object, const QString& fieldName, bool isReadOnly)
 {
     auto location = std::make_unique<AbelLocation>();
     location->object = object;
     location->fieldName = fieldName;
+    location->isReadOnly = isReadOnly;
+    AbelLocation* loc = location.get();
+    m_locations.push_back(std::move(location));
+    return loc;
+}
+
+AbelLocation* AbelRuntimeContext::createAliasLocation(AbelLocation* source, bool isReadOnly)
+{
+    if (!source)
+        return nullptr;
+    auto location = std::make_unique<AbelLocation>(*source);
+    location->isReadOnly = source->isReadOnly || isReadOnly;
     AbelLocation* loc = location.get();
     m_locations.push_back(std::move(location));
     return loc;
@@ -115,13 +129,15 @@ bool AbelRuntimeContext::defineVariable(const QString& name,
         error(QStringLiteral("E0501"), QStringLiteral("variable '%1' is already defined in this scope").arg(name), span);
         return false;
     }
+    if (isConst && location)
+        location = createAliasLocation(location, true);
     frame.insert(name, VariableSlot{location, isConst, isReference});
     return true;
 }
 
 bool AbelRuntimeContext::defineValueVariable(const QString& name, const AbelValue& value, bool isConst, const SourceSpan& span)
 {
-    return defineVariable(name, createStorage(value), isConst, false, span);
+    return defineVariable(name, createStorage(value, isConst), isConst, false, span);
 }
 
 VariableSlot* AbelRuntimeContext::lookupVariable(const QString& name)
@@ -174,6 +190,10 @@ bool AbelRuntimeContext::assignVariable(const QString& name, const AbelValue& va
     }
     if (slot->isConst) {
         error(QStringLiteral("E0503"), QStringLiteral("cannot assign to const variable '%1'").arg(name), span);
+        return false;
+    }
+    if (slot->location && slot->location->isReadOnly) {
+        error(QStringLiteral("E0503"), QStringLiteral("cannot assign through readonly location '%1'").arg(name), span);
         return false;
     }
     if (slot->location)

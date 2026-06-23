@@ -52,6 +52,7 @@ struct AbelLocation {
     AbelStructValue* object = nullptr;
     size_t index = 0;
     QString fieldName;
+    bool isReadOnly = false;
 
     AbelValue read() const;
     void write(const AbelValue& value);
@@ -64,9 +65,10 @@ public:
     void pushFrame(bool boundary = false, const QString& symbol = QString(), const SourceSpan& callSite = {});
     void popFrame();
 
-    AbelLocation* createStorage(const AbelValue& value);
-    AbelLocation* createVectorElementLocation(AbelVectorValue* vector, size_t index);
-    AbelLocation* createStructFieldLocation(AbelStructValue* object, const QString& fieldName);
+    AbelLocation* createStorage(const AbelValue& value, bool isReadOnly = false);
+    AbelLocation* createVectorElementLocation(AbelVectorValue* vector, size_t index, bool isReadOnly = false);
+    AbelLocation* createStructFieldLocation(AbelStructValue* object, const QString& fieldName, bool isReadOnly = false);
+    AbelLocation* createAliasLocation(AbelLocation* source, bool isReadOnly);
     bool defineVariable(const QString& name, AbelLocation* location, bool isConst, bool isReference, const SourceSpan& span);
     bool defineValueVariable(const QString& name, const AbelValue& value, bool isConst, const SourceSpan& span);
     VariableSlot* lookupVariable(const QString& name);

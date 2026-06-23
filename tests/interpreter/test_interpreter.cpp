@@ -251,6 +251,63 @@ private slots:
         QVERIFY(!mutableRefToConst.diagnostics.isEmpty());
     }
 
+    void readonlyLocationsBlockMutationAtRuntime()
+    {
+        auto constIndex = runSource(QStringLiteral("fn int main() { const vector<int> xs = {1}; xs[0] = 2; return 0; }"));
+        QVERIFY(!constIndex.diagnostics.isEmpty());
+
+        auto constFront = runSource(QStringLiteral("fn int main() { const vector<int> xs = {1}; xs.front() = 2; return 0; }"));
+        QVERIFY(!constFront.diagnostics.isEmpty());
+
+        auto constPush = runSource(QStringLiteral("fn int main() { const vector<int> xs = {1}; xs.push(2); return 0; }"));
+        QVERIFY(!constPush.diagnostics.isEmpty());
+
+        auto constRange = runSource(QStringLiteral(R"(
+            fn int main() {
+                const vector<int> xs = {1, 2};
+                for (x in xs) {
+                    x = x + 1;
+                }
+                return 0;
+            }
+        )"));
+        QVERIFY(!constRange.diagnostics.isEmpty());
+
+        auto constField = runSource(QStringLiteral(R"(
+            struct Hold {
+                const int x;
+            }
+
+            fn int main() {
+                Hold h = Hold(1);
+                h.x = 2;
+                return 0;
+            }
+        )"));
+        QVERIFY(!constField.diagnostics.isEmpty());
+
+        auto constReceiver = runSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+
+                init(int start) {
+                    x = start;
+                }
+
+                fn void inc() {
+                    x = x + 1;
+                }
+            }
+
+            fn int main() {
+                const Box b = Box(1);
+                b.inc();
+                return 0;
+            }
+        )"));
+        QVERIFY(!constReceiver.diagnostics.isEmpty());
+    }
+
     void comparesNullptr()
     {
         const QString src = QStringLiteral(R"(

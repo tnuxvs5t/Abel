@@ -637,6 +637,57 @@ private slots:
         QVERIFY(!result.diagnostics.isEmpty());
     }
 
+    void rejectsReadonlyContainerAndStructLocations()
+    {
+        auto constIndex = checkSource(QStringLiteral("fn int main() { const vector<int> xs = {1}; xs[0] = 2; return 0; }"));
+        QVERIFY(!constIndex.diagnostics.isEmpty());
+
+        auto constRange = checkSource(QStringLiteral(R"(
+            fn int main() {
+                const vector<int> xs = {1, 2};
+                for (x in xs) {
+                    x = x + 1;
+                }
+                return 0;
+            }
+        )"));
+        QVERIFY(!constRange.diagnostics.isEmpty());
+
+        auto constField = checkSource(QStringLiteral(R"(
+            struct Hold {
+                const int x;
+            }
+
+            fn int main() {
+                Hold h = Hold(1);
+                h.x = 2;
+                return 0;
+            }
+        )"));
+        QVERIFY(!constField.diagnostics.isEmpty());
+
+        auto constReceiver = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+
+                init(int start) {
+                    x = start;
+                }
+
+                fn void inc() {
+                    x = x + 1;
+                }
+            }
+
+            fn int main() {
+                const Box b = Box(1);
+                b.inc();
+                return 0;
+            }
+        )"));
+        QVERIFY(!constReceiver.diagnostics.isEmpty());
+    }
+
     void acceptsStructCounter()
     {
         const QString src = QStringLiteral(R"(
