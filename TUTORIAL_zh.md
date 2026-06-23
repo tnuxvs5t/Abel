@@ -759,6 +759,7 @@ Abel any           -> C++ abel::AbelValue
 Abel vector<T>     -> C++ std::vector<T>
 Abel vector<T>&    -> C++ std::vector<T>&，并在调用结束后写回 Abel vector
 AbelRuntimeContext& 可作为最后一个 C++ lambda 参数，用于自定义结构化诊断
+Abel any...        -> C++ bindVariadic + abel::AbelVariadicArgs 或 std::vector<abel::AbelValue>
 ```
 
 其中 `vector<T>` 的 T 覆盖常用标量：
@@ -790,7 +791,31 @@ char 对应 C++ QChar；C++ char 走 Latin-1 映射。
 vector<T> 可以直接作为参数或返回值；vector<T>& 调用结束后写回 Abel vector。
 除了 vector<T>&，不要假设普通 T& 参数会写回 Abel。
 AbelRuntimeContext& 必须放在 lambda 最后一个参数；放在中间不是 Abel 调用签名的一部分，不支持。
+变长 backend 不用写普通 bind；使用 bindVariadic("Backend.symbol", lambda)。lambda 只能接一个 payload 参数，外加可选的最后一个 AbelRuntimeContext&。
 当前不支持任意 struct/class 自动拆装箱，不支持任意 pointer/reference 矩阵。
+```
+
+变长参数示例：
+
+```cpp
+bindVariadic(QStringLiteral("MathSystem.join_debug"),
+             [](abel::AbelVariadicArgs args) {
+                 return args.buildString();
+             });
+
+bindVariadic(QStringLiteral("MathSystem.count_variadic"),
+             [](std::vector<abel::AbelValue> args) {
+                 return static_cast<int>(args.size());
+             });
+```
+
+Abel 侧声明：
+
+```abel
+backend MathSystem {
+    fn str join_debug(any... args);
+    fn int count_variadic(any... args);
+}
 ```
 
 例如：

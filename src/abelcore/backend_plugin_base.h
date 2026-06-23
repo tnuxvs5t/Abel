@@ -42,6 +42,16 @@ protected:
         m_runtime.insert(key, AbelBackendBinder::bind(std::move(fn)));
     }
 
+    template <typename Fn>
+    void bindVariadic(const QString& symbol, Fn fn)
+    {
+        const QString key = canonicalSymbol(symbol);
+        AbelBackendFunction desc = AbelBackendBinder::describeVariadic(key, fn);
+        desc.symbol = key;
+        m_functions.push_back(desc);
+        m_runtime.insert(key, AbelBackendBinder::bindVariadic(std::move(fn)));
+    }
+
 private:
     QString canonicalSymbol(const QString& symbol) const
     {

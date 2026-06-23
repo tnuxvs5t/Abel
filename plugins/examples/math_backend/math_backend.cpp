@@ -49,6 +49,12 @@ public:
             }
             return x;
         });
+        bindVariadic(QStringLiteral("MathSystem.join_debug"), [](abel::AbelVariadicArgs args) {
+            return args.buildString();
+        });
+        bindVariadic(QStringLiteral("MathSystem.count_variadic"), [](std::vector<abel::AbelValue> args) {
+            return static_cast<int>(args.size());
+        });
     }
 
     QString backendId() const override

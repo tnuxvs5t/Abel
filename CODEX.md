@@ -701,6 +701,7 @@ abel::AbelValue      对应 Abel any
 std::vector<bool/int/qint64/double/QChar/char/QString/AbelValue>
 std::vector<T>&      对应 Abel vector<T>&，调用后写回，T 为上述常用标量
 AbelRuntimeContext&  只能作为最后一个 C++ lambda 参数，用于结构化诊断
+bindVariadic         对应 Abel any...，payload 用 AbelVariadicArgs 或 std::vector<AbelValue>
 ```
 
 当前直接返回值：
@@ -726,6 +727,25 @@ std::vector<bool/int/qint64/double/QChar/char/QString/AbelValue>
 AbelRuntimeContext& 可以放在非末尾参数
 跨 Qt/编译器 ABI 稳定
 ```
+
+如果 Abel 声明是：
+
+```abel
+backend MathSystem {
+    fn str join_debug(any... args);
+}
+```
+
+C++ plugin 应使用：
+
+```cpp
+bindVariadic(QStringLiteral("MathSystem.join_debug"),
+             [](abel::AbelVariadicArgs args) {
+                 return args.buildString();
+             });
+```
+
+不要用普通 `bind` 假装接收无限参数；普通 `bind` 是固定 arity。
 
 如果用户问 `fn void some_call(str a, str b)` 是否支持：
 

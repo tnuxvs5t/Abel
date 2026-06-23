@@ -23,7 +23,7 @@ file(WRITE "${PROJECT_DIR}/abel.package.json" [=[
     {
       "backendId": "SdkSystem",
       "path": "]=] "${PLUGIN_PATH}" [=[",
-      "symbols": ["add", "letters", "sum_i64", "guard"]
+      "symbols": ["add", "letters", "sum_i64", "guard", "join", "count"]
     }
   ]
 }
@@ -35,12 +35,24 @@ backend SdkSystem {
     fn vector<char> letters();
     fn long sum_i64(vector<long> xs);
     fn int guard(int x);
+    fn str join(any... args);
+    fn int count(any... args);
 }
 
 fn int main() {
     vector<char> cs = SdkSystem::letters();
     vector<long> xs = {1, 2, 3};
-    return SdkSystem::add(cs.len(), cast<int>(SdkSystem::sum_i64(xs))) + SdkSystem::guard(0);
+    str joined = SdkSystem::join("S", 4, false);
+    int joined_bonus = 0;
+    if (joined == "S4false") {
+        joined_bonus = 7;
+    } else {
+        joined_bonus = 100;
+    }
+    return SdkSystem::add(cs.len(), cast<int>(SdkSystem::sum_i64(xs)))
+        + SdkSystem::guard(0)
+        + joined_bonus
+        + SdkSystem::count("S", 4, false);
 }
 ]=])
 
@@ -64,6 +76,6 @@ execute_process(
     OUTPUT_VARIABLE run_output
     ERROR_VARIABLE run_error
 )
-if (NOT run_result EQUAL 8)
-    message(FATAL_ERROR "installed abel run expected exit 8, got ${run_result}:\n${run_output}\n${run_error}")
+if (NOT run_result EQUAL 18)
+    message(FATAL_ERROR "installed abel run expected exit 18, got ${run_result}:\n${run_output}\n${run_error}")
 endif()

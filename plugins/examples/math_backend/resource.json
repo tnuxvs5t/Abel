@@ -14,7 +14,9 @@
     "MathSystem.make_range",
     "MathSystem.sum_f64",
     "MathSystem.flip_bools",
-    "MathSystem.fail_if_negative"
+    "MathSystem.fail_if_negative",
+    "MathSystem.join_debug",
+    "MathSystem.count_variadic"
   ],
   "state": "unloaded",
   "lastError": ""

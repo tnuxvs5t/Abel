@@ -130,7 +130,9 @@ private slots:
                 "MathSystem.make_range",
                 "MathSystem.sum_f64",
                 "MathSystem.flip_bools",
-                "MathSystem.fail_if_negative"
+                "MathSystem.fail_if_negative",
+                "MathSystem.join_debug",
+                "MathSystem.count_variadic"
             ],
             "state": "unloaded",
             "lastError": ""
@@ -142,7 +144,7 @@ private slots:
         QCOMPARE(parsed.node.id, QStringLiteral("math.backend"));
         QCOMPARE(parsed.node.kind, QStringLiteral("qt_plugin"));
         QCOMPARE(parsed.node.backendId, QStringLiteral("MathSystem"));
-        QCOMPARE(parsed.node.symbols.size(), 8);
+        QCOMPARE(parsed.node.symbols.size(), 10);
         QCOMPARE(abel::resourceNodeStateName(parsed.node.state), QStringLiteral("unloaded"));
     }
 
@@ -197,6 +199,8 @@ private slots:
             QStringLiteral("MathSystem.sum_f64"),
             QStringLiteral("MathSystem.flip_bools"),
             QStringLiteral("MathSystem.fail_if_negative"),
+            QStringLiteral("MathSystem.join_debug"),
+            QStringLiteral("MathSystem.count_variadic"),
         };
 
         abel::BackendRegistry registry;
@@ -212,6 +216,8 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("sum_f64")));
         QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("flip_bools")));
         QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("fail_if_negative")));
+        QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("join_debug")));
+        QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("count_variadic")));
 
         QList<abel::Diagnostic> diagnostics;
         auto sum = registry.call({
@@ -325,6 +331,33 @@ private slots:
         QCOMPARE(rejected.type().kind, abel::TypeKind::Unknown);
         QCOMPARE(diagnostics.size(), 1);
         QCOMPARE(diagnostics.front().code, QStringLiteral("E0623"));
+
+        diagnostics.clear();
+        auto joined = registry.call({
+            QStringLiteral("MathSystem"),
+            QStringLiteral("join_debug"),
+            {abel::AbelValue::makeAny(abel::AbelValue::makeString(QStringLiteral("x="))),
+             abel::AbelValue::makeAny(abel::AbelValue::makeInt(42)),
+             abel::AbelValue::makeAny(abel::AbelValue::makeBool(true))},
+            {},
+        }, diagnostics);
+        for (const auto& d : diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(diagnostics.isEmpty());
+        QCOMPARE(joined.asString(), QStringLiteral("x=42true"));
+
+        diagnostics.clear();
+        auto counted = registry.call({
+            QStringLiteral("MathSystem"),
+            QStringLiteral("count_variadic"),
+            {abel::AbelValue::makeAny(abel::AbelValue::makeInt(1)),
+             abel::AbelValue::makeAny(abel::AbelValue::makeString(QStringLiteral("two")))},
+            {},
+        }, diagnostics);
+        for (const auto& d : diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(diagnostics.isEmpty());
+        QCOMPARE(counted.asInt(), 2);
     }
 
     void loadedMathBackendRunsThroughInterpreter()
@@ -346,6 +379,8 @@ private slots:
             QStringLiteral("MathSystem.sum_f64"),
             QStringLiteral("MathSystem.flip_bools"),
             QStringLiteral("MathSystem.fail_if_negative"),
+            QStringLiteral("MathSystem.join_debug"),
+            QStringLiteral("MathSystem.count_variadic"),
         };
 
         abel::BackendRegistry registry;
@@ -364,6 +399,8 @@ private slots:
                 fn double sum_f64(vector<double> xs);
                 fn void flip_bools(vector<bool>& xs);
                 fn int fail_if_negative(int x);
+                fn str join_debug(any... args);
+                fn int count_variadic(any... args);
             }
 
             fn int main() {
@@ -384,7 +421,15 @@ private slots:
                 int c = MathSystem::char_code(MathSystem::first_char("Abel"));
                 int d = cast<int>(MathSystem::sum_f64(ds));
                 int ok = MathSystem::fail_if_negative(5);
-                return MathSystem::fast_add(xs[0], xs[2]) + n + c + d + ok + bonus;
+                str joined = MathSystem::join_debug("A", 7, true);
+                int variadic_count = MathSystem::count_variadic("A", 7, true);
+                int joined_bonus = 0;
+                if (joined == "A7true") {
+                    joined_bonus = 6;
+                } else {
+                    joined_bonus = 100;
+                }
+                return MathSystem::fast_add(xs[0], xs[2]) + n + c + d + ok + bonus + joined_bonus + variadic_count;
             }
         )");
 
@@ -403,7 +448,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 92);
+        QCOMPARE(result.exitCode, 101);
     }
 };
 

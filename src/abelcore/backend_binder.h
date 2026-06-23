@@ -13,6 +13,56 @@
 
 namespace abel {
 
+class AbelVariadicArgs {
+public:
+    AbelVariadicArgs() = default;
+    explicit AbelVariadicArgs(QList<AbelValue> values)
+        : m_values(std::move(values))
+    {
+    }
+
+    qsizetype size() const { return m_values.size(); }
+    bool empty() const { return m_values.isEmpty(); }
+    const QList<AbelValue>& rawValues() const { return m_values; }
+
+    const AbelValue& raw(qsizetype index) const
+    {
+        return m_values.at(index);
+    }
+
+    AbelValue value(qsizetype index) const
+    {
+        return unboxAny(m_values.at(index));
+    }
+
+    std::vector<AbelValue> values() const
+    {
+        std::vector<AbelValue> out;
+        out.reserve(static_cast<size_t>(m_values.size()));
+        for (const AbelValue& value : m_values)
+            out.push_back(unboxAny(value));
+        return out;
+    }
+
+    QString buildString() const
+    {
+        QString out;
+        for (qsizetype i = 0; i < m_values.size(); ++i)
+            out += value(i).debugString();
+        return out;
+    }
+
+private:
+    static AbelValue unboxAny(const AbelValue& value)
+    {
+        if (value.type().kind == TypeKind::Any)
+            return value.asAny()->value;
+        return value;
+    }
+
+    QList<AbelValue> m_values;
+};
+
 class AbelBackendBinder {
 public:
     using Runtime = std::function<AbelValue(const QList<AbelValue>&, AbelRuntimeContext&)>;
@@ -48,6 +98,42 @@ public:
         };
     }
 
+    template <typename Fn>
+    static AbelBackendFunction describeVariadic(const QString& symbol, Fn&&)
+    {
+        using Traits = FunctionTraits<std::decay_t<Fn>>;
+        static_assert(Traits::AbelArity == 1,
+                      "variadic backend function must take exactly one payload argument, plus optional AbelRuntimeContext&");
+        using Payload = std::tuple_element_t<0, typename Traits::AbelArgTuple>;
+        static_assert(IsVariadicPayloadArg<Payload>::value,
+                      "variadic backend payload must be AbelVariadicArgs or std::vector<AbelValue>");
+
+        AbelBackendFunction out;
+        out.symbol = symbol;
+        out.returnType = nativeType<typename Traits::Return>();
+        out.params.push_back(makeType(TypeKind::Any));
+        out.variadic = true;
+        return out;
+    }
+
+    template <typename Fn>
+    static Runtime bindVariadic(Fn fn)
+    {
+        using Traits = FunctionTraits<std::decay_t<Fn>>;
+        static_assert(Traits::AbelArity == 1,
+                      "variadic backend function must take exactly one payload argument, plus optional AbelRuntimeContext&");
+        using Payload = std::tuple_element_t<0, typename Traits::AbelArgTuple>;
+        static_assert(IsVariadicPayloadArg<Payload>::value,
+                      "variadic backend payload must be AbelVariadicArgs or std::vector<AbelValue>");
+
+        return [fn = std::move(fn)](const QList<AbelValue>& args, AbelRuntimeContext& ctx) mutable {
+            return invokeVariadic<Fn,
+                                  typename Traits::Return,
+                                  Payload,
+                                  Traits::TakesRuntimeContext>(fn, args, ctx);
+        };
+    }
+
 private:
     template <typename>
     static constexpr bool alwaysFalse = false;
@@ -63,6 +149,19 @@ private:
     template <typename T, typename Alloc>
     struct IsStdVector<std::vector<T, Alloc>> : std::true_type {
         using Element = T;
+    };
+
+    template <typename T>
+    struct IsStdVectorOfAbelValue : std::false_type {};
+
+    template <typename Alloc>
+    struct IsStdVectorOfAbelValue<std::vector<AbelValue, Alloc>> : std::true_type {};
+
+    template <typename T>
+    struct IsVariadicPayloadArg {
+        using Bare = std::remove_cvref_t<T>;
+        static constexpr bool value = std::is_same_v<Bare, AbelVariadicArgs>
+            || IsStdVectorOfAbelValue<Bare>::value;
     };
 
     template <typename Tuple, typename Indexes>
@@ -442,6 +541,67 @@ private:
             args,
             ctx,
             std::make_index_sequence<std::tuple_size_v<AbelTuple>>{});
+    }
+
+    static std::vector<AbelValue> unboxedVector(const AbelVariadicArgs& args)
+    {
+        return args.values();
+    }
+
+    template <typename Payload>
+    struct VariadicPayloadStorage {
+        using Bare = std::remove_cvref_t<Payload>;
+
+        explicit VariadicPayloadStorage(const QList<AbelValue>& args)
+            : value(make(args))
+        {
+        }
+
+        decltype(auto) get()
+        {
+            if constexpr (std::is_lvalue_reference_v<Payload>)
+                return static_cast<Payload>(value);
+            else
+                return std::move(value);
+        }
+
+        static Bare make(const QList<AbelValue>& args)
+        {
+            if constexpr (std::is_same_v<Bare, AbelVariadicArgs>) {
+                return AbelVariadicArgs(args);
+            } else if constexpr (IsStdVectorOfAbelValue<Bare>::value) {
+                return unboxedVector(AbelVariadicArgs(args));
+            } else {
+                static_assert(alwaysFalse<Payload>, "unsupported variadic backend payload type");
+            }
+        }
+
+        Bare value;
+    };
+
+    template <typename Fn, typename R, typename Payload, bool TakesRuntimeContext>
+    static AbelValue invokeVariadic(Fn& fn, const QList<AbelValue>& args, AbelRuntimeContext& ctx)
+    {
+        VariadicPayloadStorage<Payload> payload(args);
+        if constexpr (std::is_void_v<R>) {
+            if constexpr (TakesRuntimeContext)
+                std::invoke(fn, payload.get(), ctx);
+            else
+                std::invoke(fn, payload.get());
+            if (ctx.hasError())
+                return AbelValue::makeUnknown();
+            return AbelValue::makeVoid();
+        } else {
+            auto result = [&]() {
+                if constexpr (TakesRuntimeContext)
+                    return std::invoke(fn, payload.get(), ctx);
+                else
+                    return std::invoke(fn, payload.get());
+            }();
+            if (ctx.hasError())
+                return AbelValue::makeUnknown();
+            return toAbelValue(std::move(result));
+        }
     }
 };
 
