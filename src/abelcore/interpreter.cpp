@@ -236,6 +236,9 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
     m_functions.clear();
     m_structs.clear();
     m_backends.clear();
+    m_enums.clear();
+    m_typeAliases.clear();
+    m_resolvingTypeAliases.clear();
     m_currentPackage.clear();
     m_currentModule.clear();
     m_currentImports.clear();
@@ -244,6 +247,20 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
     m_activeBackendRegistry = backendRegistry ? backendRegistry : &m_backendRegistry;
 
     InterpreterResult result;
+    if (!collectEnums(program, ctx)) {
+        result.exitCode = 1;
+        result.diagnostics = ctx.takeDiagnostics();
+        m_ctx = nullptr;
+        m_activeBackendRegistry = nullptr;
+        return result;
+    }
+    if (!collectTypeAliases(program, ctx)) {
+        result.exitCode = 1;
+        result.diagnostics = ctx.takeDiagnostics();
+        m_ctx = nullptr;
+        m_activeBackendRegistry = nullptr;
+        return result;
+    }
     if (!collectStructs(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
@@ -359,6 +376,73 @@ bool Interpreter::collectFunctions(const ProgramNode& program, AbelRuntimeContex
     return ok;
 }
 
+bool Interpreter::collectEnums(const ProgramNode& program, AbelRuntimeContext& ctx)
+{
+    bool ok = true;
+    for (const auto& decl : program.declarations) {
+        auto* e = dynamic_cast<EnumDeclNode*>(decl.get());
+        if (!e)
+            continue;
+        const auto existing = m_enums.value(e->name);
+        bool duplicateInModule = false;
+        for (const auto& other : existing) {
+            if (other.decl && sameDeclNamespace(*other.decl, *e)) {
+                ctx.error(QStringLiteral("E0581"),
+                          QStringLiteral("duplicate enum '%1' in package '%2' module '%3'")
+                              .arg(e->name, e->packageName, e->moduleName),
+                          e->span);
+                ok = false;
+                duplicateInModule = true;
+                break;
+            }
+        }
+        if (duplicateInModule)
+            continue;
+
+        EnumRuntimeInfo info;
+        info.decl = e;
+        for (qsizetype i = 0; i < e->enumerators.size(); ++i) {
+            const QString name = e->enumerators[i];
+            if (info.values.contains(name)) {
+                ctx.error(QStringLiteral("E0581"),
+                          QStringLiteral("duplicate enum enumerator '%1'").arg(name),
+                          e->span);
+                ok = false;
+                continue;
+            }
+            info.values.insert(name, static_cast<int>(i));
+        }
+        m_enums[e->name].push_back(std::move(info));
+    }
+    return ok;
+}
+
+bool Interpreter::collectTypeAliases(const ProgramNode& program, AbelRuntimeContext& ctx)
+{
+    bool ok = true;
+    for (const auto& decl : program.declarations) {
+        auto* alias = dynamic_cast<TypeAliasDeclNode*>(decl.get());
+        if (!alias)
+            continue;
+        const auto existing = m_typeAliases.value(alias->name);
+        bool duplicateInModule = false;
+        for (const TypeAliasDeclNode* other : existing) {
+            if (other && sameDeclNamespace(*other, *alias)) {
+                ctx.error(QStringLiteral("E0582"),
+                          QStringLiteral("duplicate type alias '%1' in package '%2' module '%3'")
+                              .arg(alias->name, alias->packageName, alias->moduleName),
+                          alias->span);
+                ok = false;
+                duplicateInModule = true;
+                break;
+            }
+        }
+        if (!duplicateInModule)
+            m_typeAliases[alias->name].push_back(alias);
+    }
+    return ok;
+}
+
 const FunctionDeclNode* Interpreter::findRootFunction(const QString& name) const
 {
     const auto candidates = m_functions.value(name);
@@ -456,6 +540,77 @@ const Interpreter::StructRuntimeInfo* Interpreter::structInfoForType(const AbelT
     return nullptr;
 }
 
+const Interpreter::EnumRuntimeInfo* Interpreter::resolveEnum(const QString& name) const
+{
+    if (const auto qualified = splitQualifiedSymbol(name))
+        return resolveEnumInModule(qualified->first, qualified->second);
+    return resolveEnumInPackage(name, m_currentPackage);
+}
+
+const Interpreter::EnumRuntimeInfo* Interpreter::resolveEnumInModule(const QString& moduleName, const QString& name) const
+{
+    const QString resolvedModuleName = resolveModuleName(moduleName);
+    auto found = m_enums.constFind(name);
+    if (found == m_enums.constEnd() || found->isEmpty())
+        return nullptr;
+    QList<const EnumRuntimeInfo*> visible;
+    for (const auto& info : found.value()) {
+        if (info.decl && info.decl->moduleName == resolvedModuleName && isEnumVisible(*info.decl))
+            visible.push_back(&info);
+    }
+    return visible.size() == 1 ? visible.front() : nullptr;
+}
+
+const Interpreter::EnumRuntimeInfo* Interpreter::resolveEnumInPackage(const QString& name, const QString& packageName) const
+{
+    auto found = m_enums.constFind(name);
+    if (found == m_enums.constEnd() || found->isEmpty())
+        return nullptr;
+    const auto& candidates = found.value();
+    for (const auto& info : candidates) {
+        if (info.decl && isDeclInCurrentModule(*info.decl, packageName))
+            return &info;
+    }
+    for (const auto& info : candidates) {
+        if (info.decl && isEnumVisible(*info.decl))
+            return &info;
+    }
+    return nullptr;
+}
+
+const TypeAliasDeclNode* Interpreter::resolveTypeAlias(const QString& name, const QString& packageName) const
+{
+    if (const auto qualified = splitQualifiedSymbol(name))
+        return resolveTypeAliasInModule(qualified->first, qualified->second);
+    auto found = m_typeAliases.constFind(name);
+    if (found == m_typeAliases.constEnd() || found->isEmpty())
+        return nullptr;
+    for (const TypeAliasDeclNode* alias : found.value()) {
+        if (alias && isDeclInCurrentModule(*alias, packageName))
+            return alias;
+    }
+    QList<const TypeAliasDeclNode*> visible;
+    for (const TypeAliasDeclNode* alias : found.value()) {
+        if (alias && isTypeAliasVisible(*alias))
+            visible.push_back(alias);
+    }
+    return visible.size() == 1 ? visible.front() : nullptr;
+}
+
+const TypeAliasDeclNode* Interpreter::resolveTypeAliasInModule(const QString& moduleName, const QString& name) const
+{
+    const QString resolvedModuleName = resolveModuleName(moduleName);
+    auto found = m_typeAliases.constFind(name);
+    if (found == m_typeAliases.constEnd() || found->isEmpty())
+        return nullptr;
+    QList<const TypeAliasDeclNode*> visible;
+    for (const TypeAliasDeclNode* alias : found.value()) {
+        if (alias && alias->moduleName == resolvedModuleName && isTypeAliasVisible(*alias))
+            visible.push_back(alias);
+    }
+    return visible.size() == 1 ? visible.front() : nullptr;
+}
+
 const Interpreter::BackendRuntimeInfo* Interpreter::resolveBackend(const QString& name) const
 {
     return resolveBackendInPackage(name, m_currentPackage);
@@ -492,12 +647,12 @@ const Interpreter::BackendRuntimeInfo* Interpreter::resolveBackendInPackage(cons
     return nullptr;
 }
 
-AbelType Interpreter::typeFromAstInCurrentPackage(const TypeNode& node) const
+AbelType Interpreter::typeFromAstInCurrentPackage(const TypeNode& node)
 {
     return typeFromAstInPackage(node, m_currentPackage);
 }
 
-AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& packageName) const
+AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& packageName)
 {
     if (node.name == QStringLiteral("vector") && node.elementType) {
         AbelType base = makeVectorType(typeFromAstInPackage(*node.elementType, packageName));
@@ -515,6 +670,41 @@ AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& 
         for (const auto& param : node.functionParamTypes)
             params.push_back(typeFromAstInPackage(*param, packageName));
         AbelType base = makeFunctionType(typeFromAstInPackage(*node.elementType, packageName), std::move(params));
+        if (node.isConst)
+            base = makeConstType(base);
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
+
+    if (const TypeAliasDeclNode* alias = resolveTypeAlias(node.name, packageName)) {
+        const QString key = declarationQualifiedName(*alias, alias->name);
+        if (m_resolvingTypeAliases.contains(key)) {
+            if (m_ctx)
+                m_ctx->error(QStringLiteral("E0583"), QStringLiteral("recursive type alias '%1'").arg(alias->name), node.span);
+            return makeType(TypeKind::Unknown);
+        }
+        m_resolvingTypeAliases.insert(key);
+        AbelType base = typeFromAstForDecl(*alias->targetType, *alias);
+        m_resolvingTypeAliases.remove(key);
+        if (node.isConst)
+            base = makeConstType(base);
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
+
+    const EnumRuntimeInfo* enumInfo = nullptr;
+    if (const auto qualified = splitQualifiedSymbol(node.name))
+        enumInfo = resolveEnumInModule(qualified->first, qualified->second);
+    else
+        enumInfo = resolveEnumInPackage(node.name, packageName);
+    if (enumInfo) {
+        AbelType base = makeType(TypeKind::I32, enumInfo->decl ? enumInfo->decl->name : node.name);
         if (node.isConst)
             base = makeConstType(base);
         for (int i = 0; i < node.pointerDepth; ++i)
@@ -1487,6 +1677,21 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
         return loc ? loc->read() : AbelValue::makeUnknown();
     }
     if (auto* e = dynamic_cast<const FieldAccessExprNode*>(&expr)) {
+        if (!e->pointer) {
+            const QString enumName = staticAccessName(*e->base);
+            if (!enumName.isEmpty()) {
+                if (dynamic_cast<const NameExprNode*>(e->base.get()) && m_ctx->lookupVariable(enumName))
+                    goto normalFieldEval;
+                if (const EnumRuntimeInfo* info = resolveEnum(enumName)) {
+                    const auto found = info->values.constFind(e->field);
+                    if (found != info->values.constEnd())
+                        return AbelValue::makeInt(found.value(), TypeKind::I32);
+                    error(QStringLiteral("E0581"), QStringLiteral("enum '%1' has no enumerator '%2'").arg(enumName, e->field), e->span);
+                    return AbelValue::makeUnknown();
+                }
+            }
+        }
+normalFieldEval:
         AbelLocation* loc = evalLocation(*e);
         return loc ? loc->read() : AbelValue::makeUnknown();
     }
@@ -2543,6 +2748,16 @@ bool Interpreter::isDeclVisible(const DeclNode& decl, bool exportedSymbol) const
     if (decl.packageName == m_currentPackage)
         return true;
     return exportedSymbol;
+}
+
+bool Interpreter::isEnumVisible(const EnumDeclNode& decl) const
+{
+    return isDeclVisible(decl, decl.exported);
+}
+
+bool Interpreter::isTypeAliasVisible(const TypeAliasDeclNode& alias) const
+{
+    return isDeclVisible(alias, alias.exported);
 }
 
 bool Interpreter::structFieldReadOnly(const AbelType& structType, const QString& fieldName)

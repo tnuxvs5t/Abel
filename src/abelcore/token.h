@@ -32,6 +32,7 @@ enum class TokenKind {
     KwBreak, KwContinue, KwTrue, KwFalse, KwNullptr,
     KwConst, KwStruct, KwInit, KwBackend, KwDebt, KwLambda,
     KwVector, KwFunc, KwAny, KwNew, KwDelete, KwCast, KwThis,
+    KwEnum, KwType,
     KwExport, KwModule, KwUse, KwAs, KwPublic, KwPrivate,
 };
 

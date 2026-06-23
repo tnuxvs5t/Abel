@@ -76,6 +76,54 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsEnumAndTypeAlias()
+    {
+        const QString src = QStringLiteral(R"(
+            enum Color {
+                Red,
+                Green,
+                Blue,
+            }
+
+            type Index = int;
+            type Scores = vector<Index>;
+            type Favorite = Color;
+
+            fn int main() {
+                Scores xs = {1, 2};
+                Favorite c = Color.Green;
+                return c + xs[1];
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsBadEnumAndRecursiveAlias()
+    {
+        auto badEnumerator = checkSource(QStringLiteral(R"(
+            enum Color { Red, Green }
+
+            fn int main() {
+                return Color.Blue;
+            }
+        )"));
+        QVERIFY(!badEnumerator.diagnostics.isEmpty());
+
+        auto recursiveAlias = checkSource(QStringLiteral(R"(
+            type A = B;
+            type B = A;
+
+            fn int main() {
+                A x = 0;
+                return x;
+            }
+        )"));
+        QVERIFY(!recursiveAlias.diagnostics.isEmpty());
+    }
+
     void rejectsIntegerIfCondition()
     {
         auto result = checkSource(QStringLiteral("fn int main() { if (1) { return 1; } return 0; }"));

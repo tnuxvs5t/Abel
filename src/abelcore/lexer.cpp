@@ -268,6 +268,8 @@ void Lexer::lexIdentifierOrKeyword(qsizetype startPos, int startLine, int startC
         {QStringLiteral("delete"), TokenKind::KwDelete},
         {QStringLiteral("cast"), TokenKind::KwCast},
         {QStringLiteral("this"), TokenKind::KwThis},
+        {QStringLiteral("enum"), TokenKind::KwEnum},
+        {QStringLiteral("type"), TokenKind::KwType},
         {QStringLiteral("export"), TokenKind::KwExport},
         {QStringLiteral("module"), TokenKind::KwModule},
         {QStringLiteral("use"), TokenKind::KwUse},

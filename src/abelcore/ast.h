@@ -208,6 +208,18 @@ struct StructDeclNode final : DeclNode {
     std::vector<std::unique_ptr<FunctionDeclNode>> methods;
 };
 
+struct EnumDeclNode final : DeclNode {
+    bool exported = false;
+    QString name;
+    QList<QString> enumerators;
+};
+
+struct TypeAliasDeclNode final : DeclNode {
+    bool exported = false;
+    QString name;
+    std::unique_ptr<TypeNode> targetType;
+};
+
 struct BackendBlockNode final : DeclNode {
     bool exported = false;
     QString name;

@@ -303,6 +303,8 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
 {
     m_functions.clear();
     m_functionDecls.clear();
+    m_enums.clear();
+    m_typeAliases.clear();
     m_backends.clear();
     m_scopes.clear();
     m_diagnostics.clear();
@@ -312,8 +314,11 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     m_currentModule.clear();
     m_currentImports.clear();
     m_currentImportAliases.clear();
+    m_resolvingTypeAliases.clear();
     m_loopDepth = 0;
 
+    collectEnums(program);
+    collectTypeAliases(program);
     collectStructs(program);
     collectFunctions(program);
     collectBackends(program);
@@ -331,6 +336,10 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
 
     for (const auto* fn : m_functionDecls)
         checkFunction(*fn);
+    for (const auto& candidates : m_typeAliases) {
+        for (const TypeAliasDeclNode* alias : candidates)
+            checkTypeAlias(*alias);
+    }
     for (const auto& candidates : m_structs) {
         for (const auto& info : candidates)
             checkStruct(*info.decl);
@@ -341,6 +350,61 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     }
 
     return {m_diagnostics};
+}
+
+void TypeChecker::collectEnums(const ProgramNode& program)
+{
+    m_enums.clear();
+    for (const auto& decl : program.declarations) {
+        auto* e = dynamic_cast<EnumDeclNode*>(decl.get());
+        if (!e)
+            continue;
+        const auto existing = m_enums.value(e->name);
+        bool duplicateInModule = false;
+        for (const auto& other : existing) {
+            if (other.decl && sameDeclNamespace(*other.decl, *e)) {
+                error(e->span, QStringLiteral("duplicate enum '%1' in package '%2' module '%3'")
+                                   .arg(e->name, e->packageName, e->moduleName));
+                duplicateInModule = true;
+                break;
+            }
+        }
+        if (duplicateInModule)
+            continue;
+        EnumInfo info;
+        info.decl = e;
+        for (qsizetype i = 0; i < e->enumerators.size(); ++i) {
+            const QString name = e->enumerators[i];
+            if (info.values.contains(name)) {
+                error(e->span, QStringLiteral("duplicate enum enumerator '%1'").arg(name));
+                continue;
+            }
+            info.values.insert(name, static_cast<int>(i));
+        }
+        m_enums[e->name].push_back(std::move(info));
+    }
+}
+
+void TypeChecker::collectTypeAliases(const ProgramNode& program)
+{
+    m_typeAliases.clear();
+    for (const auto& decl : program.declarations) {
+        auto* alias = dynamic_cast<TypeAliasDeclNode*>(decl.get());
+        if (!alias)
+            continue;
+        const auto existing = m_typeAliases.value(alias->name);
+        bool duplicateInModule = false;
+        for (const TypeAliasDeclNode* other : existing) {
+            if (sameDeclNamespace(*other, *alias)) {
+                error(alias->span, QStringLiteral("duplicate type alias '%1' in package '%2' module '%3'")
+                                      .arg(alias->name, alias->packageName, alias->moduleName));
+                duplicateInModule = true;
+                break;
+            }
+        }
+        if (!duplicateInModule)
+            m_typeAliases[alias->name].push_back(alias);
+    }
 }
 
 void TypeChecker::collectStructs(const ProgramNode& program)
@@ -641,6 +705,119 @@ const TypeChecker::StructInfo* TypeChecker::structInfoForType(const AbelType& ty
     return nullptr;
 }
 
+const TypeChecker::EnumInfo* TypeChecker::resolveEnum(const QString& name, const SourceSpan& span, bool diagnose)
+{
+    if (const auto qualified = splitQualifiedSymbol(name))
+        return resolveEnumInModule(qualified->first, qualified->second, span, diagnose);
+    return resolveEnumInPackage(name, m_currentPackage, span, diagnose);
+}
+
+const TypeChecker::EnumInfo* TypeChecker::resolveEnumInModule(const QString& moduleName,
+                                                              const QString& name,
+                                                              const SourceSpan& span,
+                                                              bool diagnose)
+{
+    const QString resolvedModuleName = resolveModuleName(moduleName);
+    auto found = m_enums.constFind(name);
+    if (found == m_enums.constEnd() || found->isEmpty())
+        return nullptr;
+    QList<const EnumInfo*> visible;
+    for (const auto& info : found.value()) {
+        if (info.decl && info.decl->moduleName == resolvedModuleName && isEnumVisible(*info.decl))
+            visible.push_back(&info);
+    }
+    if (visible.size() == 1)
+        return visible.front();
+    if (visible.size() > 1 && diagnose)
+        error(span, QStringLiteral("enum '%1::%2' is ambiguous").arg(moduleName, name));
+    return nullptr;
+}
+
+const TypeChecker::EnumInfo* TypeChecker::resolveEnumInPackage(const QString& name,
+                                                               const QString& packageName,
+                                                               const SourceSpan& span,
+                                                               bool diagnose)
+{
+    auto found = m_enums.constFind(name);
+    if (found == m_enums.constEnd() || found->isEmpty())
+        return nullptr;
+    for (const auto& info : found.value()) {
+        if (info.decl && isDeclInCurrentModule(*info.decl, packageName))
+            return &info;
+    }
+    QList<const EnumInfo*> visible;
+    QList<const EnumInfo*> hidden;
+    for (const auto& info : found.value()) {
+        if (!info.decl)
+            continue;
+        if (isEnumVisible(*info.decl))
+            visible.push_back(&info);
+        else
+            hidden.push_back(&info);
+    }
+    if (visible.size() == 1)
+        return visible.front();
+    if (visible.size() > 1 && diagnose)
+        error(span, QStringLiteral("enum '%1' is ambiguous across imported modules").arg(name));
+    if (visible.isEmpty() && !hidden.isEmpty() && diagnose)
+        error(span, QStringLiteral("enum '%1' exists only as non-exported dependency symbols").arg(name));
+    return nullptr;
+}
+
+const TypeAliasDeclNode* TypeChecker::resolveTypeAlias(const QString& name,
+                                                       const QString& packageName,
+                                                       const SourceSpan& span,
+                                                       bool diagnose)
+{
+    if (const auto qualified = splitQualifiedSymbol(name))
+        return resolveTypeAliasInModule(qualified->first, qualified->second, span, diagnose);
+    auto found = m_typeAliases.constFind(name);
+    if (found == m_typeAliases.constEnd() || found->isEmpty())
+        return nullptr;
+    for (const TypeAliasDeclNode* alias : found.value()) {
+        if (alias && isDeclInCurrentModule(*alias, packageName))
+            return alias;
+    }
+    QList<const TypeAliasDeclNode*> visible;
+    QList<const TypeAliasDeclNode*> hidden;
+    for (const TypeAliasDeclNode* alias : found.value()) {
+        if (!alias)
+            continue;
+        if (isTypeAliasVisible(*alias))
+            visible.push_back(alias);
+        else
+            hidden.push_back(alias);
+    }
+    if (visible.size() == 1)
+        return visible.front();
+    if (visible.size() > 1 && diagnose)
+        error(span, QStringLiteral("type alias '%1' is ambiguous across imported modules").arg(name));
+    if (visible.isEmpty() && !hidden.isEmpty() && diagnose)
+        error(span, QStringLiteral("type alias '%1' exists only as non-exported dependency symbols").arg(name));
+    return nullptr;
+}
+
+const TypeAliasDeclNode* TypeChecker::resolveTypeAliasInModule(const QString& moduleName,
+                                                               const QString& name,
+                                                               const SourceSpan& span,
+                                                               bool diagnose)
+{
+    const QString resolvedModuleName = resolveModuleName(moduleName);
+    auto found = m_typeAliases.constFind(name);
+    if (found == m_typeAliases.constEnd() || found->isEmpty())
+        return nullptr;
+    QList<const TypeAliasDeclNode*> visible;
+    for (const TypeAliasDeclNode* alias : found.value()) {
+        if (alias && alias->moduleName == resolvedModuleName && isTypeAliasVisible(*alias))
+            visible.push_back(alias);
+    }
+    if (visible.size() == 1)
+        return visible.front();
+    if (visible.size() > 1 && diagnose)
+        error(span, QStringLiteral("type alias '%1::%2' is ambiguous").arg(moduleName, name));
+    return nullptr;
+}
+
 const TypeChecker::BackendInfo* TypeChecker::resolveBackend(const QString& name, const SourceSpan& span, bool diagnose)
 {
     return resolveBackendInPackage(name, m_currentPackage, span, diagnose);
@@ -771,6 +948,41 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
         return base;
     }
 
+    if (const TypeAliasDeclNode* alias = resolveTypeAlias(node.name, packageName, node.span, diagnose)) {
+        const QString key = declarationQualifiedName(*alias, alias->name);
+        if (m_resolvingTypeAliases.contains(key)) {
+            if (diagnose)
+                error(node.span, QStringLiteral("recursive type alias '%1'").arg(alias->name));
+            return makeType(TypeKind::Unknown);
+        }
+        m_resolvingTypeAliases.insert(key);
+        AbelType base = typeFromAstForDecl(*alias->targetType, *alias, diagnose);
+        m_resolvingTypeAliases.remove(key);
+        if (node.isConst)
+            base = makeConstType(base);
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
+
+    const EnumInfo* enumInfo = nullptr;
+    if (const auto qualified = splitQualifiedSymbol(node.name))
+        enumInfo = resolveEnumInModule(qualified->first, qualified->second, node.span, false);
+    else
+        enumInfo = resolveEnumInPackage(node.name, packageName, node.span, false);
+    if (const EnumInfo* info = enumInfo) {
+        AbelType base = makeType(TypeKind::I32, info->decl ? info->decl->name : node.name);
+        if (node.isConst)
+            base = makeConstType(base);
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
+
     AbelType base = typeFromName(node.name);
     if (base.kind == TypeKind::Struct) {
         if (const auto qualified = splitQualifiedSymbol(node.name)) {
@@ -824,6 +1036,14 @@ void TypeChecker::collectBackends(const ProgramNode& program)
         }
         m_backends[backend->name].push_back(std::move(info));
     }
+}
+
+void TypeChecker::checkTypeAlias(const TypeAliasDeclNode& alias)
+{
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, alias);
+    const AbelType target = typeFromAstInCurrentPackage(*alias.targetType);
+    if (!isSupportedType(target))
+        error(alias.span, QStringLiteral("unsupported type alias target '%1'").arg(alias.targetType->displayName()));
 }
 
 void TypeChecker::checkStruct(const StructDeclNode& decl)
@@ -1180,8 +1400,19 @@ ExprType TypeChecker::checkName(const NameExprNode& expr)
         return {sourceLocationBuiltinType(expr.name), ValueCategory::PRValue, false};
 
     const VariableInfo* var = lookupVariable(expr.name);
-    if (!var)
+    if (!var) {
+        const int dot = expr.name.indexOf(QLatin1Char('.'));
+        if (dot > 0) {
+            const QString enumName = expr.name.left(dot);
+            const QString enumerator = expr.name.mid(dot + 1);
+            if (const EnumInfo* info = resolveEnum(enumName, expr.span, true)) {
+                if (info->values.contains(enumerator))
+                    return {makeType(TypeKind::I32, enumName), ValueCategory::PRValue, false};
+                return errorExpr(expr.span, QStringLiteral("enum '%1' has no enumerator '%2'").arg(enumName, enumerator));
+            }
+        }
         return errorExpr(expr.span, QStringLiteral("unknown variable '%1'").arg(expr.name));
+    }
     return {valueTypeOfVariable(var->type), ValueCategory::LValue, !var->isConst};
 }
 
@@ -2177,6 +2408,20 @@ const TypeChecker::VariableInfo* TypeChecker::lookupVariable(const QString& name
 
 ExprType TypeChecker::checkFieldAccess(const FieldAccessExprNode& expr)
 {
+    if (!expr.pointer) {
+        const QString enumName = staticAccessName(*expr.base);
+        if (!enumName.isEmpty()) {
+            if (dynamic_cast<const NameExprNode*>(expr.base.get()) && lookupVariable(enumName))
+                goto normalFieldAccess;
+            if (const EnumInfo* info = resolveEnum(enumName, expr.base->span, false)) {
+                if (info->values.contains(expr.field))
+                    return {makeType(TypeKind::I32, info->decl ? info->decl->name : enumName), ValueCategory::PRValue, false};
+                return errorExpr(expr.span, QStringLiteral("enum '%1' has no enumerator '%2'").arg(enumName, expr.field));
+            }
+        }
+    }
+
+normalFieldAccess:
     ExprType base = checkExpr(*expr.base);
     if (isUnknownType(base.type))
         return unknownExprType();
@@ -2277,6 +2522,16 @@ bool TypeChecker::isStructVisible(const StructDeclNode& decl) const
 bool TypeChecker::isBackendVisible(const BackendBlockNode& backend) const
 {
     return isDeclVisibleInCurrentContext(backend, backend.exported);
+}
+
+bool TypeChecker::isEnumVisible(const EnumDeclNode& decl) const
+{
+    return isDeclVisibleInCurrentContext(decl, decl.exported);
+}
+
+bool TypeChecker::isTypeAliasVisible(const TypeAliasDeclNode& alias) const
+{
+    return isDeclVisibleInCurrentContext(alias, alias.exported);
 }
 
 bool TypeChecker::requireFunctionVisible(const FunctionDeclNode& fn, const SourceSpan& span)

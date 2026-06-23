@@ -100,6 +100,10 @@ std::unique_ptr<DeclNode> Parser::parseDeclaration()
         return parseBackend(exported);
     if (match(TokenKind::KwStruct))
         return parseStruct(exported);
+    if (match(TokenKind::KwEnum))
+        return parseEnum(exported);
+    if (match(TokenKind::KwType))
+        return parseTypeAlias(exported);
     if (match(TokenKind::KwFn))
         return parseFunction(exported, false);
     errorAt(peek(), QStringLiteral("expected top-level declaration"));
@@ -214,6 +218,36 @@ std::unique_ptr<FieldDeclNode> Parser::parseStructField()
     const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';' after field"));
     field->span = mergeSpans(field->type->span, semi.span);
     return field;
+}
+
+std::unique_ptr<EnumDeclNode> Parser::parseEnum(bool exported)
+{
+    auto e = std::make_unique<EnumDeclNode>();
+    const SourceSpan startSpan = previous().span;
+    e->exported = exported;
+    e->name = consume(TokenKind::Identifier, QStringLiteral("expected enum name")).text;
+    consume(TokenKind::LBrace, QStringLiteral("expected '{' after enum name"));
+    if (!check(TokenKind::RBrace)) {
+        do {
+            e->enumerators.push_back(consume(TokenKind::Identifier, QStringLiteral("expected enum enumerator")).text);
+        } while (match(TokenKind::Comma) && !check(TokenKind::RBrace));
+    }
+    const Token close = consume(TokenKind::RBrace, QStringLiteral("expected '}' after enum body"));
+    e->span = mergeSpans(startSpan, close.span);
+    return e;
+}
+
+std::unique_ptr<TypeAliasDeclNode> Parser::parseTypeAlias(bool exported)
+{
+    auto alias = std::make_unique<TypeAliasDeclNode>();
+    const SourceSpan startSpan = previous().span;
+    alias->exported = exported;
+    alias->name = consume(TokenKind::Identifier, QStringLiteral("expected type alias name")).text;
+    consume(TokenKind::Equal, QStringLiteral("expected '=' after type alias name"));
+    alias->targetType = parseType();
+    const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';' after type alias"));
+    alias->span = mergeSpans(startSpan, semi.span);
+    return alias;
 }
 
 std::unique_ptr<ConstructorDeclNode> Parser::parseConstructor()

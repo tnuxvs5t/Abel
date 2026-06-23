@@ -35,6 +35,11 @@ private:
         QHash<QString, const FunctionDeclNode*> functions;
     };
 
+    struct EnumRuntimeInfo {
+        const EnumDeclNode* decl = nullptr;
+        QHash<QString, int> values;
+    };
+
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
     QString m_currentPackage;
     QString m_currentModule;
@@ -42,6 +47,9 @@ private:
     QHash<QString, QString> m_currentImportAliases;
     QHash<QString, QList<StructRuntimeInfo>> m_structs;
     QHash<QString, QList<BackendRuntimeInfo>> m_backends;
+    QHash<QString, QList<EnumRuntimeInfo>> m_enums;
+    QHash<QString, QList<const TypeAliasDeclNode*>> m_typeAliases;
+    QSet<QString> m_resolvingTypeAliases;
     BackendRegistry m_backendRegistry;
     BackendRegistry* m_activeBackendRegistry = nullptr;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
@@ -49,6 +57,8 @@ private:
 
     bool collectFunctions(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectStructs(const ProgramNode& program, AbelRuntimeContext& ctx);
+    bool collectEnums(const ProgramNode& program, AbelRuntimeContext& ctx);
+    bool collectTypeAliases(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
     const FunctionDeclNode* resolveFunction(const QString& name) const;
@@ -57,11 +67,16 @@ private:
     const StructRuntimeInfo* resolveStructInModule(const QString& moduleName, const QString& name) const;
     const StructRuntimeInfo* resolveStructInPackage(const QString& name, const QString& packageName) const;
     const StructRuntimeInfo* structInfoForType(const AbelType& type) const;
+    const EnumRuntimeInfo* resolveEnum(const QString& name) const;
+    const EnumRuntimeInfo* resolveEnumInModule(const QString& moduleName, const QString& name) const;
+    const EnumRuntimeInfo* resolveEnumInPackage(const QString& name, const QString& packageName) const;
+    const TypeAliasDeclNode* resolveTypeAlias(const QString& name, const QString& packageName) const;
+    const TypeAliasDeclNode* resolveTypeAliasInModule(const QString& moduleName, const QString& name) const;
     const BackendRuntimeInfo* resolveBackend(const QString& name) const;
     const BackendRuntimeInfo* resolveBackendInModule(const QString& moduleName, const QString& name) const;
     const BackendRuntimeInfo* resolveBackendInPackage(const QString& name, const QString& packageName) const;
-    AbelType typeFromAstInCurrentPackage(const TypeNode& node) const;
-    AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName) const;
+    AbelType typeFromAstInCurrentPackage(const TypeNode& node);
+    AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName);
     AbelType typeFromAstForDecl(const TypeNode& node, const DeclNode& decl);
     ExecResult callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args);
     ExecResult callFunctionExpr(const FunctionDeclNode& fn, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
@@ -116,6 +131,8 @@ private:
     bool isModuleImported(const QString& moduleName) const;
     QString resolveModuleName(const QString& moduleName) const;
     bool isDeclVisible(const DeclNode& decl, bool exportedSymbol) const;
+    bool isEnumVisible(const EnumDeclNode& decl) const;
+    bool isTypeAliasVisible(const TypeAliasDeclNode& alias) const;
     bool structFieldReadOnly(const AbelType& structType, const QString& fieldName);
 
     bool requireBool(const AbelValue& value, const SourceSpan& span, bool& out);

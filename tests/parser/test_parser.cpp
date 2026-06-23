@@ -160,6 +160,49 @@ private slots:
         QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(2));
     }
 
+    void parsesEnumAndTypeAlias()
+    {
+        const QString src = QStringLiteral(R"(
+            export enum Color {
+                Red,
+                Green,
+                Blue,
+            }
+
+            type Index = int;
+            type Scores = vector<Index>;
+
+            fn int main() {
+                Scores xs = {1, 2};
+                Color c = Color.Green;
+                return c + xs[1];
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(4));
+
+        auto* color = dynamic_cast<abel::EnumDeclNode*>(parsed.program->declarations[0].get());
+        auto* index = dynamic_cast<abel::TypeAliasDeclNode*>(parsed.program->declarations[1].get());
+        auto* scores = dynamic_cast<abel::TypeAliasDeclNode*>(parsed.program->declarations[2].get());
+        QVERIFY(color != nullptr);
+        QVERIFY(index != nullptr);
+        QVERIFY(scores != nullptr);
+        QVERIFY(color->exported);
+        QCOMPARE(color->name, QStringLiteral("Color"));
+        QCOMPARE(color->enumerators.size(), qsizetype{3});
+        QCOMPARE(color->enumerators[1], QStringLiteral("Green"));
+        QCOMPARE(index->name, QStringLiteral("Index"));
+        QCOMPARE(scores->name, QStringLiteral("Scores"));
+    }
+
     void parsesFuncTypeAndLambda()
     {
         const QString src = QStringLiteral(R"(

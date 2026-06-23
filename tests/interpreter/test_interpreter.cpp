@@ -94,6 +94,35 @@ private slots:
         QCOMPARE(result.exitCode, 267);
     }
 
+    void enumAndTypeAliasRun()
+    {
+        const QString src = QStringLiteral(R"(
+            enum Color {
+                Red,
+                Green,
+                Blue,
+            }
+
+            type Index = int;
+            type Scores = vector<Index>;
+            type Favorite = Color;
+
+            fn int main() {
+                Scores xs = {1, 2};
+                Favorite c = Color.Green;
+                if (Color.Red == 0 && Color.Blue == 2) {
+                    return c + xs[1];
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 3);
+    }
+
     void handlesVariablesAndLoops()
     {
         const QString src = QStringLiteral(R"(

@@ -52,10 +52,18 @@ private:
         QHash<QString, const FunctionDeclNode*> functions;
     };
 
+    struct EnumInfo {
+        const EnumDeclNode* decl = nullptr;
+        QHash<QString, int> values;
+    };
+
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
     QList<const FunctionDeclNode*> m_functionDecls;
     QHash<QString, QList<StructInfo>> m_structs;
     QHash<QString, QList<BackendInfo>> m_backends;
+    QHash<QString, QList<EnumInfo>> m_enums;
+    QHash<QString, QList<const TypeAliasDeclNode*>> m_typeAliases;
+    QSet<QString> m_resolvingTypeAliases;
     QList<QHash<QString, VariableInfo>> m_scopes;
     QList<Diagnostic> m_diagnostics;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
@@ -68,6 +76,8 @@ private:
     int m_loopDepth = 0;
 
     void collectStructs(const ProgramNode& program);
+    void collectEnums(const ProgramNode& program);
+    void collectTypeAliases(const ProgramNode& program);
     void collectFunctions(const ProgramNode& program);
     void collectBackends(const ProgramNode& program);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
@@ -86,6 +96,20 @@ private:
                                              const SourceSpan& span,
                                              bool diagnose = true);
     const StructInfo* structInfoForType(const AbelType& type) const;
+    const EnumInfo* resolveEnum(const QString& name, const SourceSpan& span, bool diagnose = true);
+    const EnumInfo* resolveEnumInModule(const QString& moduleName,
+                                        const QString& name,
+                                        const SourceSpan& span,
+                                        bool diagnose = true);
+    const EnumInfo* resolveEnumInPackage(const QString& name,
+                                         const QString& packageName,
+                                         const SourceSpan& span,
+                                         bool diagnose = true);
+    const TypeAliasDeclNode* resolveTypeAlias(const QString& name, const QString& packageName, const SourceSpan& span, bool diagnose = true);
+    const TypeAliasDeclNode* resolveTypeAliasInModule(const QString& moduleName,
+                                                      const QString& name,
+                                                      const SourceSpan& span,
+                                                      bool diagnose = true);
     const BackendInfo* resolveBackend(const QString& name, const SourceSpan& span, bool diagnose = true);
     const BackendInfo* resolveBackendInModule(const QString& moduleName,
                                               const QString& name,
@@ -99,6 +123,7 @@ private:
     AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName, bool diagnose = true);
     AbelType typeFromAstForDecl(const TypeNode& node, const DeclNode& decl, bool diagnose = true);
     void checkFunction(const FunctionDeclNode& fn);
+    void checkTypeAlias(const TypeAliasDeclNode& alias);
     void checkStruct(const StructDeclNode& decl);
     void checkBackend(const BackendBlockNode& backend);
     void checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor);
@@ -172,6 +197,8 @@ private:
     bool isFunctionVisible(const FunctionDeclNode& fn) const;
     bool isStructVisible(const StructDeclNode& decl) const;
     bool isBackendVisible(const BackendBlockNode& backend) const;
+    bool isEnumVisible(const EnumDeclNode& decl) const;
+    bool isTypeAliasVisible(const TypeAliasDeclNode& alias) const;
     bool requireFunctionVisible(const FunctionDeclNode& fn, const SourceSpan& span);
     bool requireStructVisible(const StructDeclNode& decl, const SourceSpan& span);
     bool requireBackendVisible(const BackendBlockNode& backend, const SourceSpan& span);
