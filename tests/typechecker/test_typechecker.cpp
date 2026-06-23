@@ -386,6 +386,40 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsMathBuiltins()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int a = abs(-7);
+                double root = sqrt(9);
+                double shaped = floor(3.9) + ceil(3.1) + round(3.5) + trunc(3.9);
+                double powered = pow(2, 3);
+                double lo = min(4, 5.5);
+                int hi = max(2, 3);
+                int bounded = clamp(10, 0, 7);
+                int pipeHi = 4 |> max(9);
+                int pipeBounded = 3 |> clamp(1, 9);
+                return a + cast<int>(root + shaped + powered + lo) + hi + bounded + pipeHi + pipeBounded;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsMathBuiltinMisuse()
+    {
+        auto nonNumeric = checkSource(QStringLiteral("fn int main() { double x = sqrt(\"x\"); return 0; }"));
+        QVERIFY(!nonNumeric.diagnostics.isEmpty());
+
+        auto badArity = checkSource(QStringLiteral("fn int main() { double x = pow(2); return 0; }"));
+        QVERIFY(!badArity.diagnostics.isEmpty());
+
+        auto pipeBadArg = checkSource(QStringLiteral("fn int main() { int x = 3 |> clamp(\"x\", 9); return x; }"));
+        QVERIFY(!pipeBadArg.diagnostics.isEmpty());
+    }
+
     void rejectsScanBuiltinMisuse()
     {
         auto nonPointer = checkSource(QStringLiteral("fn int main() { int x; scan(x); return 0; }"));

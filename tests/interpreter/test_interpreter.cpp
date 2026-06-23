@@ -481,6 +481,45 @@ private slots:
         QCOMPARE(result.exitCode, 15);
     }
 
+    void mathBuiltinsWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int a = abs(-7);
+                double score = sqrt(9)
+                    + floor(3.9)
+                    + ceil(3.1)
+                    + round(3.5)
+                    + trunc(3.9)
+                    + pow(2, 3)
+                    + min(4, 5.5)
+                    + max(2, 3)
+                    + clamp(10, 0, 7)
+                    + (4 |> max(9))
+                    + (3 |> clamp(1, 9));
+                return a + cast<int>(score);
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 58);
+    }
+
+    void mathClampRejectsBadBoundsAtRuntime()
+    {
+        auto result = runSource(QStringLiteral(R"(
+            fn int main() {
+                int x = clamp(1, 9, 2);
+                return x;
+            }
+        )"));
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 1);
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("clamp lower bound")));
+    }
+
     void vectorInsertEraseRejectOutOfRangeAtRuntime()
     {
         auto badErase = runSource(QStringLiteral(R"(

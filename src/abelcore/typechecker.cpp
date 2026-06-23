@@ -69,6 +69,42 @@ bool isScannableType(const AbelType& type)
         || type.kind == TypeKind::Any;
 }
 
+bool isMathBuiltinName(const QString& name)
+{
+    return name == QStringLiteral("abs")
+        || name == QStringLiteral("sqrt")
+        || name == QStringLiteral("floor")
+        || name == QStringLiteral("ceil")
+        || name == QStringLiteral("round")
+        || name == QStringLiteral("trunc")
+        || name == QStringLiteral("pow")
+        || name == QStringLiteral("min")
+        || name == QStringLiteral("max")
+        || name == QStringLiteral("clamp");
+}
+
+int mathBuiltinArity(const QString& name)
+{
+    if (name == QStringLiteral("pow")
+        || name == QStringLiteral("min")
+        || name == QStringLiteral("max")) {
+        return 2;
+    }
+    if (name == QStringLiteral("clamp"))
+        return 3;
+    return 1;
+}
+
+bool mathBuiltinReturnsF64(const QString& name)
+{
+    return name == QStringLiteral("sqrt")
+        || name == QStringLiteral("floor")
+        || name == QStringLiteral("ceil")
+        || name == QStringLiteral("round")
+        || name == QStringLiteral("trunc")
+        || name == QStringLiteral("pow");
+}
+
 ExprType unknownExprType()
 {
     return {makeType(TypeKind::Unknown), ValueCategory::PRValue, false};
@@ -1652,6 +1688,41 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
+        if (isMathBuiltinName(name)) {
+            const qsizetype expected = mathBuiltinArity(name);
+            if (argc != expected)
+                return errorExpr(span, QStringLiteral("%1 expects %2 argument(s)").arg(name).arg(expected));
+            std::vector<ExprType> checked;
+            checked.reserve(args.size() + 1);
+            checked.push_back(lhs);
+            bool hasUnknown = isUnknownType(lhs.type);
+            bool hasError = false;
+            if (!hasUnknown && !lhs.type.isNumeric()) {
+                error(span, QStringLiteral("%1 expects numeric argument, got %2").arg(name, lhs.type.displayName()));
+                hasError = true;
+            }
+            for (const auto& argExpr : args) {
+                ExprType arg = checkExpr(*argExpr);
+                hasUnknown = hasUnknown || isUnknownType(arg.type);
+                if (!isUnknownType(arg.type) && !arg.type.isNumeric()) {
+                    error(argExpr->span, QStringLiteral("%1 expects numeric argument, got %2").arg(name, arg.type.displayName()));
+                    hasError = true;
+                }
+                checked.push_back(arg);
+            }
+            if (hasUnknown || hasError)
+                return unknownExprType();
+            if (name == QStringLiteral("abs"))
+                return {checked[0].type, ValueCategory::PRValue, false};
+            if (mathBuiltinReturnsF64(name))
+                return {makeType(TypeKind::F64), ValueCategory::PRValue, false};
+            if (name == QStringLiteral("clamp")) {
+                AbelType out = numericBinaryResultType(checked[0].type, checked[1].type);
+                out = numericBinaryResultType(out, checked[2].type);
+                return {out, ValueCategory::PRValue, false};
+            }
+            return {numericBinaryResultType(checked[0].type, checked[1].type), ValueCategory::PRValue, false};
+        }
         if (name == QStringLiteral("debug_break"))
             return errorExpr(span, QStringLiteral("debug_break expects no arguments"));
         if (name == QStringLiteral("debug_assert")) {
@@ -1956,6 +2027,36 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                 }
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (isMathBuiltinName(name->name)) {
+            const qsizetype expected = mathBuiltinArity(name->name);
+            if (argc != expected)
+                return errorExpr(expr.span, QStringLiteral("%1 expects %2 argument(s)").arg(name->name).arg(expected));
+            std::vector<ExprType> checked;
+            checked.reserve(expr.args.size());
+            bool hasUnknown = false;
+            bool hasError = false;
+            for (const auto& argExpr : expr.args) {
+                ExprType arg = checkExpr(*argExpr);
+                hasUnknown = hasUnknown || isUnknownType(arg.type);
+                if (!isUnknownType(arg.type) && !arg.type.isNumeric()) {
+                    error(argExpr->span, QStringLiteral("%1 expects numeric argument, got %2").arg(name->name, arg.type.displayName()));
+                    hasError = true;
+                }
+                checked.push_back(arg);
+            }
+            if (hasUnknown || hasError)
+                return unknownExprType();
+            if (name->name == QStringLiteral("abs"))
+                return {checked[0].type, ValueCategory::PRValue, false};
+            if (mathBuiltinReturnsF64(name->name))
+                return {makeType(TypeKind::F64), ValueCategory::PRValue, false};
+            if (name->name == QStringLiteral("clamp")) {
+                AbelType out = numericBinaryResultType(checked[0].type, checked[1].type);
+                out = numericBinaryResultType(out, checked[2].type);
+                return {out, ValueCategory::PRValue, false};
+            }
+            return {numericBinaryResultType(checked[0].type, checked[1].type), ValueCategory::PRValue, false};
         }
         if (name->name == QStringLiteral("debug_break")) {
             if (argc != 0)

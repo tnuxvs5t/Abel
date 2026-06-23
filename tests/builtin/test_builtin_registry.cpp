@@ -215,6 +215,16 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("scan")));
         QVERIFY(registry.hasFunction(QStringLiteral("str_to_chars")));
         QVERIFY(registry.hasFunction(QStringLiteral("chars_to_str")));
+        QVERIFY(registry.hasFunction(QStringLiteral("abs")));
+        QVERIFY(registry.hasFunction(QStringLiteral("sqrt")));
+        QVERIFY(registry.hasFunction(QStringLiteral("floor")));
+        QVERIFY(registry.hasFunction(QStringLiteral("ceil")));
+        QVERIFY(registry.hasFunction(QStringLiteral("round")));
+        QVERIFY(registry.hasFunction(QStringLiteral("trunc")));
+        QVERIFY(registry.hasFunction(QStringLiteral("pow")));
+        QVERIFY(registry.hasFunction(QStringLiteral("min")));
+        QVERIFY(registry.hasFunction(QStringLiteral("max")));
+        QVERIFY(registry.hasFunction(QStringLiteral("clamp")));
         QVERIFY(registry.hasFunction(QStringLiteral("debug_break")));
         QVERIFY(registry.hasFunction(QStringLiteral("debug_assert")));
         QVERIFY(registry.hasFunction(QStringLiteral("test_assert")));
@@ -245,6 +255,46 @@ private slots:
 
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(value.asString(), QStringLiteral("x=7, ok=true"));
+    }
+
+    void mathBuiltinsRunThroughRegistry()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+
+        auto call = [&](const QString& name, std::vector<abel::AbelValue> args) {
+            return registry.callFunction(abel::BuiltinFunctionCall{ctx, name, std::move(args), {}, {}});
+        };
+
+        QCOMPARE(call(QStringLiteral("abs"), {abel::AbelValue::makeInt(-7)}).asInt(), 7);
+        QCOMPARE(call(QStringLiteral("sqrt"), {abel::AbelValue::makeInt(9)}).asDouble(), 3.0);
+        QCOMPARE(call(QStringLiteral("floor"), {abel::AbelValue::makeDouble(3.9)}).asDouble(), 3.0);
+        QCOMPARE(call(QStringLiteral("ceil"), {abel::AbelValue::makeDouble(3.1)}).asDouble(), 4.0);
+        QCOMPARE(call(QStringLiteral("round"), {abel::AbelValue::makeDouble(3.5)}).asDouble(), 4.0);
+        QCOMPARE(call(QStringLiteral("trunc"), {abel::AbelValue::makeDouble(3.9)}).asDouble(), 3.0);
+        QCOMPARE(call(QStringLiteral("pow"), {abel::AbelValue::makeInt(2), abel::AbelValue::makeInt(5)}).asDouble(), 32.0);
+        QCOMPARE(call(QStringLiteral("min"), {abel::AbelValue::makeInt(4), abel::AbelValue::makeDouble(5.5)}).asDouble(), 4.0);
+        QCOMPARE(call(QStringLiteral("max"), {abel::AbelValue::makeInt(2), abel::AbelValue::makeInt(3)}).asInt(), 3);
+        QCOMPARE(call(QStringLiteral("clamp"), {abel::AbelValue::makeInt(10), abel::AbelValue::makeInt(0), abel::AbelValue::makeInt(7)}).asInt(), 7);
+        QVERIFY(ctx.diagnostics().isEmpty());
+    }
+
+    void mathClampReportsBadBounds()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+        abel::BuiltinFunctionCall call{
+            ctx,
+            QStringLiteral("clamp"),
+            {abel::AbelValue::makeInt(1), abel::AbelValue::makeInt(9), abel::AbelValue::makeInt(2)},
+            {},
+            {},
+        };
+        auto value = registry.callFunction(std::move(call));
+
+        QVERIFY(!ctx.diagnostics().isEmpty());
+        QCOMPARE(ctx.diagnostics().back().code, QStringLiteral("E0432"));
+        QCOMPARE(value.type().kind, abel::TypeKind::Unknown);
     }
 
     void scanWritesPointerTargetsThroughRegistry()

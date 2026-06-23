@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cmath>
 #include <exception>
 
 namespace abel {
@@ -31,6 +32,40 @@ AbelValue convertBuiltinArg(BuiltinMethodCall& call, int index, const AbelType& 
         return AbelValue::makeUnknown();
     }
     return convertValue(value, target);
+}
+
+TypeKind integerTypeForWidth(int width, bool unsignedResult)
+{
+    if (width <= 8)
+        return unsignedResult ? TypeKind::U8 : TypeKind::I8;
+    if (width <= 16)
+        return unsignedResult ? TypeKind::U16 : TypeKind::I16;
+    if (width <= 32)
+        return unsignedResult ? TypeKind::U32 : TypeKind::I32;
+    return unsignedResult ? TypeKind::U64 : TypeKind::I64;
+}
+
+AbelType numericResultType(const AbelType& lhs, const AbelType& rhs)
+{
+    if (lhs.kind == TypeKind::F64 || rhs.kind == TypeKind::F64)
+        return makeType(TypeKind::F64);
+    const int width = std::max({32, lhs.integerBitWidth(), rhs.integerBitWidth()});
+    const bool unsignedResult = lhs.isUnsignedInteger() || rhs.isUnsignedInteger();
+    return makeType(integerTypeForWidth(width, unsignedResult));
+}
+
+std::optional<AbelValue> requireNumericArg(BuiltinFunctionCall& call, int index)
+{
+    const AbelValue& value = call.args[static_cast<size_t>(index)];
+    if (!value.type().isNumeric()) {
+        const SourceSpan span = index < static_cast<int>(call.argSpans.size()) ? call.argSpans[static_cast<size_t>(index)] : call.callSpan;
+        call.ctx.error(QStringLiteral("E0431"),
+                       QStringLiteral("%1 expects numeric argument, got %2")
+                           .arg(call.name, value.type().displayName()),
+                       span);
+        return std::nullopt;
+    }
+    return value;
 }
 
 std::optional<QString> stringifyValue(BuiltinFunctionCall& call, const AbelValue& value, const SourceSpan& span)
@@ -211,6 +246,85 @@ QString joinMessageSuffix(BuiltinFunctionCall& call, size_t start)
         detail += *text;
     }
     return detail.isEmpty() ? QString() : QStringLiteral(": ") + detail;
+}
+
+AbelValue builtinMath(BuiltinFunctionCall& call)
+{
+    const QString& name = call.name;
+
+    if (name == QStringLiteral("abs")) {
+        auto value = requireNumericArg(call, 0);
+        if (!value.has_value())
+            return AbelValue::makeUnknown();
+        if (value->type().kind == TypeKind::F64)
+            return AbelValue::makeDouble(std::fabs(value->asDouble()));
+        if (value->type().isUnsignedInteger())
+            return *value;
+        const qint64 raw = value->asInt();
+        return AbelValue::makeInt(raw < 0 ? -raw : raw, value->type().kind);
+    }
+
+    if (name == QStringLiteral("sqrt")
+        || name == QStringLiteral("floor")
+        || name == QStringLiteral("ceil")
+        || name == QStringLiteral("round")
+        || name == QStringLiteral("trunc")) {
+        auto value = requireNumericArg(call, 0);
+        if (!value.has_value())
+            return AbelValue::makeUnknown();
+        const double x = value->asDouble();
+        if (name == QStringLiteral("sqrt"))
+            return AbelValue::makeDouble(std::sqrt(x));
+        if (name == QStringLiteral("floor"))
+            return AbelValue::makeDouble(std::floor(x));
+        if (name == QStringLiteral("ceil"))
+            return AbelValue::makeDouble(std::ceil(x));
+        if (name == QStringLiteral("round"))
+            return AbelValue::makeDouble(std::round(x));
+        return AbelValue::makeDouble(std::trunc(x));
+    }
+
+    if (name == QStringLiteral("pow")) {
+        auto lhs = requireNumericArg(call, 0);
+        auto rhs = requireNumericArg(call, 1);
+        if (!lhs.has_value() || !rhs.has_value())
+            return AbelValue::makeUnknown();
+        return AbelValue::makeDouble(std::pow(lhs->asDouble(), rhs->asDouble()));
+    }
+
+    if (name == QStringLiteral("min") || name == QStringLiteral("max")) {
+        auto lhs = requireNumericArg(call, 0);
+        auto rhs = requireNumericArg(call, 1);
+        if (!lhs.has_value() || !rhs.has_value())
+            return AbelValue::makeUnknown();
+        const AbelType outType = numericResultType(lhs->type(), rhs->type());
+        const bool takeLhs = name == QStringLiteral("min")
+            ? valuesLess(*lhs, *rhs)
+            : valuesLess(*rhs, *lhs);
+        return convertValue(takeLhs ? *lhs : *rhs, outType);
+    }
+
+    if (name == QStringLiteral("clamp")) {
+        auto value = requireNumericArg(call, 0);
+        auto low = requireNumericArg(call, 1);
+        auto high = requireNumericArg(call, 2);
+        if (!value.has_value() || !low.has_value() || !high.has_value())
+            return AbelValue::makeUnknown();
+        if (valuesLess(*high, *low)) {
+            call.ctx.error(QStringLiteral("E0432"),
+                           QStringLiteral("clamp lower bound is greater than upper bound"),
+                           call.callSpan);
+            return AbelValue::makeUnknown();
+        }
+        const AbelType outType = numericResultType(numericResultType(value->type(), low->type()), high->type());
+        const AbelValue& chosen = valuesLess(*value, *low)
+            ? *low
+            : (valuesLess(*high, *value) ? *high : *value);
+        return convertValue(chosen, outType);
+    }
+
+    call.ctx.error(QStringLiteral("E0433"), QStringLiteral("unknown math builtin '%1'").arg(name), call.callSpan);
+    return AbelValue::makeUnknown();
 }
 
 AbelValue builtinToStr(BuiltinFunctionCall& call)
@@ -778,6 +892,16 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("scan"), 0, -1, true, builtinScan, QStringLiteral("scan whitespace tokens into pointer targets")});
     registry.registerFunction({QStringLiteral("str_to_chars"), 1, 1, false, builtinStrToChars, QStringLiteral("convert str to vector<char>")});
     registry.registerFunction({QStringLiteral("chars_to_str"), 1, 1, false, builtinCharsToStr, QStringLiteral("convert vector<char> to str")});
+    registry.registerFunction({QStringLiteral("abs"), 1, 1, false, builtinMath, QStringLiteral("absolute value")});
+    registry.registerFunction({QStringLiteral("sqrt"), 1, 1, false, builtinMath, QStringLiteral("square root as f64")});
+    registry.registerFunction({QStringLiteral("floor"), 1, 1, false, builtinMath, QStringLiteral("floor as f64")});
+    registry.registerFunction({QStringLiteral("ceil"), 1, 1, false, builtinMath, QStringLiteral("ceil as f64")});
+    registry.registerFunction({QStringLiteral("round"), 1, 1, false, builtinMath, QStringLiteral("round as f64")});
+    registry.registerFunction({QStringLiteral("trunc"), 1, 1, false, builtinMath, QStringLiteral("truncate as f64")});
+    registry.registerFunction({QStringLiteral("pow"), 2, 2, false, builtinMath, QStringLiteral("power as f64")});
+    registry.registerFunction({QStringLiteral("min"), 2, 2, false, builtinMath, QStringLiteral("minimum numeric value")});
+    registry.registerFunction({QStringLiteral("max"), 2, 2, false, builtinMath, QStringLiteral("maximum numeric value")});
+    registry.registerFunction({QStringLiteral("clamp"), 3, 3, false, builtinMath, QStringLiteral("clamp numeric value")});
     registry.registerFunction({QStringLiteral("debug_break"), 0, 0, false, builtinDebugBreak, QStringLiteral("emit a debug breakpoint diagnostic")});
     registry.registerFunction({QStringLiteral("debug_assert"), 1, -1, true, builtinDebugAssert, QStringLiteral("emit a diagnostic when condition is false")});
     registry.registerFunction({QStringLiteral("test_assert"), 1, -1, true, builtinTestAssert, QStringLiteral("fail current test when condition is false")});
