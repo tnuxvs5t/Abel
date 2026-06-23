@@ -780,6 +780,60 @@ if(test_command_summary_pos EQUAL -1)
     message(FATAL_ERROR "abel test did not report passing summary:\n${test_command_stdout}\n${test_command_stderr}")
 endif()
 
+set(filter_test_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-test-filter")
+file(REMOVE_RECURSE "${filter_test_project_dir}")
+file(MAKE_DIRECTORY "${filter_test_project_dir}/src")
+file(MAKE_DIRECTORY "${filter_test_project_dir}/tests")
+
+file(WRITE "${filter_test_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-test-filter",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${filter_test_project_dir}/src/main.abel" [=[
+fn int main() {
+    return 0;
+}
+]=])
+
+file(WRITE "${filter_test_project_dir}/tests/pass_alpha.abel" [=[
+fn int main() {
+    test_assert(true, "alpha");
+    return 0;
+}
+]=])
+
+file(WRITE "${filter_test_project_dir}/tests/fail_beta.abel" [=[
+fn int main() {
+    return 9;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test --filter alpha "${filter_test_project_dir}"
+    RESULT_VARIABLE filter_test_command_result
+    OUTPUT_VARIABLE filter_test_command_stdout
+    ERROR_VARIABLE filter_test_command_stderr
+)
+if(NOT filter_test_command_result EQUAL 0)
+    message(FATAL_ERROR "abel test --filter unexpectedly failed:\n${filter_test_command_stdout}\n${filter_test_command_stderr}")
+endif()
+string(FIND "${filter_test_command_stdout}" "test tests/pass_alpha.abel ... ok" filter_test_command_ok_pos)
+if(filter_test_command_ok_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --filter did not run matching test:\n${filter_test_command_stdout}\n${filter_test_command_stderr}")
+endif()
+string(FIND "${filter_test_command_stdout}" "fail_beta" filter_test_command_skip_pos)
+if(NOT filter_test_command_skip_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --filter ran non-matching test:\n${filter_test_command_stdout}\n${filter_test_command_stderr}")
+endif()
+string(FIND "${filter_test_command_stdout}" "1/1 test(s) passed" filter_test_command_summary_pos)
+if(filter_test_command_summary_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --filter did not report filtered summary:\n${filter_test_command_stdout}\n${filter_test_command_stderr}")
+endif()
+
 set(failing_test_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-test-command-fail")
 file(REMOVE_RECURSE "${failing_test_project_dir}")
 file(MAKE_DIRECTORY "${failing_test_project_dir}/src")

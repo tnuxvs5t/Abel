@@ -486,8 +486,12 @@ int main(int argc, char** argv)
     QCommandLineOption resourceOption({QStringLiteral("resource"), QStringLiteral("r")},
                                       QStringLiteral("Load an extra backend ResourceNode JSON before `abel run` or `abel test`."),
                                       QStringLiteral("resource.json"));
+    QCommandLineOption testFilterOption(QStringLiteral("filter"),
+                                        QStringLiteral("Only run test files whose relative path contains substring."),
+                                        QStringLiteral("substring"));
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
+    parser.addOption(testFilterOption);
     parser.addPositionalArgument(QStringLiteral("command"),
                                  QStringLiteral("Command: init | add | remove | update | build | test | check | run | package | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
@@ -697,7 +701,7 @@ int main(int argc, char** argv)
 
     if (command == QStringLiteral("test")) {
         if (args.size() > 2) {
-            err << "E0013: test expects: abel test [project-dir]" << Qt::endl;
+            err << "E0013: test expects: abel test [--filter substring] [project-dir]" << Qt::endl;
             return 2;
         }
         const QString projectDir = args.size() == 2 ? args[1] : QStringLiteral(".");
@@ -707,7 +711,17 @@ int main(int argc, char** argv)
         if (!graph.ok())
             return 1;
 
-        const QStringList tests = packageTestFiles(graph.root);
+        QStringList tests = packageTestFiles(graph.root);
+        const QString testFilter = parser.value(testFilterOption);
+        if (!testFilter.isEmpty()) {
+            QStringList filtered;
+            for (const QString& testFile : tests) {
+                const QString display = QDir(graph.root.rootDir).relativeFilePath(testFile);
+                if (display.contains(testFilter))
+                    filtered.push_back(testFile);
+            }
+            tests = filtered;
+        }
         if (tests.isEmpty()) {
             out << "0/0 test(s) passed" << Qt::endl;
             return 0;
