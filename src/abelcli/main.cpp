@@ -152,6 +152,12 @@ static void tagDeclarationPackage(abel::DeclNode& decl, const abel::PackageSourc
             method->fromDependency = sourceEntry.fromDependency;
         }
     }
+    if (auto* backend = dynamic_cast<abel::BackendBlockNode*>(&decl)) {
+        for (auto& fn : backend->functions) {
+            fn->packageName = sourceEntry.packageName;
+            fn->fromDependency = sourceEntry.fromDependency;
+        }
+    }
 }
 
 static ParsedCliProgram parseSourceFiles(const QList<abel::PackageSourceFile>& sourceFiles)

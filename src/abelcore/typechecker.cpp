@@ -32,6 +32,23 @@ ExprType unknownExprType()
     return {makeType(TypeKind::Unknown), ValueCategory::PRValue, false};
 }
 
+QString packageQualifiedName(const QString& packageName, const QString& name)
+{
+    return packageName.isEmpty()
+        ? name
+        : packageName + QStringLiteral("::") + name;
+}
+
+QString structTypeName(const StructDeclNode& decl)
+{
+    return packageQualifiedName(decl.packageName, decl.name);
+}
+
+bool declVisibleFromPackage(const DeclNode& decl, const QString& packageName)
+{
+    return !decl.fromDependency || decl.packageName == packageName;
+}
+
 bool exprIsLiteralTrue(const ExprNode& expr)
 {
     auto* literal = dynamic_cast<const LiteralExprNode*>(&expr);
@@ -104,7 +121,7 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     if (!main) {
         error(program.span, QStringLiteral("missing fn int main() or fn void main()"));
     } else {
-        const AbelType mainType = typeFromAst(*main->returnType);
+        const AbelType mainType = typeFromAstInPackage(*main->returnType, main->packageName);
         if (mainType.kind != TypeKind::I32 && mainType.kind != TypeKind::Void)
             error(main->span, QStringLiteral("main must return int or void"));
         if (!main->params.empty())
@@ -113,10 +130,14 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
 
     for (const auto* fn : m_functionDecls)
         checkFunction(*fn);
-    for (const auto& info : m_structs)
-        checkStruct(*info.decl);
-    for (const auto& info : m_backends)
-        checkBackend(*info.decl);
+    for (const auto& candidates : m_structs) {
+        for (const auto& info : candidates)
+            checkStruct(*info.decl);
+    }
+    for (const auto& candidates : m_backends) {
+        for (const auto& info : candidates)
+            checkBackend(*info.decl);
+    }
 
     return {m_diagnostics};
 }
@@ -128,22 +149,20 @@ void TypeChecker::collectStructs(const ProgramNode& program)
         auto* s = dynamic_cast<StructDeclNode*>(decl.get());
         if (!s)
             continue;
-        if (m_structs.contains(s->name)) {
-            error(s->span, QStringLiteral("duplicate struct '%1'").arg(s->name));
-            continue;
+        const auto existing = m_structs.value(s->name);
+        bool duplicateInPackage = false;
+        for (const auto& other : existing) {
+            if (other.decl && other.decl->packageName == s->packageName) {
+                error(s->span, QStringLiteral("duplicate struct '%1' in package '%2'")
+                                    .arg(s->name, s->packageName));
+                duplicateInPackage = true;
+                break;
+            }
         }
+        if (duplicateInPackage)
+            continue;
         StructInfo info;
         info.decl = s;
-        for (const auto& field : s->fields) {
-            if (info.fields.contains(field->name)) {
-                error(field->span, QStringLiteral("duplicate field '%1'").arg(field->name));
-                continue;
-            }
-            AbelType type = typeFromAst(*field->type);
-            if (type.isReference())
-                error(field->span, QStringLiteral("reference fields are not supported in v0"));
-            info.fields.insert(field->name, FieldInfo{type, field->type->isConst});
-        }
         for (const auto& method : s->methods) {
             if (info.methods.contains(method->name)) {
                 error(method->span, QStringLiteral("duplicate method '%1'").arg(method->name));
@@ -155,7 +174,25 @@ void TypeChecker::collectStructs(const ProgramNode& program)
             error(s->span, QStringLiteral("only one constructor is supported per struct in this v0 slice"));
         if (!s->constructors.empty())
             info.constructor = s->constructors.front().get();
-        m_structs.insert(s->name, info);
+        m_structs[s->name].push_back(std::move(info));
+    }
+
+    for (auto& candidates : m_structs) {
+        for (auto& info : candidates) {
+            const StructDeclNode* s = info.decl;
+            if (!s)
+                continue;
+            for (const auto& field : s->fields) {
+                if (info.fields.contains(field->name)) {
+                    error(field->span, QStringLiteral("duplicate field '%1'").arg(field->name));
+                    continue;
+                }
+                AbelType type = typeFromAstInPackage(*field->type, s->packageName, false);
+                if (type.isReference())
+                    error(field->span, QStringLiteral("reference fields are not supported in v0"));
+                info.fields.insert(field->name, FieldInfo{type, field->type->isConst});
+            }
+        }
     }
 }
 
@@ -227,16 +264,178 @@ const FunctionDeclNode* TypeChecker::resolveFunction(const QString& name, const 
     return nullptr;
 }
 
+const TypeChecker::StructInfo* TypeChecker::resolveStruct(const QString& name, const SourceSpan& span, bool diagnose)
+{
+    return resolveStructInPackage(name, m_currentPackage, span, diagnose);
+}
+
+const TypeChecker::StructInfo* TypeChecker::resolveStructInPackage(const QString& name,
+                                                                   const QString& packageName,
+                                                                   const SourceSpan& span,
+                                                                   bool diagnose)
+{
+    auto found = m_structs.constFind(name);
+    if (found == m_structs.constEnd() || found->isEmpty())
+        return nullptr;
+    const auto& candidates = found.value();
+
+    for (const auto& info : candidates) {
+        if (info.decl && info.decl->packageName == packageName)
+            return &info;
+    }
+
+    QList<const StructInfo*> visible;
+    QList<const StructInfo*> hidden;
+    for (const auto& info : candidates) {
+        if (!info.decl)
+            continue;
+        if (declVisibleFromPackage(*info.decl, packageName) || info.decl->exported)
+            visible.push_back(&info);
+        else
+            hidden.push_back(&info);
+    }
+    if (visible.size() == 1)
+        return visible.front();
+    if (visible.size() > 1) {
+        if (diagnose)
+            error(span, QStringLiteral("struct '%1' is ambiguous across dependency packages").arg(name));
+        return nullptr;
+    }
+    if (hidden.size() == 1) {
+        if (diagnose)
+            error(span,
+                  QStringLiteral("struct '%1' from dependency package '%2' is not exported")
+                      .arg(hidden.front()->decl->name, hidden.front()->decl->packageName));
+        return nullptr;
+    }
+    if (!hidden.isEmpty() && diagnose)
+        error(span, QStringLiteral("struct '%1' exists only as non-exported dependency symbols").arg(name));
+    return nullptr;
+}
+
+const TypeChecker::StructInfo* TypeChecker::structInfoForType(const AbelType& type) const
+{
+    if (type.kind != TypeKind::Struct)
+        return nullptr;
+    for (auto it = m_structs.constBegin(); it != m_structs.constEnd(); ++it) {
+        const auto& candidates = it.value();
+        for (const auto& info : candidates) {
+            if (!info.decl)
+                continue;
+            if (structTypeName(*info.decl) == type.spelling)
+                return &info;
+        }
+    }
+    return nullptr;
+}
+
+const TypeChecker::BackendInfo* TypeChecker::resolveBackend(const QString& name, const SourceSpan& span, bool diagnose)
+{
+    return resolveBackendInPackage(name, m_currentPackage, span, diagnose);
+}
+
+const TypeChecker::BackendInfo* TypeChecker::resolveBackendInPackage(const QString& name,
+                                                                     const QString& packageName,
+                                                                     const SourceSpan& span,
+                                                                     bool diagnose)
+{
+    auto found = m_backends.constFind(name);
+    if (found == m_backends.constEnd() || found->isEmpty())
+        return nullptr;
+    const auto& candidates = found.value();
+
+    for (const auto& info : candidates) {
+        if (info.decl && info.decl->packageName == packageName)
+            return &info;
+    }
+
+    QList<const BackendInfo*> visible;
+    QList<const BackendInfo*> hidden;
+    for (const auto& info : candidates) {
+        if (!info.decl)
+            continue;
+        if (declVisibleFromPackage(*info.decl, packageName) || info.decl->exported)
+            visible.push_back(&info);
+        else
+            hidden.push_back(&info);
+    }
+    if (visible.size() == 1)
+        return visible.front();
+    if (visible.size() > 1) {
+        if (diagnose)
+            error(span, QStringLiteral("backend '%1' is ambiguous across dependency packages").arg(name));
+        return nullptr;
+    }
+    if (hidden.size() == 1) {
+        if (diagnose)
+            error(span,
+                  QStringLiteral("backend '%1' from dependency package '%2' is not exported")
+                      .arg(hidden.front()->decl->name, hidden.front()->decl->packageName));
+        return nullptr;
+    }
+    if (!hidden.isEmpty() && diagnose)
+        error(span, QStringLiteral("backend '%1' exists only as non-exported dependency symbols").arg(name));
+    return nullptr;
+}
+
+AbelType TypeChecker::typeFromAstInCurrentPackage(const TypeNode& node)
+{
+    return typeFromAstInPackage(node, m_currentPackage);
+}
+
+AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& packageName, bool diagnose)
+{
+    if (node.name == QStringLiteral("vector") && node.elementType) {
+        AbelType base = makeVectorType(typeFromAstInPackage(*node.elementType, packageName, diagnose));
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
+    if (node.name == QStringLiteral("func") && node.elementType) {
+        std::vector<AbelType> params;
+        params.reserve(node.functionParamTypes.size());
+        for (const auto& param : node.functionParamTypes)
+            params.push_back(typeFromAstInPackage(*param, packageName, diagnose));
+        AbelType base = makeFunctionType(typeFromAstInPackage(*node.elementType, packageName, diagnose), std::move(params));
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
+
+    AbelType base = typeFromName(node.name);
+    if (base.kind == TypeKind::Struct) {
+        if (const StructInfo* info = resolveStructInPackage(node.name, packageName, node.span, diagnose))
+            base = makeStructType(structTypeName(*info->decl));
+    }
+    for (int i = 0; i < node.pointerDepth; ++i)
+        base = makePointerType(base);
+    if (node.isReference)
+        base = makeReferenceType(base);
+    return base;
+}
+
 void TypeChecker::collectBackends(const ProgramNode& program)
 {
     for (const auto& decl : program.declarations) {
         auto* backend = dynamic_cast<BackendBlockNode*>(decl.get());
         if (!backend)
             continue;
-        if (m_backends.contains(backend->name)) {
-            error(backend->span, QStringLiteral("duplicate backend '%1'").arg(backend->name));
-            continue;
+        const auto existing = m_backends.value(backend->name);
+        bool duplicateInPackage = false;
+        for (const auto& other : existing) {
+            if (other.decl && other.decl->packageName == backend->packageName) {
+                error(backend->span, QStringLiteral("duplicate backend '%1' in package '%2'")
+                                        .arg(backend->name, backend->packageName));
+                duplicateInPackage = true;
+                break;
+            }
         }
+        if (duplicateInPackage)
+            continue;
         BackendInfo info;
         info.decl = backend;
         for (const auto& fn : backend->functions) {
@@ -246,7 +445,7 @@ void TypeChecker::collectBackends(const ProgramNode& program)
             }
             info.functions.insert(fn->name, fn.get());
         }
-        m_backends.insert(backend->name, info);
+        m_backends[backend->name].push_back(std::move(info));
     }
 }
 
@@ -255,7 +454,7 @@ void TypeChecker::checkStruct(const StructDeclNode& decl)
     const QString previousPackage = m_currentPackage;
     m_currentPackage = decl.packageName;
     for (const auto& field : decl.fields) {
-        AbelType type = typeFromAst(*field->type);
+        AbelType type = typeFromAstInCurrentPackage(*field->type);
         if (!isSupportedType(type))
             error(field->span, QStringLiteral("unsupported field type '%1'").arg(field->type->displayName()));
         if (type.isReference())
@@ -273,13 +472,13 @@ void TypeChecker::checkBackend(const BackendBlockNode& backend)
     const QString previousPackage = m_currentPackage;
     m_currentPackage = backend.packageName;
     for (const auto& fn : backend.functions) {
-        const AbelType returnType = typeFromAst(*fn->returnType);
+        const AbelType returnType = typeFromAstInCurrentPackage(*fn->returnType);
         if (!isSupportedType(returnType))
             error(fn->returnType->span, QStringLiteral("unsupported backend return type '%1'").arg(fn->returnType->displayName()));
         bool seenVariadic = false;
         for (size_t i = 0; i < fn->params.size(); ++i) {
             const ParameterNode& param = *fn->params[i];
-            const AbelType paramType = typeFromAst(*param.type);
+            const AbelType paramType = typeFromAstInCurrentPackage(*param.type);
             if (!isSupportedType(paramType))
                 error(param.span, QStringLiteral("unsupported backend parameter type '%1'").arg(param.type->displayName()));
             if (!param.variadic)
@@ -299,13 +498,13 @@ void TypeChecker::checkBackend(const BackendBlockNode& backend)
 void TypeChecker::checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor)
 {
     m_currentReturnType = makeType(TypeKind::Void);
-    m_currentStruct = owner.name;
+    m_currentStruct = structTypeName(owner);
     pushScope();
-    defineVariable(QStringLiteral("this"), makePointerType(makeStructType(owner.name)), false, owner.span);
+    defineVariable(QStringLiteral("this"), makePointerType(makeStructType(structTypeName(owner))), false, owner.span);
     for (const auto& field : owner.fields)
-        defineVariable(field->name, typeFromAst(*field->type), field->type->isConst, field->span);
+        defineVariable(field->name, typeFromAstInCurrentPackage(*field->type), field->type->isConst, field->span);
     for (const auto& param : ctor.params) {
-        AbelType paramType = typeFromAst(*param->type);
+        AbelType paramType = typeFromAstInCurrentPackage(*param->type);
         if (!isSupportedType(paramType))
             error(param->span, QStringLiteral("unsupported parameter type '%1'").arg(param->type->displayName()));
         defineVariable(param->name, param->variadic ? makeVectorType(makeType(TypeKind::Any)) : paramType, false, param->span);
@@ -318,19 +517,19 @@ void TypeChecker::checkConstructor(const StructDeclNode& owner, const Constructo
 void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNode& method)
 {
     const qsizetype diagnosticsBeforeCallable = m_diagnostics.size();
-    const AbelType returnType = typeFromAst(*method.returnType);
+    const AbelType returnType = typeFromAstInCurrentPackage(*method.returnType);
     if (!isSupportedType(returnType)) {
         error(method.returnType->span, QStringLiteral("unsupported return type '%1'").arg(method.returnType->displayName()));
         return;
     }
     m_currentReturnType = returnType;
-    m_currentStruct = owner.name;
+    m_currentStruct = structTypeName(owner);
     pushScope();
-    defineVariable(QStringLiteral("this"), makePointerType(makeStructType(owner.name)), method.isConstMethod, method.span);
+    defineVariable(QStringLiteral("this"), makePointerType(makeStructType(structTypeName(owner))), method.isConstMethod, method.span);
     for (const auto& field : owner.fields)
-        defineVariable(field->name, typeFromAst(*field->type), method.isConstMethod || field->type->isConst, field->span);
+        defineVariable(field->name, typeFromAstInCurrentPackage(*field->type), method.isConstMethod || field->type->isConst, field->span);
     for (const auto& param : method.params) {
-        AbelType paramType = typeFromAst(*param->type);
+        AbelType paramType = typeFromAstInCurrentPackage(*param->type);
         if (!isSupportedType(paramType))
             error(param->span, QStringLiteral("unsupported parameter type '%1'").arg(param->type->displayName()));
         defineVariable(param->name, param->variadic ? makeVectorType(makeType(TypeKind::Any)) : paramType, false, param->span);
@@ -354,7 +553,7 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
     const QString previousPackage = m_currentPackage;
     m_currentPackage = fn.packageName;
     const qsizetype diagnosticsBeforeCallable = m_diagnostics.size();
-    const AbelType returnType = typeFromAst(*fn.returnType);
+    const AbelType returnType = typeFromAstInCurrentPackage(*fn.returnType);
     if (!isSupportedType(returnType)) {
         error(fn.returnType->span, QStringLiteral("unsupported return type '%1'").arg(fn.returnType->displayName()));
         m_currentPackage = previousPackage;
@@ -366,7 +565,7 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
     bool seenVariadic = false;
     for (size_t i = 0; i < fn.params.size(); ++i) {
         const ParameterNode& param = *fn.params[i];
-        const AbelType paramType = typeFromAst(*param.type);
+        const AbelType paramType = typeFromAstInCurrentPackage(*param.type);
         if (!isSupportedType(paramType)) {
             error(param.span, QStringLiteral("unsupported parameter type '%1'").arg(param.type->displayName()));
             continue;
@@ -480,7 +679,7 @@ void TypeChecker::checkStmt(const StmtNode& stmt)
 
 void TypeChecker::checkVarDecl(const VarDeclStmtNode& stmt)
 {
-    const AbelType type = typeFromAst(*stmt.type);
+    const AbelType type = typeFromAstInCurrentPackage(*stmt.type);
     if (!isSupportedType(type)) {
         error(stmt.type->span, QStringLiteral("unsupported variable type '%1'").arg(stmt.type->displayName()));
         return;
@@ -681,7 +880,7 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
 
 ExprType TypeChecker::checkCast(const CastExprNode& expr)
 {
-    const AbelType target = typeFromAst(*expr.targetType);
+        const AbelType target = typeFromAstInCurrentPackage(*expr.targetType);
     if (!isSupportedType(target))
         return errorExpr(expr.targetType->span, QStringLiteral("unsupported cast target type '%1'").arg(expr.targetType->displayName()));
     if (target.kind == TypeKind::Void || target.isReference())
@@ -830,7 +1029,7 @@ ExprType TypeChecker::checkFunctionCallShape(const QString& name,
         if (isUnknownType(arg.type))
             return;
         const ParameterNode& param = *fn.params[i];
-        const AbelType paramType = typeFromAst(*param.type);
+        const AbelType paramType = typeFromAstInPackage(*param.type, fn.packageName);
         if (paramType.isReference()) {
             if (arg.category != ValueCategory::LValue)
                 error(argSpan, QStringLiteral("reference parameter '%1' requires lvalue").arg(param.name));
@@ -855,7 +1054,7 @@ ExprType TypeChecker::checkFunctionCallShape(const QString& name,
         if (i > 0)
             checkExpr(*restArgs[i - 1]);
     }
-    return {typeFromAst(*fn.returnType), ValueCategory::PRValue, false};
+    return {typeFromAstInPackage(*fn.returnType, fn.packageName), ValueCategory::PRValue, false};
 }
 
 ExprType TypeChecker::checkFunctionValueCallShape(const AbelType& functionType,
@@ -926,19 +1125,21 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             return unknownExprType();
         }
         if (receiver.type.kind == TypeKind::Struct) {
-            const StructInfo info = m_structs.value(receiver.type.spelling);
-            const FunctionDeclNode* method = info.methods.value(field->field, nullptr);
+            const StructInfo* info = structInfoForType(receiver.type);
+            if (!info)
+                return errorExpr(field->span, QStringLiteral("unknown struct type '%1'").arg(receiver.type.displayName()));
+            const FunctionDeclNode* method = info->methods.value(field->field, nullptr);
             if (!method)
                 return errorExpr(field->span, QStringLiteral("unknown method '%1' on %2").arg(field->field, receiver.type.displayName()));
             if (expr.args.size() != method->params.size())
                 return errorExpr(expr.span, QStringLiteral("method '%1' called with wrong argument count").arg(field->field));
             for (size_t i = 0; i < expr.args.size(); ++i) {
-                AbelType paramType = typeFromAst(*method->params[i]->type);
+                AbelType paramType = typeFromAstInPackage(*method->params[i]->type, method->packageName);
                 ExprType arg = checkExpr(*expr.args[i]);
                 if (!isUnknownType(arg.type) && !isAssignable(paramType, arg.type))
                     error(expr.args[i]->span, QStringLiteral("cannot pass %1 to method parameter %2").arg(arg.type.displayName(), paramType.displayName()));
             }
-            return {typeFromAst(*method->returnType), method->returnType->isReference ? ValueCategory::LValue : ValueCategory::PRValue, false};
+            return {typeFromAstInPackage(*method->returnType, method->packageName), method->returnType->isReference ? ValueCategory::LValue : ValueCategory::PRValue, false};
         }
         return checkBuiltinMethodCall(*field, expr.args);
     }
@@ -954,16 +1155,11 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
         return checkFunctionValueCall(calleeType, expr.args, expr.span);
     }
 
-    if (const StructInfo* info = m_structs.contains(name->name) ? &m_structs[name->name] : nullptr) {
-        if (!requireStructVisible(*info->decl, name->span)) {
-            for (const auto& argExpr : expr.args)
-                checkExpr(*argExpr);
-            return unknownExprType();
-        }
+    if (const StructInfo* info = resolveStruct(name->name, name->span)) {
         const size_t argc = expr.args.size();
         if (!info->constructor) {
             if (argc == 0) {
-                if (!isDefaultConstructible(makeStructType(name->name)))
+                if (!isDefaultConstructible(makeStructType(structTypeName(*info->decl))))
                     return errorExpr(expr.span, QStringLiteral("constructor '%1' is not default-constructible").arg(name->name));
             } else {
                 if (argc != info->fields.size())
@@ -979,13 +1175,18 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             if (argc != info->constructor->params.size())
                 return errorExpr(expr.span, QStringLiteral("constructor '%1' called with wrong argument count").arg(name->name));
             for (size_t i = 0; i < argc; ++i) {
-                AbelType paramType = typeFromAst(*info->constructor->params[i]->type);
+                AbelType paramType = typeFromAstInPackage(*info->constructor->params[i]->type, info->decl->packageName);
                 ExprType arg = checkExpr(*expr.args[i]);
                 if (!isUnknownType(arg.type) && !isAssignable(paramType, arg.type))
                     error(expr.args[i]->span, QStringLiteral("cannot pass %1 to constructor parameter %2").arg(arg.type.displayName(), paramType.displayName()));
             }
         }
-        return {makeStructType(name->name), ValueCategory::PRValue, false};
+        return {makeStructType(structTypeName(*info->decl)), ValueCategory::PRValue, false};
+    }
+    if (m_structs.contains(name->name)) {
+        for (const auto& argExpr : expr.args)
+            checkExpr(*argExpr);
+        return unknownExprType();
     }
 
     if (const FunctionDeclNode* fn = resolveFunction(name->name, name->span)) {
@@ -995,7 +1196,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             return errorExpr(expr.span, QStringLiteral("function '%1' called with wrong argument count").arg(name->name));
         for (size_t i = 0; i < fixedCount; ++i) {
             const ParameterNode& param = *fn->params[i];
-            const AbelType paramType = typeFromAst(*param.type);
+            const AbelType paramType = typeFromAstInPackage(*param.type, fn->packageName);
             ExprType arg = checkExpr(*expr.args[i]);
             if (isUnknownType(arg.type))
                 continue;
@@ -1012,7 +1213,7 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
         }
         for (size_t i = fixedCount; i < expr.args.size(); ++i)
             checkExpr(*expr.args[i]);
-        return {typeFromAst(*fn->returnType), ValueCategory::PRValue, false};
+        return {typeFromAstInPackage(*fn->returnType, fn->packageName), ValueCategory::PRValue, false};
     }
     if (m_functions.contains(name->name)) {
         for (const auto& argExpr : expr.args)
@@ -1093,10 +1294,16 @@ ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
     auto* backendName = dynamic_cast<NameExprNode*>(callee.base.get());
     if (!backendName)
         return errorExpr(callee.span, QStringLiteral("backend call receiver must be a backend name"));
-    const BackendInfo* backend = m_backends.contains(backendName->name) ? &m_backends[backendName->name] : nullptr;
-    if (!backend)
+    const BackendInfo* backend = resolveBackend(backendName->name, backendName->span);
+    if (!backend) {
+        if (m_backends.contains(backendName->name)) {
+            for (const auto& argExpr : args)
+                checkExpr(*argExpr);
+            return unknownExprType();
+        }
         return errorExpr(callee.span, QStringLiteral("unknown backend '%1'").arg(backendName->name));
-    if (!requireBackendVisible(*backend->decl, backendName->span)) {
+    }
+    if (!isBackendVisible(*backend->decl)) {
         for (const auto& argExpr : args)
             checkExpr(*argExpr);
         return unknownExprType();
@@ -1112,7 +1319,7 @@ ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
 
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& param = *fn->params[i];
-        const AbelType paramType = typeFromAst(*param.type);
+        const AbelType paramType = typeFromAstInPackage(*param.type, fn->packageName);
         ExprType arg = checkExpr(*args[i]);
         if (isUnknownType(arg.type))
             continue;
@@ -1130,7 +1337,7 @@ ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
     for (size_t i = fixedCount; i < args.size(); ++i)
         checkExpr(*args[i]);
 
-    const AbelType returnType = typeFromAst(*fn->returnType);
+    const AbelType returnType = typeFromAstInPackage(*fn->returnType, fn->packageName);
     return {returnType, returnType.isReference() ? ValueCategory::LValue : ValueCategory::PRValue, false};
 }
 
@@ -1170,13 +1377,13 @@ ExprType TypeChecker::checkFunctionValueCall(const AbelType& functionType,
 ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
 {
     const qsizetype diagnosticsBeforeLambda = m_diagnostics.size();
-    AbelType returnType = typeFromAst(*expr.returnType);
+    AbelType returnType = typeFromAstInCurrentPackage(*expr.returnType);
     if (!isSupportedType(returnType))
         error(expr.returnType->span, QStringLiteral("unsupported lambda return type '%1'").arg(expr.returnType->displayName()));
     std::vector<AbelType> params;
     params.reserve(expr.paramTypes.size());
     for (const auto& type : expr.paramTypes) {
-        AbelType paramType = typeFromAst(*type);
+        AbelType paramType = typeFromAstInCurrentPackage(*type);
         if (!isSupportedType(paramType))
             error(type->span, QStringLiteral("unsupported lambda parameter type '%1'").arg(type->displayName()));
         params.push_back(paramType);
@@ -1394,20 +1601,22 @@ ExprType TypeChecker::checkFieldAccess(const FieldAccessExprNode& expr)
         return unknownExprType();
     if (objectType.kind != TypeKind::Struct)
         return errorExpr(expr.span, QStringLiteral("field access requires struct receiver"));
-    const StructInfo info = m_structs.value(objectType.spelling);
-    if (!info.fields.contains(expr.field))
+    const StructInfo* info = structInfoForType(objectType);
+    if (!info)
+        return errorExpr(expr.span, QStringLiteral("unknown struct type '%1'").arg(objectType.displayName()));
+    if (!info->fields.contains(expr.field))
         return errorExpr(expr.span, QStringLiteral("unknown field '%1' on %2").arg(expr.field, objectType.displayName()));
-    const FieldInfo field = info.fields.value(expr.field);
+    const FieldInfo field = info->fields.value(expr.field);
     return {field.type, ValueCategory::LValue, mutableBase && !field.isConst};
 }
 
-bool TypeChecker::isSupportedType(const AbelType& type) const
+bool TypeChecker::isSupportedType(const AbelType& type)
 {
     if (type.kind == TypeKind::Unknown || type.kind == TypeKind::Nullptr)
         return false;
     if (type.kind == TypeKind::Struct) {
-        const StructInfo info = m_structs.value(type.spelling);
-        return info.decl && isStructVisible(*info.decl);
+        const StructInfo* info = structInfoForType(type);
+        return info && info->decl && isStructVisible(*info->decl);
     }
     if (type.kind == TypeKind::Function) {
         if (!type.pointee || !isSupportedType(*type.pointee))
@@ -1478,13 +1687,13 @@ bool TypeChecker::isAssignable(const AbelType& target, const AbelType& source) c
     return canAssignValue(target, source);
 }
 
-bool TypeChecker::isDefaultConstructible(const AbelType& type) const
+bool TypeChecker::isDefaultConstructible(const AbelType& type)
 {
     QSet<QString> visiting;
     return isDefaultConstructible(type, visiting);
 }
 
-bool TypeChecker::isDefaultConstructible(const AbelType& type, QSet<QString>& visiting) const
+bool TypeChecker::isDefaultConstructible(const AbelType& type, QSet<QString>& visiting)
 {
     switch (type.kind) {
     case TypeKind::Void:
@@ -1504,17 +1713,17 @@ bool TypeChecker::isDefaultConstructible(const AbelType& type, QSet<QString>& vi
     case TypeKind::Unknown:
         return false;
     case TypeKind::Struct: {
-        const StructInfo info = m_structs.value(type.spelling);
-        if (!info.decl)
+        const StructInfo* info = structInfoForType(type);
+        if (!info || !info->decl)
             return false;
         if (visiting.contains(type.spelling))
             return false;
-        if (info.constructor)
-            return info.constructor->params.empty();
+        if (info->constructor)
+            return info->constructor->params.empty();
 
         visiting.insert(type.spelling);
-        for (const auto& field : info.decl->fields) {
-            if (!isDefaultConstructible(typeFromAst(*field->type), visiting)) {
+        for (const auto& field : info->decl->fields) {
+            if (!isDefaultConstructible(typeFromAstInPackage(*field->type, info->decl->packageName), visiting)) {
                 visiting.remove(type.spelling);
                 return false;
             }
@@ -1526,7 +1735,7 @@ bool TypeChecker::isDefaultConstructible(const AbelType& type, QSet<QString>& vi
     return false;
 }
 
-bool TypeChecker::isStringifiable(const AbelType& type) const
+bool TypeChecker::isStringifiable(const AbelType& type)
 {
     switch (type.kind) {
     case TypeKind::Void:
@@ -1553,7 +1762,7 @@ bool TypeChecker::isStringifiable(const AbelType& type) const
     return false;
 }
 
-bool TypeChecker::hasUserToStrFor(const AbelType& type) const
+bool TypeChecker::hasUserToStrFor(const AbelType& type)
 {
     if (type.kind != TypeKind::Struct)
         return false;
@@ -1561,10 +1770,10 @@ bool TypeChecker::hasUserToStrFor(const AbelType& type) const
     for (const FunctionDeclNode* fn : candidates) {
         if (!isFunctionVisible(*fn) || fn->params.size() != 1 || fn->params.front()->variadic)
             continue;
-        const AbelType returnType = typeFromAst(*fn->returnType);
+        const AbelType returnType = typeFromAstInPackage(*fn->returnType, fn->packageName);
         if (returnType.kind != TypeKind::Str)
             continue;
-        const AbelType paramType = typeFromAst(*fn->params.front()->type);
+        const AbelType paramType = typeFromAstInPackage(*fn->params.front()->type, fn->packageName);
         if (isAssignable(paramType, type))
             return true;
     }

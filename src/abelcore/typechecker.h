@@ -54,8 +54,8 @@ private:
 
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
     QList<const FunctionDeclNode*> m_functionDecls;
-    QHash<QString, StructInfo> m_structs;
-    QHash<QString, BackendInfo> m_backends;
+    QHash<QString, QList<StructInfo>> m_structs;
+    QHash<QString, QList<BackendInfo>> m_backends;
     QList<QHash<QString, VariableInfo>> m_scopes;
     QList<Diagnostic> m_diagnostics;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
@@ -69,6 +69,19 @@ private:
     void collectBackends(const ProgramNode& program);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
     const FunctionDeclNode* resolveFunction(const QString& name, const SourceSpan& span, bool diagnose = true);
+    const StructInfo* resolveStruct(const QString& name, const SourceSpan& span, bool diagnose = true);
+    const StructInfo* resolveStructInPackage(const QString& name,
+                                             const QString& packageName,
+                                             const SourceSpan& span,
+                                             bool diagnose = true);
+    const StructInfo* structInfoForType(const AbelType& type) const;
+    const BackendInfo* resolveBackend(const QString& name, const SourceSpan& span, bool diagnose = true);
+    const BackendInfo* resolveBackendInPackage(const QString& name,
+                                               const QString& packageName,
+                                               const SourceSpan& span,
+                                               bool diagnose = true);
+    AbelType typeFromAstInCurrentPackage(const TypeNode& node);
+    AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName, bool diagnose = true);
     void checkFunction(const FunctionDeclNode& fn);
     void checkStruct(const StructDeclNode& decl);
     void checkBackend(const BackendBlockNode& backend);
@@ -115,7 +128,7 @@ private:
     void defineVariable(const QString& name, const AbelType& type, bool isConst, const SourceSpan& span);
     const VariableInfo* lookupVariable(const QString& name) const;
 
-    bool isSupportedType(const AbelType& type) const;
+    bool isSupportedType(const AbelType& type);
     bool isDeclVisible(const DeclNode& decl) const;
     bool isFunctionVisible(const FunctionDeclNode& fn) const;
     bool isStructVisible(const StructDeclNode& decl) const;
@@ -123,11 +136,11 @@ private:
     bool requireFunctionVisible(const FunctionDeclNode& fn, const SourceSpan& span);
     bool requireStructVisible(const StructDeclNode& decl, const SourceSpan& span);
     bool requireBackendVisible(const BackendBlockNode& backend, const SourceSpan& span);
-    bool isDefaultConstructible(const AbelType& type) const;
-    bool isDefaultConstructible(const AbelType& type, QSet<QString>& visiting) const;
+    bool isDefaultConstructible(const AbelType& type);
+    bool isDefaultConstructible(const AbelType& type, QSet<QString>& visiting);
     bool isAssignable(const AbelType& target, const AbelType& source) const;
-    bool isStringifiable(const AbelType& type) const;
-    bool hasUserToStrFor(const AbelType& type) const;
+    bool isStringifiable(const AbelType& type);
+    bool hasUserToStrFor(const AbelType& type);
     AbelType valueTypeOfVariable(const AbelType& type) const;
     ExprType errorExpr(const SourceSpan& span, const QString& message);
     void error(const SourceSpan& span, const QString& message, const QString& code = QStringLiteral("E0301"));

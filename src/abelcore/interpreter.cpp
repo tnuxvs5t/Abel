@@ -33,6 +33,23 @@ QString backendFrameSymbol(const QString& backendId, const QString& symbol)
     return QStringLiteral("backend %1::%2").arg(backendId, symbol);
 }
 
+QString packageQualifiedName(const QString& packageName, const QString& name)
+{
+    return packageName.isEmpty()
+        ? name
+        : packageName + QStringLiteral("::") + name;
+}
+
+QString structTypeName(const StructDeclNode& decl)
+{
+    return packageQualifiedName(decl.packageName, decl.name);
+}
+
+bool declVisibleFromPackage(const DeclNode& decl, const QString& packageName)
+{
+    return !decl.fromDependency || decl.packageName == packageName;
+}
+
 class PackageGuard {
 public:
     PackageGuard(QString& current, QString next)
@@ -118,7 +135,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
         return result;
     }
 
-    const AbelType mainType = typeFromAst(*main->returnType);
+    const AbelType mainType = typeFromAstInPackage(*main->returnType, main->packageName);
     if (mainType.kind != TypeKind::I32 && mainType.kind != TypeKind::Void) {
         ctx.error(QStringLiteral("E0505"), QStringLiteral("main must return int or void"), main->span);
         result.exitCode = 1;
@@ -150,18 +167,28 @@ bool Interpreter::collectStructs(const ProgramNode& program, AbelRuntimeContext&
         auto* s = dynamic_cast<StructDeclNode*>(decl.get());
         if (!s)
             continue;
-        if (m_structs.contains(s->name)) {
-            ctx.error(QStringLiteral("E0565"), QStringLiteral("duplicate struct '%1'").arg(s->name), s->span);
-            ok = false;
-            continue;
+        const auto existing = m_structs.value(s->name);
+        bool duplicateInPackage = false;
+        for (const auto& other : existing) {
+            if (other.decl && other.decl->packageName == s->packageName) {
+                ctx.error(QStringLiteral("E0565"),
+                          QStringLiteral("duplicate struct '%1' in package '%2'")
+                              .arg(s->name, s->packageName),
+                          s->span);
+                ok = false;
+                duplicateInPackage = true;
+                break;
+            }
         }
+        if (duplicateInPackage)
+            continue;
         StructRuntimeInfo info;
         info.decl = s;
         if (!s->constructors.empty())
             info.constructor = s->constructors.front().get();
         for (const auto& method : s->methods)
             info.methods.insert(method->name, method.get());
-        m_structs.insert(s->name, info);
+        m_structs[s->name].push_back(info);
     }
     return ok;
 }
@@ -217,6 +244,104 @@ const FunctionDeclNode* Interpreter::resolveFunction(const QString& name) const
     return nullptr;
 }
 
+const Interpreter::StructRuntimeInfo* Interpreter::resolveStruct(const QString& name) const
+{
+    return resolveStructInPackage(name, m_currentPackage);
+}
+
+const Interpreter::StructRuntimeInfo* Interpreter::resolveStructInPackage(const QString& name, const QString& packageName) const
+{
+    auto found = m_structs.constFind(name);
+    if (found == m_structs.constEnd() || found->isEmpty())
+        return nullptr;
+    const auto& candidates = found.value();
+    for (const auto& info : candidates) {
+        if (info.decl && info.decl->packageName == packageName)
+            return &info;
+    }
+    for (const auto& info : candidates) {
+        if (info.decl && (declVisibleFromPackage(*info.decl, packageName) || info.decl->exported))
+            return &info;
+    }
+    return nullptr;
+}
+
+const Interpreter::StructRuntimeInfo* Interpreter::structInfoForType(const AbelType& type) const
+{
+    if (type.kind != TypeKind::Struct)
+        return nullptr;
+    for (auto it = m_structs.constBegin(); it != m_structs.constEnd(); ++it) {
+        const auto& candidates = it.value();
+        for (const auto& info : candidates) {
+            if (info.decl && structTypeName(*info.decl) == type.spelling)
+                return &info;
+        }
+    }
+    return nullptr;
+}
+
+const Interpreter::BackendRuntimeInfo* Interpreter::resolveBackend(const QString& name) const
+{
+    return resolveBackendInPackage(name, m_currentPackage);
+}
+
+const Interpreter::BackendRuntimeInfo* Interpreter::resolveBackendInPackage(const QString& name, const QString& packageName) const
+{
+    auto found = m_backends.constFind(name);
+    if (found == m_backends.constEnd() || found->isEmpty())
+        return nullptr;
+    const auto& candidates = found.value();
+    for (const auto& info : candidates) {
+        if (info.decl && info.decl->packageName == packageName)
+            return &info;
+    }
+    for (const auto& info : candidates) {
+        if (info.decl && (declVisibleFromPackage(*info.decl, packageName) || info.decl->exported))
+            return &info;
+    }
+    return nullptr;
+}
+
+AbelType Interpreter::typeFromAstInCurrentPackage(const TypeNode& node) const
+{
+    return typeFromAstInPackage(node, m_currentPackage);
+}
+
+AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& packageName) const
+{
+    if (node.name == QStringLiteral("vector") && node.elementType) {
+        AbelType base = makeVectorType(typeFromAstInPackage(*node.elementType, packageName));
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
+    if (node.name == QStringLiteral("func") && node.elementType) {
+        std::vector<AbelType> params;
+        params.reserve(node.functionParamTypes.size());
+        for (const auto& param : node.functionParamTypes)
+            params.push_back(typeFromAstInPackage(*param, packageName));
+        AbelType base = makeFunctionType(typeFromAstInPackage(*node.elementType, packageName), std::move(params));
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
+
+    AbelType base = typeFromName(node.name);
+    if (base.kind == TypeKind::Struct) {
+        if (const StructRuntimeInfo* info = resolveStructInPackage(node.name, packageName))
+            base = makeStructType(structTypeName(*info->decl));
+    }
+    for (int i = 0; i < node.pointerDepth; ++i)
+        base = makePointerType(base);
+    if (node.isReference)
+        base = makeReferenceType(base);
+    return base;
+}
+
 bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx)
 {
     bool ok = true;
@@ -224,13 +349,24 @@ bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext
         auto* backend = dynamic_cast<BackendBlockNode*>(decl.get());
         if (!backend)
             continue;
-        if (m_backends.contains(backend->name)) {
-            ctx.error(QStringLiteral("E0601"), QStringLiteral("duplicate backend '%1'").arg(backend->name), backend->span);
-            ok = false;
-            continue;
+        const auto existing = m_backends.value(backend->name);
+        bool duplicateInPackage = false;
+        for (const auto& other : existing) {
+            if (other.decl && other.decl->packageName == backend->packageName) {
+                ctx.error(QStringLiteral("E0601"),
+                          QStringLiteral("duplicate backend '%1' in package '%2'")
+                              .arg(backend->name, backend->packageName),
+                          backend->span);
+                ok = false;
+                duplicateInPackage = true;
+                break;
+            }
         }
+        if (duplicateInPackage)
+            continue;
         BackendRuntimeInfo info;
         info.decl = backend;
+        PackageGuard package(m_currentPackage, backend->packageName);
         for (const auto& fn : backend->functions) {
             if (info.functions.contains(fn->name)) {
                 ctx.error(QStringLiteral("E0602"), QStringLiteral("duplicate backend function '%1::%2'").arg(backend->name, fn->name), fn->span);
@@ -241,11 +377,11 @@ bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext
             std::vector<AbelType> params;
             params.reserve(fn->params.size());
             for (const auto& param : fn->params)
-                params.push_back(typeFromAst(*param->type));
+                params.push_back(typeFromAstInCurrentPackage(*param->type));
             BackendFunctionDesc desc{
                 backend->name,
                 fn->name,
-                typeFromAst(*fn->returnType),
+                typeFromAstInCurrentPackage(*fn->returnType),
                 std::move(params),
                 !fn->params.empty() && fn->params.back()->variadic,
             };
@@ -261,7 +397,7 @@ bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext
                 m_activeBackendRegistry->registerFunction(std::move(desc));
             }
         }
-        m_backends.insert(backend->name, info);
+        m_backends[backend->name].push_back(info);
     }
     return ok;
 }
@@ -297,7 +433,7 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
     std::vector<PreparedArg> prepared(fixedCount);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
-        const AbelType target = typeFromAst(*p.type);
+        const AbelType target = typeFromAstInCurrentPackage(*p.type);
         if (target.isReference()) {
             AbelLocation* loc = evalLocation(*args[i]);
             if (!loc)
@@ -349,7 +485,7 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
     ExecResult flow = execBlock(*fn.body);
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
-    const AbelType returnType = typeFromAst(*fn.returnType);
+    const AbelType returnType = typeFromAstInCurrentPackage(*fn.returnType);
     if (flow.kind == FlowKind::Return)
         return ExecResult::returned(convertOrError(flow.value, returnType, flow.span), flow.span);
     if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
@@ -382,7 +518,7 @@ ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vect
     RuntimeFrameGuard frame(*m_ctx, true, functionFrameSymbol(fn), fn.span);
     for (size_t i = 0; i < args.size(); ++i) {
         const ParameterNode& p = *fn.params[i];
-        const AbelType target = typeFromAst(*p.type);
+        const AbelType target = typeFromAstInCurrentPackage(*p.type);
         AbelValue converted = convertOrError(args[i], target, p.span);
         m_ctx->defineValueVariable(p.name, converted, false, p.span);
     }
@@ -390,7 +526,7 @@ ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vect
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
-    const AbelType returnType = typeFromAst(*fn.returnType);
+    const AbelType returnType = typeFromAstInCurrentPackage(*fn.returnType);
     ExecResult flow = execBlock(*fn.body);
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -438,7 +574,7 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
     std::vector<PreparedArg> prepared(fixedCount);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
-        const AbelType target = typeFromAst(*p.type);
+        const AbelType target = typeFromAstInCurrentPackage(*p.type);
         if (target.isReference()) {
             AbelLocation* loc = evalLocation(*args[i]);
             if (!loc)
@@ -460,7 +596,7 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
     std::vector<AbelValue> packed;
     if (variadic) {
         const ParameterNode& p = *fn.params.back();
-        if (typeFromAst(*p.type).kind != TypeKind::Any) {
+        if (typeFromAstInCurrentPackage(*p.type).kind != TypeKind::Any) {
             error(QStringLiteral("E0560"), QStringLiteral("only any... variadic parameters are supported"), p.span);
         } else {
             packed.reserve(args.size() - fixedCount);
@@ -493,7 +629,7 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
-    const AbelType returnType = typeFromAst(*fn.returnType);
+    const AbelType returnType = typeFromAstInCurrentPackage(*fn.returnType);
     if (flow.kind == FlowKind::Return) {
         ExecResult result = ExecResult::returned(convertOrError(flow.value, returnType, flow.span), flow.span);
         return result;
@@ -545,7 +681,7 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
     std::vector<PreparedArg> prepared(fixedCount);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
-        const AbelType target = typeFromAst(*p.type);
+        const AbelType target = typeFromAstInCurrentPackage(*p.type);
         const ExprNode& arg = argAt(i);
         if (target.isReference()) {
             AbelLocation* loc = evalLocation(arg);
@@ -568,7 +704,7 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
     std::vector<AbelValue> packed;
     if (variadic) {
         const ParameterNode& p = *fn.params.back();
-        if (typeFromAst(*p.type).kind != TypeKind::Any) {
+        if (typeFromAstInCurrentPackage(*p.type).kind != TypeKind::Any) {
             error(QStringLiteral("E0560"), QStringLiteral("only any... variadic parameters are supported"), p.span);
         } else {
             packed.reserve(argc - fixedCount);
@@ -599,7 +735,7 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
 
-    const AbelType returnType = typeFromAst(*fn.returnType);
+    const AbelType returnType = typeFromAstInCurrentPackage(*fn.returnType);
     if (flow.kind == FlowKind::Return)
         return ExecResult::returned(convertOrError(flow.value, returnType, flow.span), flow.span);
     if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
@@ -872,7 +1008,7 @@ ExecResult Interpreter::execStmt(const StmtNode& stmt)
 
 ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
 {
-    const AbelType type = typeFromAst(*stmt.type);
+    const AbelType type = typeFromAstInCurrentPackage(*stmt.type);
     if (type.kind == TypeKind::Unknown) {
         error(QStringLiteral("E0511"),
               QStringLiteral("type '%1' is not supported by the current interpreter").arg(stmt.type->displayName()),
@@ -1284,7 +1420,7 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
 AbelValue Interpreter::evalCast(const CastExprNode& expr)
 {
     AbelValue source = evalExpr(*expr.expr);
-    const AbelType target = typeFromAst(*expr.targetType);
+    const AbelType target = typeFromAstInCurrentPackage(*expr.targetType);
 
     if (source.type().kind == TypeKind::Any) {
         const AbelValue inner = source.asAny()->value;
@@ -1429,8 +1565,8 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
     }
     const FunctionDeclNode* fn = resolveFunction(name->name);
     if (!fn) {
-        if (m_structs.contains(name->name))
-            return evalStructConstructor(name->name, m_structs.value(name->name), expr.args, expr.span);
+        if (const StructRuntimeInfo* info = resolveStruct(name->name))
+            return evalStructConstructor(name->name, *info, expr.args, expr.span);
         if (m_builtins.hasFunction(name->name)) {
             BuiltinFunctionCall call{*m_ctx, name->name, {}, {}, expr.span};
             attachStringifier(call);
@@ -1457,12 +1593,13 @@ AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
         error(QStringLiteral("E0603"), QStringLiteral("backend call receiver must be a backend name"), callee.span);
         return AbelValue::makeUnknown();
     }
-    const BackendRuntimeInfo backend = m_backends.value(backendName->name);
-    if (!backend.decl) {
+    const BackendRuntimeInfo* backend = resolveBackend(backendName->name);
+    if (!backend || !backend->decl) {
         error(QStringLiteral("E0604"), QStringLiteral("unknown backend '%1'").arg(backendName->name), callee.span);
         return AbelValue::makeUnknown();
     }
-    const FunctionDeclNode* fn = backend.functions.value(callee.member, nullptr);
+    PackageGuard package(m_currentPackage, backend->decl->packageName);
+    const FunctionDeclNode* fn = backend->functions.value(callee.member, nullptr);
     if (!fn) {
         error(QStringLiteral("E0605"), QStringLiteral("unknown backend function '%1::%2'").arg(backendName->name, callee.member), callee.span);
         return AbelValue::makeUnknown();
@@ -1480,7 +1617,7 @@ AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
     locations.reserve(args.size());
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& param = *fn->params[i];
-        const AbelType target = typeFromAst(*param.type);
+        const AbelType target = typeFromAstInCurrentPackage(*param.type);
         if (target.isReference()) {
             AbelLocation* loc = evalLocation(*args[i]);
             if (!loc) {
@@ -1524,11 +1661,11 @@ AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
 
 AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)
 {
-    AbelType returnType = typeFromAst(*expr.returnType);
+    AbelType returnType = typeFromAstInCurrentPackage(*expr.returnType);
     std::vector<AbelType> params;
     params.reserve(expr.paramTypes.size());
     for (const auto& param : expr.paramTypes)
-        params.push_back(typeFromAst(*param));
+        params.push_back(typeFromAstInCurrentPackage(*param));
 
     auto function = std::make_shared<AbelFunctionValue>();
     function->lambda = &expr;
@@ -1601,7 +1738,7 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
 
     if (!info.constructor) {
         if (args.empty())
-            return defaultConstructValue(makeStructType(name), span);
+            return defaultConstructValue(makeStructType(structTypeName(*info.decl)), span);
         if (args.size() != info.decl->fields.size()) {
             error(QStringLiteral("E0575"), QStringLiteral("constructor '%1' expects %2 argument(s)").arg(name).arg(info.decl->fields.size()), span);
             return AbelValue::makeUnknown();
@@ -1609,12 +1746,12 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
         for (size_t i = 0; i < args.size(); ++i) {
             const auto& field = info.decl->fields[i];
             order.push_back(field->name);
-            AbelValue value = convertOrError(evalExpr(*args[i]), typeFromAst(*field->type), args[i]->span);
+            AbelValue value = convertOrError(evalExpr(*args[i]), typeFromAstInCurrentPackage(*field->type), args[i]->span);
             fields.insert(field->name, value);
         }
         if (m_ctx->hasError())
             return AbelValue::makeUnknown();
-        return AbelValue::makeStruct(name, order, std::move(fields));
+        return AbelValue::makeStruct(structTypeName(*info.decl), order, std::move(fields));
     }
 
     if (args.empty() && !info.constructor->params.empty()) {
@@ -1630,17 +1767,17 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
     prepared.reserve(args.size());
     for (size_t i = 0; i < args.size(); ++i) {
         const ParameterNode& p = *info.constructor->params[i];
-        prepared.push_back(convertOrError(evalExpr(*args[i]), typeFromAst(*p.type), args[i]->span));
+        prepared.push_back(convertOrError(evalExpr(*args[i]), typeFromAstInCurrentPackage(*p.type), args[i]->span));
     }
     if (m_ctx->hasError())
         return AbelValue::makeUnknown();
 
     for (const auto& field : info.decl->fields) {
-        const AbelType type = typeFromAst(*field->type);
+        const AbelType type = typeFromAstInCurrentPackage(*field->type);
         order.push_back(field->name);
         fields.insert(field->name, defaultValueForType(type));
     }
-    AbelValue object = AbelValue::makeStruct(name, order, std::move(fields));
+    AbelValue object = AbelValue::makeStruct(structTypeName(*info.decl), order, std::move(fields));
     AbelLocation* self = m_ctx->createStorage(object);
 
     RuntimeFrameGuard frame(*m_ctx, true, constructorFrameSymbol(name), span);
@@ -1675,8 +1812,12 @@ AbelValue Interpreter::evalStructMethod(const FieldAccessExprNode& callee,
         error(QStringLiteral("E0578"), QStringLiteral("method receiver is not struct"), callee.span);
         return AbelValue::makeUnknown();
     }
-    const StructRuntimeInfo info = m_structs.value(receiver.type().spelling);
-    const FunctionDeclNode* method = info.methods.value(callee.field, nullptr);
+    const StructRuntimeInfo* info = structInfoForType(receiver.type());
+    if (!info) {
+        error(QStringLiteral("E0579"), QStringLiteral("unknown struct type '%1'").arg(receiver.type().displayName()), callee.span);
+        return AbelValue::makeUnknown();
+    }
+    const FunctionDeclNode* method = info->methods.value(callee.field, nullptr);
     if (!method) {
         error(QStringLiteral("E0579"), QStringLiteral("unknown method '%1'").arg(callee.field), callee.span);
         return AbelValue::makeUnknown();
@@ -1746,8 +1887,8 @@ AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceS
 AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceSpan& span, QSet<QString>& visiting)
 {
     if (type.kind == TypeKind::Struct) {
-        const StructRuntimeInfo info = m_structs.value(type.spelling);
-        if (!info.decl) {
+        const StructRuntimeInfo* info = structInfoForType(type);
+        if (!info || !info->decl) {
             error(QStringLiteral("E0589"), QStringLiteral("unknown struct '%1'").arg(type.displayName()), span);
             return AbelValue::makeUnknown();
         }
@@ -1755,7 +1896,7 @@ AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceS
             error(QStringLiteral("E0590"), QStringLiteral("recursive default construction of '%1' is not supported").arg(type.displayName()), span);
             return AbelValue::makeUnknown();
         }
-        if (info.constructor && !info.constructor->params.empty()) {
+        if (info->constructor && !info->constructor->params.empty()) {
             error(QStringLiteral("E0588"), QStringLiteral("constructor '%1' is not default-constructible").arg(type.displayName()), span);
             return AbelValue::makeUnknown();
         }
@@ -1763,12 +1904,12 @@ AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceS
         visiting.insert(type.spelling);
         QHash<QString, AbelValue> fields;
         std::vector<QString> order;
-        order.reserve(info.decl->fields.size());
-        for (const auto& field : info.decl->fields) {
-            const AbelType fieldType = typeFromAst(*field->type);
+        order.reserve(info->decl->fields.size());
+        for (const auto& field : info->decl->fields) {
+            const AbelType fieldType = typeFromAstInPackage(*field->type, info->decl->packageName);
             order.push_back(field->name);
             fields.insert(field->name,
-                          info.constructor
+                          info->constructor
                               ? defaultValueForType(fieldType)
                               : defaultConstructValue(fieldType, field->span, visiting));
             if (m_ctx->hasError()) {
@@ -1777,7 +1918,7 @@ AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceS
             }
         }
         AbelValue object = AbelValue::makeStruct(type.spelling, order, std::move(fields));
-        if (info.constructor) {
+        if (info->constructor) {
             AbelLocation* self = m_ctx->createStorage(object);
             RuntimeFrameGuard frame(*m_ctx, true, constructorFrameSymbol(type.spelling), span);
             m_ctx->defineVariable(QStringLiteral("this"), self, false, false, span);
@@ -1785,7 +1926,8 @@ AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceS
             for (const auto& fieldName : structValue->fieldOrder)
                 m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(structValue.get(), fieldName), false, false, span);
             if (!m_ctx->hasError()) {
-                ExecResult flow = execBlock(*info.constructor->body);
+                PackageGuard package(m_currentPackage, info->decl->packageName);
+                ExecResult flow = execBlock(*info->constructor->body);
                 if (flow.kind == FlowKind::Return)
                     error(QStringLiteral("E0577"), QStringLiteral("constructor cannot return a value"), span);
             }
@@ -1808,11 +1950,11 @@ std::optional<QString> Interpreter::stringifyValue(const AbelValue& value, const
         if (fn->fromDependency && !fn->exported && fn->packageName != m_currentPackage)
             continue;
 
-        const AbelType returnType = typeFromAst(*fn->returnType);
+        const AbelType returnType = typeFromAstInPackage(*fn->returnType, fn->packageName);
         if (returnType.kind != TypeKind::Str)
             continue;
 
-        const AbelType paramType = typeFromAst(*fn->params.front()->type);
+        const AbelType paramType = typeFromAstInPackage(*fn->params.front()->type, fn->packageName);
         if (!canAssignValue(paramType, value.type()))
             continue;
 

@@ -24,12 +24,33 @@ fn int main() {
 file(WRITE "${dep_dir}/src/lib/math.abel" [=[
 module dep.lib.math;
 
+struct Box {
+    int value;
+}
+
+export struct PublicBox {
+    int value;
+}
+
+backend HiddenSystem {
+    fn int secret();
+}
+
 fn int private_value() {
     return 40;
 }
 
+fn int private_box_value(Box b) {
+    return b.value;
+}
+
 export fn int dep_value() {
-    return private_value() + 1;
+    Box b = Box(1);
+    return private_value() + private_box_value(b);
+}
+
+export fn int public_box_value(PublicBox b) {
+    return b.value;
 }
 ]=])
 
@@ -48,12 +69,18 @@ file(WRITE "${app_dir}/src/main.abel" [=[
 module app.main;
 use dep.lib.math;
 
+struct Box {
+    int value;
+}
+
 fn int private_value() {
     return 1;
 }
 
 fn int main() {
-    return dep_value() + private_value();
+    Box b = Box(1);
+    PublicBox p = PublicBox(2);
+    return dep_value() + public_box_value(p) - b.value;
 }
 ]=])
 
@@ -111,4 +138,77 @@ endif()
 string(FIND "${bad_check_stderr}" "not exported" not_exported_pos)
 if(not_exported_pos EQUAL -1)
     message(FATAL_ERROR "abel check did not explain export failure:\n${bad_check_stdout}\n${bad_check_stderr}")
+endif()
+
+set(bad_struct_dir "${project_root}/bad-struct-app")
+file(MAKE_DIRECTORY "${bad_struct_dir}/src")
+file(WRITE "${bad_struct_dir}/abel.package.json" [=[
+{
+  "name": "bad-struct-app",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "dependencies": [
+    {"name": "dep", "kind": "path", "path": "../dep"}
+  ]
+}
+]=])
+
+file(WRITE "${bad_struct_dir}/src/main.abel" [=[
+module bad.struct_case;
+use dep.lib.math;
+
+fn int main() {
+    Box b = Box(1);
+    return b.value;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${bad_struct_dir}"
+    RESULT_VARIABLE bad_struct_check_result
+    OUTPUT_VARIABLE bad_struct_check_stdout
+    ERROR_VARIABLE bad_struct_check_stderr
+)
+if(bad_struct_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted dependency private struct:\n${bad_struct_check_stdout}\n${bad_struct_check_stderr}")
+endif()
+string(FIND "${bad_struct_check_stderr}" "struct 'Box' from dependency package 'dep' is not exported" struct_not_exported_pos)
+if(struct_not_exported_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain private struct export failure:\n${bad_struct_check_stdout}\n${bad_struct_check_stderr}")
+endif()
+
+set(bad_backend_dir "${project_root}/bad-backend-app")
+file(MAKE_DIRECTORY "${bad_backend_dir}/src")
+file(WRITE "${bad_backend_dir}/abel.package.json" [=[
+{
+  "name": "bad-backend-app",
+  "version": "0.1.0",
+  "entry": "src/main.abel",
+  "dependencies": [
+    {"name": "dep", "kind": "path", "path": "../dep"}
+  ]
+}
+]=])
+
+file(WRITE "${bad_backend_dir}/src/main.abel" [=[
+module bad.backend_case;
+use dep.lib.math;
+
+fn int main() {
+    return HiddenSystem::secret();
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${bad_backend_dir}"
+    RESULT_VARIABLE bad_backend_check_result
+    OUTPUT_VARIABLE bad_backend_check_stdout
+    ERROR_VARIABLE bad_backend_check_stderr
+)
+if(bad_backend_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted dependency private backend:\n${bad_backend_check_stdout}\n${bad_backend_check_stderr}")
+endif()
+string(FIND "${bad_backend_check_stderr}" "backend 'HiddenSystem' from dependency package 'dep' is not exported" backend_not_exported_pos)
+if(backend_not_exported_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain private backend export failure:\n${bad_backend_check_stdout}\n${bad_backend_check_stderr}")
 endif()
