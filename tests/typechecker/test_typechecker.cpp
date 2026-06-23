@@ -510,8 +510,10 @@ private slots:
                 test_assert(true, "ok");
                 test_eq(4, 4.0, "numeric ok");
                 test_ne("a", "b");
+                test_close(3.14159, 3.14, 0.01, "close ok");
                 true |> test_assert(" via pipe");
                 4 |> test_eq(4, " pipe eq");
+                3.14159 |> test_close(3.14, 0.01, " pipe close");
                 return 0;
             }
         )");
@@ -529,6 +531,12 @@ private slots:
         QVERIFY(!tooFew.diagnostics.isEmpty());
         auto badCompare = checkSource(QStringLiteral("fn int main() { test_eq(1, \"x\"); return 0; }"));
         QVERIFY(!badCompare.diagnostics.isEmpty());
+        auto badCloseArity = checkSource(QStringLiteral("fn int main() { test_close(1, 1); return 0; }"));
+        QVERIFY(!badCloseArity.diagnostics.isEmpty());
+        auto badCloseActual = checkSource(QStringLiteral("fn int main() { test_close(\"x\", 1, 0.1); return 0; }"));
+        QVERIFY(!badCloseActual.diagnostics.isEmpty());
+        auto badCloseEps = checkSource(QStringLiteral("fn int main() { test_close(1, 1, \"eps\"); return 0; }"));
+        QVERIFY(!badCloseEps.diagnostics.isEmpty());
     }
 
     void acceptsUserToStrForBuildString()

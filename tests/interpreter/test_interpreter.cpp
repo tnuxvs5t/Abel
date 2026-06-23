@@ -1524,6 +1524,7 @@ private slots:
                 test_assert(true, "ok");
                 test_eq(4, 4.0, "numeric");
                 test_ne("a", "b");
+                test_close(3.14159, 3.14, 0.01, "close");
                 return 7;
             }
         )");
@@ -1555,6 +1556,30 @@ private slots:
         QVERIFY(diagnostic.message.contains(QStringLiteral("actual")));
         QVERIFY(diagnostic.message.contains(QStringLiteral("label=9")));
         QVERIFY(diagnostic.primary.sourceLine.contains(QStringLiteral("test_eq(")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn check")));
+        QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
+        QCOMPARE(result.exitCode, 1);
+    }
+
+    void testCloseFailureReportsMessageStackAndSourceLine()
+    {
+        const QString src = QStringLiteral(R"(
+            fn void check() {
+                test_close(3.2, 3.0, 0.01, " label=", 5);
+            }
+
+            fn int main() {
+                check();
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        const auto& diagnostic = result.diagnostics.front();
+        QCOMPARE(diagnostic.code, QStringLiteral("E0599"));
+        QVERIFY(diagnostic.message.contains(QStringLiteral("test_close failed")));
+        QVERIFY(diagnostic.message.contains(QStringLiteral("label=5")));
+        QVERIFY(diagnostic.primary.sourceLine.contains(QStringLiteral("test_close(")));
         QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn check")));
         QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
         QCOMPARE(result.exitCode, 1);

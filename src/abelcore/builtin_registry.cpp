@@ -671,6 +671,46 @@ AbelValue builtinTestNe(BuiltinFunctionCall& call)
     return builtinTestEqNe(call, false);
 }
 
+AbelValue builtinTestClose(BuiltinFunctionCall& call)
+{
+    const AbelValue& actual = call.args[0];
+    const AbelValue& expected = call.args[1];
+    const AbelValue& eps = call.args[2];
+    if (!actual.type().isNumeric() || !expected.type().isNumeric() || !eps.type().isNumeric()) {
+        call.ctx.error(QStringLiteral("E0597"),
+                       QStringLiteral("test_close expects numeric actual, expected and eps"),
+                       call.callSpan);
+        return AbelValue::makeUnknown();
+    }
+    const double tolerance = eps.asDouble();
+    if (tolerance < 0) {
+        call.ctx.error(QStringLiteral("E0597"),
+                       QStringLiteral("test_close eps must be non-negative"),
+                       call.argSpans.size() < 3 ? call.callSpan : call.argSpans[2]);
+        return AbelValue::makeUnknown();
+    }
+    if (std::fabs(actual.asDouble() - expected.asDouble()) <= tolerance)
+        return AbelValue::makeVoid();
+
+    const SourceSpan actualSpan = call.argSpans.empty() ? call.callSpan : call.argSpans[0];
+    const SourceSpan expectedSpan = call.argSpans.size() < 2 ? call.callSpan : call.argSpans[1];
+    auto actualText = stringifyValue(call, actual, actualSpan);
+    if (!actualText.has_value())
+        return AbelValue::makeUnknown();
+    auto expectedText = stringifyValue(call, expected, expectedSpan);
+    if (!expectedText.has_value())
+        return AbelValue::makeUnknown();
+
+    QString message = QStringLiteral("test_close failed: expected %1 +/- %2, got %3")
+        .arg(*expectedText, QString::number(tolerance, 'g', 16), *actualText);
+    const QString suffix = joinMessageSuffix(call, 3);
+    if (call.ctx.hasError())
+        return AbelValue::makeUnknown();
+    message += suffix;
+    call.ctx.error(QStringLiteral("E0599"), message, call.callSpan);
+    return AbelValue::makeUnknown();
+}
+
 AbelValue vectorLen(BuiltinMethodCall& call)
 {
     return AbelValue::makeInt(static_cast<qint64>(call.receiver.asVector()->elements.size()), TypeKind::I32);
@@ -1243,6 +1283,7 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("test_assert"), 1, -1, true, builtinTestAssert, QStringLiteral("fail current test when condition is false")});
     registry.registerFunction({QStringLiteral("test_eq"), 2, -1, true, builtinTestEq, QStringLiteral("fail current test when values are not equal")});
     registry.registerFunction({QStringLiteral("test_ne"), 2, -1, true, builtinTestNe, QStringLiteral("fail current test when values are equal")});
+    registry.registerFunction({QStringLiteral("test_close"), 3, -1, true, builtinTestClose, QStringLiteral("fail current test when numeric values differ beyond eps")});
 
     return registry;
 }

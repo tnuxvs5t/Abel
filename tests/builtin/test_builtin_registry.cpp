@@ -407,6 +407,7 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("test_assert")));
         QVERIFY(registry.hasFunction(QStringLiteral("test_eq")));
         QVERIFY(registry.hasFunction(QStringLiteral("test_ne")));
+        QVERIFY(registry.hasFunction(QStringLiteral("test_close")));
         QVERIFY(registry.hasMethod(strType, QStringLiteral("len")));
         QVERIFY(registry.hasMethod(strType, QStringLiteral("empty")));
         QVERIFY(registry.hasMethod(strType, QStringLiteral("contains")));
@@ -735,6 +736,17 @@ private slots:
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(okEqValue.type().kind, abel::TypeKind::Void);
 
+        abel::BuiltinFunctionCall okClose{
+            ctx,
+            QStringLiteral("test_close"),
+            {abel::AbelValue::makeDouble(3.14159), abel::AbelValue::makeDouble(3.14), abel::AbelValue::makeDouble(0.01)},
+            {},
+            {},
+        };
+        auto okCloseValue = registry.callFunction(std::move(okClose));
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(okCloseValue.type().kind, abel::TypeKind::Void);
+
         abel::BuiltinFunctionCall failEq{
             ctx,
             QStringLiteral("test_eq"),
@@ -762,6 +774,21 @@ private slots:
         QCOMPARE(neCtx.diagnostics().back().code, QStringLiteral("E0599"));
         QVERIFY(neCtx.diagnostics().back().message.contains(QStringLiteral("test_ne failed")));
         QCOMPARE(failNeValue.type().kind, abel::TypeKind::Unknown);
+
+        abel::AbelRuntimeContext closeCtx;
+        abel::BuiltinFunctionCall failClose{
+            closeCtx,
+            QStringLiteral("test_close"),
+            {abel::AbelValue::makeDouble(3.2), abel::AbelValue::makeDouble(3.0), abel::AbelValue::makeDouble(0.01), abel::AbelValue::makeString(QStringLiteral(" near pi"))},
+            {},
+            {},
+        };
+        auto failCloseValue = registry.callFunction(std::move(failClose));
+        QVERIFY(!closeCtx.diagnostics().isEmpty());
+        QCOMPARE(closeCtx.diagnostics().back().code, QStringLiteral("E0599"));
+        QVERIFY(closeCtx.diagnostics().back().message.contains(QStringLiteral("test_close failed")));
+        QVERIFY(closeCtx.diagnostics().back().message.contains(QStringLiteral("near pi")));
+        QCOMPARE(failCloseValue.type().kind, abel::TypeKind::Unknown);
     }
 };
 

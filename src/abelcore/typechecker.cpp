@@ -1802,6 +1802,28 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
+        if (name == QStringLiteral("test_close")) {
+            if (args.size() < 2)
+                return errorExpr(span, QStringLiteral("test_close expects at least three arguments"));
+            ExprType expected = checkExpr(*args[0]);
+            ExprType eps = checkExpr(*args[1]);
+            if (!isUnknownType(lhs.type) && !lhs.type.isNumeric())
+                error(span, QStringLiteral("test_close actual must be numeric, got %1").arg(lhs.type.displayName()));
+            if (!isUnknownType(expected.type) && !expected.type.isNumeric())
+                error(args[0]->span, QStringLiteral("test_close expected must be numeric, got %1").arg(expected.type.displayName()));
+            if (!isUnknownType(eps.type) && !eps.type.isNumeric())
+                error(args[1]->span, QStringLiteral("test_close eps must be numeric, got %1").arg(eps.type.displayName()));
+            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
+                error(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
+            if (!isUnknownType(expected.type) && !isStringifiable(expected.type))
+                error(args[0]->span, QStringLiteral("cannot stringify %1").arg(expected.type.displayName()));
+            for (size_t i = 2; i < args.size(); ++i) {
+                ExprType arg = checkExpr(*args[i]);
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
+                    error(args[i]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
     }
 
     return errorExpr(nameSpan, QStringLiteral("unknown pipe target '%1'").arg(name));
@@ -2146,6 +2168,29 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             if (!isUnknownType(rhs.type) && !isStringifiable(rhs.type))
                 error(expr.args[1]->span, QStringLiteral("cannot stringify %1").arg(rhs.type.displayName()));
             for (size_t i = 2; i < expr.args.size(); ++i) {
+                ExprType arg = checkExpr(*expr.args[i]);
+                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
+                    error(expr.args[i]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            }
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (name->name == QStringLiteral("test_close")) {
+            if (argc < 3)
+                return errorExpr(expr.span, QStringLiteral("test_close expects at least three arguments"));
+            ExprType actual = checkExpr(*expr.args[0]);
+            ExprType expected = checkExpr(*expr.args[1]);
+            ExprType eps = checkExpr(*expr.args[2]);
+            if (!isUnknownType(actual.type) && !actual.type.isNumeric())
+                error(expr.args[0]->span, QStringLiteral("test_close actual must be numeric, got %1").arg(actual.type.displayName()));
+            if (!isUnknownType(expected.type) && !expected.type.isNumeric())
+                error(expr.args[1]->span, QStringLiteral("test_close expected must be numeric, got %1").arg(expected.type.displayName()));
+            if (!isUnknownType(eps.type) && !eps.type.isNumeric())
+                error(expr.args[2]->span, QStringLiteral("test_close eps must be numeric, got %1").arg(eps.type.displayName()));
+            if (!isUnknownType(actual.type) && !isStringifiable(actual.type))
+                error(expr.args[0]->span, QStringLiteral("cannot stringify %1").arg(actual.type.displayName()));
+            if (!isUnknownType(expected.type) && !isStringifiable(expected.type))
+                error(expr.args[1]->span, QStringLiteral("cannot stringify %1").arg(expected.type.displayName()));
+            for (size_t i = 3; i < expr.args.size(); ++i) {
                 ExprType arg = checkExpr(*expr.args[i]);
                 if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
                     error(expr.args[i]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
