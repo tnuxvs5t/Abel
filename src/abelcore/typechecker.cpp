@@ -84,6 +84,30 @@ bool sameDeclNamespace(const DeclNode& lhs, const DeclNode& rhs)
         && lhs.moduleName == rhs.moduleName;
 }
 
+QString staticAccessName(const ExprNode& expr)
+{
+    if (auto* name = dynamic_cast<const NameExprNode*>(&expr))
+        return name->name;
+    if (auto* field = dynamic_cast<const FieldAccessExprNode*>(&expr)) {
+        if (field->pointer)
+            return {};
+        const QString base = staticAccessName(*field->base);
+        if (!base.isEmpty())
+            return base + QStringLiteral(".") + field->field;
+    }
+    if (auto* access = dynamic_cast<const StaticAccessExprNode*>(&expr)) {
+        const QString base = staticAccessName(*access->base);
+        if (!base.isEmpty())
+            return base + QStringLiteral("::") + access->member;
+    }
+    return {};
+}
+
+QString staticAccessModuleName(const StaticAccessExprNode& access)
+{
+    return staticAccessName(*access.base).replace(QStringLiteral("::"), QStringLiteral("."));
+}
+
 bool exprIsLiteralTrue(const ExprNode& expr)
 {
     auto* literal = dynamic_cast<const LiteralExprNode*>(&expr);
@@ -307,6 +331,40 @@ const FunctionDeclNode* TypeChecker::resolveFunction(const QString& name, const 
     return nullptr;
 }
 
+const FunctionDeclNode* TypeChecker::resolveFunctionInModule(const QString& moduleName,
+                                                             const QString& name,
+                                                             const SourceSpan& span,
+                                                             bool diagnose)
+{
+    const auto candidates = m_functions.value(name);
+    if (candidates.isEmpty())
+        return nullptr;
+
+    QList<const FunctionDeclNode*> visible;
+    QList<const FunctionDeclNode*> hidden;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (fn->moduleName != moduleName)
+            continue;
+        if (isFunctionVisible(*fn))
+            visible.push_back(fn);
+        else
+            hidden.push_back(fn);
+    }
+    if (visible.size() == 1)
+        return visible.front();
+    if (visible.size() > 1) {
+        if (diagnose)
+            error(span, QStringLiteral("function '%1::%2' is ambiguous").arg(moduleName, name));
+        return nullptr;
+    }
+    if (hidden.size() == 1) {
+        if (diagnose)
+            requireFunctionVisible(*hidden.front(), span);
+        return nullptr;
+    }
+    return nullptr;
+}
+
 const TypeChecker::StructInfo* TypeChecker::resolveStruct(const QString& name, const SourceSpan& span, bool diagnose)
 {
     return resolveStructInPackage(name, m_currentPackage, span, diagnose);
@@ -372,6 +430,39 @@ const TypeChecker::StructInfo* TypeChecker::structInfoForType(const AbelType& ty
 const TypeChecker::BackendInfo* TypeChecker::resolveBackend(const QString& name, const SourceSpan& span, bool diagnose)
 {
     return resolveBackendInPackage(name, m_currentPackage, span, diagnose);
+}
+
+const TypeChecker::BackendInfo* TypeChecker::resolveBackendInModule(const QString& moduleName,
+                                                                    const QString& name,
+                                                                    const SourceSpan& span,
+                                                                    bool diagnose)
+{
+    auto found = m_backends.constFind(name);
+    if (found == m_backends.constEnd() || found->isEmpty())
+        return nullptr;
+    QList<const BackendInfo*> visible;
+    QList<const BackendInfo*> hidden;
+    for (const auto& info : found.value()) {
+        if (!info.decl || info.decl->moduleName != moduleName)
+            continue;
+        if (isBackendVisible(*info.decl))
+            visible.push_back(&info);
+        else
+            hidden.push_back(&info);
+    }
+    if (visible.size() == 1)
+        return visible.front();
+    if (visible.size() > 1) {
+        if (diagnose)
+            error(span, QStringLiteral("backend '%1::%2' is ambiguous").arg(moduleName, name));
+        return nullptr;
+    }
+    if (hidden.size() == 1) {
+        if (diagnose)
+            requireBackendVisible(*hidden.front()->decl, span);
+        return nullptr;
+    }
+    return nullptr;
 }
 
 const TypeChecker::BackendInfo* TypeChecker::resolveBackendInPackage(const QString& name,
@@ -1151,7 +1242,7 @@ ExprType TypeChecker::checkAssignment(const AssignExprNode& expr)
 ExprType TypeChecker::checkCall(const CallExprNode& expr)
 {
     if (auto* access = dynamic_cast<StaticAccessExprNode*>(expr.callee.get()))
-        return checkBackendCall(*access, expr.args, expr.span);
+        return checkStaticCall(*access, expr.args, expr.span);
 
     if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get())) {
         ExprType receiver = checkExpr(*field->base);
@@ -1323,6 +1414,41 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     return errorExpr(expr.span, QStringLiteral("unknown function '%1'").arg(name->name));
 }
 
+ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee,
+                                      const std::vector<std::unique_ptr<ExprNode>>& args,
+                                      const SourceSpan& span)
+{
+    if (auto* nested = dynamic_cast<StaticAccessExprNode*>(callee.base.get())) {
+        const QString moduleName = staticAccessModuleName(*nested);
+        const QString backendName = nested->member;
+        if (!moduleName.isEmpty()) {
+            const auto backends = m_backends.value(backendName);
+            for (const auto& info : backends) {
+                if (info.decl && info.decl->moduleName == moduleName)
+                    return checkBackendCallByName(moduleName + QStringLiteral("::") + backendName,
+                                                  nested->span,
+                                                  callee.member,
+                                                  args,
+                                                  span);
+            }
+        }
+    }
+
+    const QString baseName = staticAccessName(*callee.base);
+    if (baseName.isEmpty())
+        return errorExpr(callee.span, QStringLiteral("static/backend call receiver must be a name"));
+
+    QString moduleName = baseName;
+    moduleName.replace(QStringLiteral("::"), QStringLiteral("."));
+    const auto functions = m_functions.value(callee.member);
+    for (const FunctionDeclNode* fn : functions) {
+        if (fn->moduleName == moduleName)
+            return checkQualifiedFunctionCall(moduleName, callee.base->span, callee.member, args, span);
+    }
+
+    return checkBackendCallByName(baseName, callee.base->span, callee.member, args, span);
+}
+
 ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
                                        const std::vector<std::unique_ptr<ExprNode>>& args,
                                        const SourceSpan& span)
@@ -1330,28 +1456,43 @@ ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
     auto* backendName = dynamic_cast<NameExprNode*>(callee.base.get());
     if (!backendName)
         return errorExpr(callee.span, QStringLiteral("backend call receiver must be a backend name"));
-    const BackendInfo* backend = resolveBackend(backendName->name, backendName->span);
+    return checkBackendCallByName(backendName->name, backendName->span, callee.member, args, span);
+}
+
+ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
+                                             const SourceSpan& backendSpan,
+                                             const QString& member,
+                                             const std::vector<std::unique_ptr<ExprNode>>& args,
+                                             const SourceSpan& span)
+{
+    const int qualifiedSep = backendName.lastIndexOf(QStringLiteral("::"));
+    const BackendInfo* backend = qualifiedSep >= 0
+        ? resolveBackendInModule(backendName.left(qualifiedSep).replace(QStringLiteral("::"), QStringLiteral(".")),
+                                 backendName.mid(qualifiedSep + 2),
+                                 backendSpan)
+        : resolveBackend(backendName, backendSpan);
     if (!backend) {
-        if (m_backends.contains(backendName->name)) {
+        const QString simpleBackendName = qualifiedSep >= 0 ? backendName.mid(qualifiedSep + 2) : backendName;
+        if (m_backends.contains(simpleBackendName)) {
             for (const auto& argExpr : args)
                 checkExpr(*argExpr);
             return unknownExprType();
         }
-        return errorExpr(callee.span, QStringLiteral("unknown backend '%1'").arg(backendName->name));
+        return errorExpr(backendSpan, QStringLiteral("unknown backend '%1'").arg(backendName));
     }
     if (!isBackendVisible(*backend->decl)) {
         for (const auto& argExpr : args)
             checkExpr(*argExpr);
         return unknownExprType();
     }
-    const FunctionDeclNode* fn = backend->functions.value(callee.member, nullptr);
+    const FunctionDeclNode* fn = backend->functions.value(member, nullptr);
     if (!fn)
-        return errorExpr(callee.span, QStringLiteral("unknown backend function '%1::%2'").arg(backendName->name, callee.member));
+        return errorExpr(backendSpan, QStringLiteral("unknown backend function '%1::%2'").arg(backendName, member));
 
     const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
     const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
     if ((!variadic && args.size() != fn->params.size()) || (variadic && args.size() < fixedCount))
-        return errorExpr(span, QStringLiteral("backend function '%1::%2' called with wrong argument count").arg(backendName->name, callee.member));
+        return errorExpr(span, QStringLiteral("backend function '%1::%2' called with wrong argument count").arg(backendName, member));
 
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& param = *fn->params[i];
@@ -1373,6 +1514,45 @@ ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
     for (size_t i = fixedCount; i < args.size(); ++i)
         checkExpr(*args[i]);
 
+    const AbelType returnType = typeFromAstForDecl(*fn->returnType, *fn);
+    return {returnType, returnType.isReference() ? ValueCategory::LValue : ValueCategory::PRValue, false};
+}
+
+ExprType TypeChecker::checkQualifiedFunctionCall(const QString& moduleName,
+                                                 const SourceSpan& moduleSpan,
+                                                 const QString& name,
+                                                 const std::vector<std::unique_ptr<ExprNode>>& args,
+                                                 const SourceSpan& span)
+{
+    const FunctionDeclNode* fn = resolveFunctionInModule(moduleName, name, moduleSpan);
+    if (!fn) {
+        for (const auto& argExpr : args)
+            checkExpr(*argExpr);
+        return unknownExprType();
+    }
+    const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
+    const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
+    if ((!variadic && args.size() != fn->params.size()) || (variadic && args.size() < fixedCount))
+        return errorExpr(span, QStringLiteral("function '%1::%2' called with wrong argument count").arg(moduleName, name));
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& param = *fn->params[i];
+        const AbelType paramType = typeFromAstForDecl(*param.type, *fn);
+        ExprType arg = checkExpr(*args[i]);
+        if (isUnknownType(arg.type))
+            continue;
+        if (paramType.isReference()) {
+            if (arg.category != ValueCategory::LValue)
+                error(args[i]->span, QStringLiteral("reference parameter '%1' requires lvalue").arg(param.name));
+            else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
+                error(args[i]->span, QStringLiteral("cannot bind reference parameter '%1'").arg(param.name));
+        } else if (!isAssignable(paramType, arg.type)) {
+            error(args[i]->span,
+                  QStringLiteral("cannot pass %1 to parameter '%2' of type %3")
+                      .arg(arg.type.displayName(), param.name, paramType.displayName()));
+        }
+    }
+    for (size_t i = fixedCount; i < args.size(); ++i)
+        checkExpr(*args[i]);
     const AbelType returnType = typeFromAstForDecl(*fn->returnType, *fn);
     return {returnType, returnType.isReference() ? ValueCategory::LValue : ValueCategory::PRValue, false};
 }

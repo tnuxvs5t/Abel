@@ -51,10 +51,12 @@ private:
     bool collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
     const FunctionDeclNode* resolveFunction(const QString& name) const;
+    const FunctionDeclNode* resolveFunctionInModule(const QString& moduleName, const QString& name) const;
     const StructRuntimeInfo* resolveStruct(const QString& name) const;
     const StructRuntimeInfo* resolveStructInPackage(const QString& name, const QString& packageName) const;
     const StructRuntimeInfo* structInfoForType(const AbelType& type) const;
     const BackendRuntimeInfo* resolveBackend(const QString& name) const;
+    const BackendRuntimeInfo* resolveBackendInModule(const QString& moduleName, const QString& name) const;
     const BackendRuntimeInfo* resolveBackendInPackage(const QString& name, const QString& packageName) const;
     AbelType typeFromAstInCurrentPackage(const TypeNode& node) const;
     AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName) const;
@@ -83,7 +85,17 @@ private:
     AbelValue evalCast(const CastExprNode& expr);
     AbelValue evalPipe(const BinaryExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);
+    AbelValue evalStaticCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue evalBackendCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    AbelValue evalBackendCallByName(const QString& backendName,
+                                    const SourceSpan& backendSpan,
+                                    const QString& member,
+                                    const std::vector<std::unique_ptr<ExprNode>>& args,
+                                    const SourceSpan& span);
+    AbelValue evalQualifiedFunctionCall(const QString& moduleName,
+                                        const QString& name,
+                                        const std::vector<std::unique_ptr<ExprNode>>& args,
+                                        const SourceSpan& span);
     AbelValue evalLambda(const LambdaExprNode& expr);
     AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     AbelValue evalStructConstructor(const QString& name, const StructRuntimeInfo& info, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);

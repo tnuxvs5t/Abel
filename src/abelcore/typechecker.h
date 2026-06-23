@@ -71,6 +71,10 @@ private:
     void collectBackends(const ProgramNode& program);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
     const FunctionDeclNode* resolveFunction(const QString& name, const SourceSpan& span, bool diagnose = true);
+    const FunctionDeclNode* resolveFunctionInModule(const QString& moduleName,
+                                                    const QString& name,
+                                                    const SourceSpan& span,
+                                                    bool diagnose = true);
     const StructInfo* resolveStruct(const QString& name, const SourceSpan& span, bool diagnose = true);
     const StructInfo* resolveStructInPackage(const QString& name,
                                              const QString& packageName,
@@ -78,6 +82,10 @@ private:
                                              bool diagnose = true);
     const StructInfo* structInfoForType(const AbelType& type) const;
     const BackendInfo* resolveBackend(const QString& name, const SourceSpan& span, bool diagnose = true);
+    const BackendInfo* resolveBackendInModule(const QString& moduleName,
+                                              const QString& name,
+                                              const SourceSpan& span,
+                                              bool diagnose = true);
     const BackendInfo* resolveBackendInPackage(const QString& name,
                                                const QString& packageName,
                                                const SourceSpan& span,
@@ -118,7 +126,18 @@ private:
                                          const SourceSpan& span);
     ExprType checkAssignment(const AssignExprNode& expr);
     ExprType checkCall(const CallExprNode& expr);
+    ExprType checkStaticCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExprType checkBackendCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    ExprType checkBackendCallByName(const QString& backendName,
+                                    const SourceSpan& backendSpan,
+                                    const QString& member,
+                                    const std::vector<std::unique_ptr<ExprNode>>& args,
+                                    const SourceSpan& span);
+    ExprType checkQualifiedFunctionCall(const QString& moduleName,
+                                        const SourceSpan& moduleSpan,
+                                        const QString& name,
+                                        const std::vector<std::unique_ptr<ExprNode>>& args,
+                                        const SourceSpan& span);
     ExprType checkFunctionValueCall(const AbelType& functionType, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExprType checkLambda(const LambdaExprNode& expr);
     ExprType checkFieldAccess(const FieldAccessExprNode& expr);

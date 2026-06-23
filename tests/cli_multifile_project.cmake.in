@@ -88,3 +88,155 @@ string(FIND "${no_use_check_stderr}" "not visible from current module" no_use_no
 if(no_use_not_visible_pos EQUAL -1)
     message(FATAL_ERROR "abel check did not explain missing use:\n${no_use_check_stdout}\n${no_use_check_stderr}")
 endif()
+
+set(qualified_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-qualified")
+file(REMOVE_RECURSE "${qualified_project_dir}")
+file(MAKE_DIRECTORY "${qualified_project_dir}/src/lib")
+
+file(WRITE "${qualified_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-qualified",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${qualified_project_dir}/src/lib/a.abel" [=[
+module cli.lib.a;
+
+fn int value() {
+    return 10;
+}
+]=])
+
+file(WRITE "${qualified_project_dir}/src/lib/b.abel" [=[
+module cli.lib.b;
+
+fn int value() {
+    return 30;
+}
+]=])
+
+file(WRITE "${qualified_project_dir}/src/main.abel" [=[
+module cli.main;
+use cli.lib.a;
+use cli.lib.b;
+
+fn int main() {
+    return cli.lib.a::value() + cli.lib.b::value() + 2;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${qualified_project_dir}"
+    RESULT_VARIABLE qualified_check_result
+    OUTPUT_VARIABLE qualified_check_stdout
+    ERROR_VARIABLE qualified_check_stderr
+)
+if(NOT qualified_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check rejected qualified module function calls:\n${qualified_check_stdout}\n${qualified_check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${qualified_project_dir}"
+    RESULT_VARIABLE qualified_run_result
+    OUTPUT_VARIABLE qualified_run_stdout
+    ERROR_VARIABLE qualified_run_stderr
+)
+if(NOT qualified_run_result EQUAL 42)
+    message(FATAL_ERROR "abel run expected qualified project exit code 42, got ${qualified_run_result}:\n${qualified_run_stdout}\n${qualified_run_stderr}")
+endif()
+
+set(qualified_no_use_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-qualified-no-use")
+file(REMOVE_RECURSE "${qualified_no_use_project_dir}")
+file(MAKE_DIRECTORY "${qualified_no_use_project_dir}/src/lib")
+
+file(WRITE "${qualified_no_use_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-qualified-no-use",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${qualified_no_use_project_dir}/src/lib/a.abel" [=[
+module cli.lib.a;
+
+fn int value() {
+    return 40;
+}
+]=])
+
+file(WRITE "${qualified_no_use_project_dir}/src/main.abel" [=[
+module cli.main;
+
+fn int main() {
+    return cli.lib.a::value() + 2;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${qualified_no_use_project_dir}"
+    RESULT_VARIABLE qualified_no_use_check_result
+    OUTPUT_VARIABLE qualified_no_use_check_stdout
+    ERROR_VARIABLE qualified_no_use_check_stderr
+)
+if(qualified_no_use_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted qualified same-package call without use:\n${qualified_no_use_check_stdout}\n${qualified_no_use_check_stderr}")
+endif()
+string(FIND "${qualified_no_use_check_stderr}" "not visible from current module" qualified_no_use_not_visible_pos)
+if(qualified_no_use_not_visible_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain missing use for qualified call:\n${qualified_no_use_check_stdout}\n${qualified_no_use_check_stderr}")
+endif()
+
+set(ambiguous_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-ambiguous")
+file(REMOVE_RECURSE "${ambiguous_project_dir}")
+file(MAKE_DIRECTORY "${ambiguous_project_dir}/src/lib")
+
+file(WRITE "${ambiguous_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-ambiguous",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${ambiguous_project_dir}/src/lib/a.abel" [=[
+module cli.lib.a;
+
+fn int value() {
+    return 10;
+}
+]=])
+
+file(WRITE "${ambiguous_project_dir}/src/lib/b.abel" [=[
+module cli.lib.b;
+
+fn int value() {
+    return 30;
+}
+]=])
+
+file(WRITE "${ambiguous_project_dir}/src/main.abel" [=[
+module cli.main;
+use cli.lib.a;
+use cli.lib.b;
+
+fn int main() {
+    return value();
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${ambiguous_project_dir}"
+    RESULT_VARIABLE ambiguous_check_result
+    OUTPUT_VARIABLE ambiguous_check_stdout
+    ERROR_VARIABLE ambiguous_check_stderr
+)
+if(ambiguous_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check unexpectedly accepted ambiguous unqualified imported call:\n${ambiguous_check_stdout}\n${ambiguous_check_stderr}")
+endif()
+string(FIND "${ambiguous_check_stderr}" "ambiguous across imported modules" ambiguous_pos)
+if(ambiguous_pos EQUAL -1)
+    message(FATAL_ERROR "abel check did not explain ambiguous imported call:\n${ambiguous_check_stdout}\n${ambiguous_check_stderr}")
+endif()

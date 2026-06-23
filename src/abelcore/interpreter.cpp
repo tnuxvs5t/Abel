@@ -51,6 +51,30 @@ bool sameDeclNamespace(const DeclNode& lhs, const DeclNode& rhs)
         && lhs.moduleName == rhs.moduleName;
 }
 
+QString staticAccessName(const ExprNode& expr)
+{
+    if (auto* name = dynamic_cast<const NameExprNode*>(&expr))
+        return name->name;
+    if (auto* field = dynamic_cast<const FieldAccessExprNode*>(&expr)) {
+        if (field->pointer)
+            return {};
+        const QString base = staticAccessName(*field->base);
+        if (!base.isEmpty())
+            return base + QStringLiteral(".") + field->field;
+    }
+    if (auto* access = dynamic_cast<const StaticAccessExprNode*>(&expr)) {
+        const QString base = staticAccessName(*access->base);
+        if (!base.isEmpty())
+            return base + QStringLiteral("::") + access->member;
+    }
+    return {};
+}
+
+QString staticAccessModuleName(const StaticAccessExprNode& access)
+{
+    return staticAccessName(*access.base).replace(QStringLiteral("::"), QStringLiteral("."));
+}
+
 class DeclContextGuard {
 public:
     DeclContextGuard(QString& currentPackage,
@@ -286,6 +310,19 @@ const FunctionDeclNode* Interpreter::resolveFunction(const QString& name) const
     return nullptr;
 }
 
+const FunctionDeclNode* Interpreter::resolveFunctionInModule(const QString& moduleName, const QString& name) const
+{
+    const auto candidates = m_functions.value(name);
+    if (candidates.isEmpty())
+        return nullptr;
+    QList<const FunctionDeclNode*> visible;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (fn->moduleName == moduleName && isDeclVisible(*fn, fn->exported))
+            visible.push_back(fn);
+    }
+    return visible.size() == 1 ? visible.front() : nullptr;
+}
+
 const Interpreter::StructRuntimeInfo* Interpreter::resolveStruct(const QString& name) const
 {
     return resolveStructInPackage(name, m_currentPackage);
@@ -325,6 +362,19 @@ const Interpreter::StructRuntimeInfo* Interpreter::structInfoForType(const AbelT
 const Interpreter::BackendRuntimeInfo* Interpreter::resolveBackend(const QString& name) const
 {
     return resolveBackendInPackage(name, m_currentPackage);
+}
+
+const Interpreter::BackendRuntimeInfo* Interpreter::resolveBackendInModule(const QString& moduleName, const QString& name) const
+{
+    auto found = m_backends.constFind(name);
+    if (found == m_backends.constEnd() || found->isEmpty())
+        return nullptr;
+    QList<const BackendRuntimeInfo*> visible;
+    for (const auto& info : found.value()) {
+        if (info.decl && info.decl->moduleName == moduleName && isDeclVisible(*info.decl, info.decl->exported))
+            visible.push_back(&info);
+    }
+    return visible.size() == 1 ? visible.front() : nullptr;
 }
 
 const Interpreter::BackendRuntimeInfo* Interpreter::resolveBackendInPackage(const QString& name, const QString& packageName) const
@@ -1597,7 +1647,7 @@ AbelValue Interpreter::evalUnary(const UnaryExprNode& expr)
 AbelValue Interpreter::evalCall(const CallExprNode& expr)
 {
     if (auto* access = dynamic_cast<StaticAccessExprNode*>(expr.callee.get()))
-        return evalBackendCall(*access, expr.args, expr.span);
+        return evalStaticCall(*access, expr.args, expr.span);
 
     if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get())) {
         AbelValue receiver = evalExpr(*field->base);
@@ -1642,6 +1692,43 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
     return callFunctionExpr(*fn, expr.args, expr.span).value;
 }
 
+AbelValue Interpreter::evalStaticCall(const StaticAccessExprNode& callee,
+                                      const std::vector<std::unique_ptr<ExprNode>>& args,
+                                      const SourceSpan& span)
+{
+    if (auto* nested = dynamic_cast<StaticAccessExprNode*>(callee.base.get())) {
+        const QString moduleName = staticAccessModuleName(*nested);
+        const QString backendName = nested->member;
+        if (!moduleName.isEmpty()) {
+            const auto backends = m_backends.value(backendName);
+            for (const auto& info : backends) {
+                if (info.decl && info.decl->moduleName == moduleName)
+                    return evalBackendCallByName(moduleName + QStringLiteral("::") + backendName,
+                                                 nested->span,
+                                                 callee.member,
+                                                 args,
+                                                 span);
+            }
+        }
+    }
+
+    const QString baseName = staticAccessName(*callee.base);
+    if (baseName.isEmpty()) {
+        error(QStringLiteral("E0603"), QStringLiteral("static/backend call receiver must be a name"), callee.span);
+        return AbelValue::makeUnknown();
+    }
+
+    QString moduleName = baseName;
+    moduleName.replace(QStringLiteral("::"), QStringLiteral("."));
+    const auto functions = m_functions.value(callee.member);
+    for (const FunctionDeclNode* fn : functions) {
+        if (fn->moduleName == moduleName)
+            return evalQualifiedFunctionCall(moduleName, callee.member, args, span);
+    }
+
+    return evalBackendCallByName(baseName, callee.base->span, callee.member, args, span);
+}
+
 AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
                                        const std::vector<std::unique_ptr<ExprNode>>& args,
                                        const SourceSpan& span)
@@ -1651,21 +1738,40 @@ AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
         error(QStringLiteral("E0603"), QStringLiteral("backend call receiver must be a backend name"), callee.span);
         return AbelValue::makeUnknown();
     }
-    const BackendRuntimeInfo* backend = resolveBackend(backendName->name);
+    return evalBackendCallByName(backendName->name, backendName->span, callee.member, args, span);
+}
+
+AbelValue Interpreter::evalBackendCallByName(const QString& backendName,
+                                             const SourceSpan& backendSpan,
+                                             const QString& member,
+                                             const std::vector<std::unique_ptr<ExprNode>>& args,
+                                             const SourceSpan& span)
+{
+    const int qualifiedSep = backendName.lastIndexOf(QStringLiteral("::"));
+    const QString simpleBackendName = qualifiedSep >= 0 ? backendName.mid(qualifiedSep + 2) : backendName;
+    QString moduleName;
+    const BackendRuntimeInfo* backend = nullptr;
+    if (qualifiedSep >= 0) {
+        moduleName = backendName.left(qualifiedSep);
+        moduleName.replace(QStringLiteral("::"), QStringLiteral("."));
+        backend = resolveBackendInModule(moduleName, simpleBackendName);
+    } else {
+        backend = resolveBackend(simpleBackendName);
+    }
     if (!backend || !backend->decl) {
-        error(QStringLiteral("E0604"), QStringLiteral("unknown backend '%1'").arg(backendName->name), callee.span);
+        error(QStringLiteral("E0604"), QStringLiteral("unknown backend '%1'").arg(backendName), backendSpan);
         return AbelValue::makeUnknown();
     }
     DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, *backend->decl);
-    const FunctionDeclNode* fn = backend->functions.value(callee.member, nullptr);
+    const FunctionDeclNode* fn = backend->functions.value(member, nullptr);
     if (!fn) {
-        error(QStringLiteral("E0605"), QStringLiteral("unknown backend function '%1::%2'").arg(backendName->name, callee.member), callee.span);
+        error(QStringLiteral("E0605"), QStringLiteral("unknown backend function '%1::%2'").arg(backendName, member), backendSpan);
         return AbelValue::makeUnknown();
     }
     const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
     const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
     if ((!variadic && args.size() != fn->params.size()) || (variadic && args.size() < fixedCount)) {
-        error(QStringLiteral("E0606"), QStringLiteral("backend function '%1::%2' called with wrong argument count").arg(backendName->name, callee.member), span);
+        error(QStringLiteral("E0606"), QStringLiteral("backend function '%1::%2' called with wrong argument count").arg(backendName, member), span);
         return AbelValue::makeUnknown();
     }
 
@@ -1710,11 +1816,24 @@ AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
         return AbelValue::makeUnknown();
 
     QList<Diagnostic> diagnostics;
-    RuntimeFrameGuard frame(*m_ctx, true, backendFrameSymbol(backendName->name, callee.member), span);
-    AbelValue result = m_activeBackendRegistry->call({backendName->name, callee.member, std::move(values), span, std::move(locations)}, diagnostics, m_ctx);
+    RuntimeFrameGuard frame(*m_ctx, true, backendFrameSymbol(backendName, member), span);
+    AbelValue result = m_activeBackendRegistry->call({simpleBackendName, member, std::move(values), span, std::move(locations)}, diagnostics, m_ctx);
     for (const auto& diagnostic : diagnostics)
         m_ctx->error(diagnostic.code, diagnostic.message, diagnostic.primary);
     return result;
+}
+
+AbelValue Interpreter::evalQualifiedFunctionCall(const QString& moduleName,
+                                                 const QString& name,
+                                                 const std::vector<std::unique_ptr<ExprNode>>& args,
+                                                 const SourceSpan& span)
+{
+    const FunctionDeclNode* fn = resolveFunctionInModule(moduleName, name);
+    if (!fn) {
+        error(QStringLiteral("E0525"), QStringLiteral("unknown function '%1::%2'").arg(moduleName, name), span);
+        return AbelValue::makeUnknown();
+    }
+    return callFunctionExpr(*fn, args, span).value;
 }
 
 AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)
