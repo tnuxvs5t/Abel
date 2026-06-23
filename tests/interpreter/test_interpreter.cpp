@@ -202,6 +202,55 @@ private slots:
         QCOMPARE(result.exitCode, 5);
     }
 
+    void constReferenceReadsAndBlocksMutation()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int read(const int& x) {
+                return x;
+            }
+
+            fn int main() {
+                int a = 4;
+                const int b = 5;
+                func int(const int&) f = lambda [] int(const int& x) {
+                    return x;
+                };
+                return read(a) + read(b) + f(a);
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 13);
+
+        auto mutatedParam = runSource(QStringLiteral(R"(
+            fn void bad(const int& x) {
+                x = 1;
+            }
+
+            fn int main() {
+                int a = 0;
+                bad(a);
+                return 0;
+            }
+        )"));
+        QVERIFY(!mutatedParam.diagnostics.isEmpty());
+
+        auto mutableRefToConst = runSource(QStringLiteral(R"(
+            fn void inc(int& x) {
+                x = x + 1;
+            }
+
+            fn int main() {
+                const int a = 1;
+                inc(a);
+                return 0;
+            }
+        )"));
+        QVERIFY(!mutableRefToConst.diagnostics.isEmpty());
+    }
+
     void comparesNullptr()
     {
         const QString src = QStringLiteral(R"(

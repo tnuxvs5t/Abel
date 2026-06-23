@@ -275,6 +275,8 @@ private:
         } else if constexpr (IsStdVector<Bare>::value) {
             using Element = typename IsStdVector<Bare>::Element;
             AbelType vectorType = makeVectorType(nativeScalarType<Element>());
+            if constexpr (std::is_const_v<std::remove_reference_t<T>>)
+                vectorType = makeConstType(vectorType);
             if constexpr (std::is_lvalue_reference_v<T>)
                 return makeReferenceType(vectorType);
             return vectorType;

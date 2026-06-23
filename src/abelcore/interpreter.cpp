@@ -451,6 +451,8 @@ AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& 
 {
     if (node.name == QStringLiteral("vector") && node.elementType) {
         AbelType base = makeVectorType(typeFromAstInPackage(*node.elementType, packageName));
+        if (node.isConst)
+            base = makeConstType(base);
         for (int i = 0; i < node.pointerDepth; ++i)
             base = makePointerType(base);
         if (node.isReference)
@@ -463,6 +465,8 @@ AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& 
         for (const auto& param : node.functionParamTypes)
             params.push_back(typeFromAstInPackage(*param, packageName));
         AbelType base = makeFunctionType(typeFromAstInPackage(*node.elementType, packageName), std::move(params));
+        if (node.isConst)
+            base = makeConstType(base);
         for (int i = 0; i < node.pointerDepth; ++i)
             base = makePointerType(base);
         if (node.isReference)
@@ -479,6 +483,8 @@ AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& 
             base = makeStructType(structTypeName(*info->decl));
         }
     }
+    if (node.isConst)
+        base = makeConstType(base);
     for (int i = 0; i < node.pointerDepth; ++i)
         base = makePointerType(base);
     if (node.isReference)
@@ -579,17 +585,27 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
         AbelValue value;
         AbelLocation* location = nullptr;
         bool byReference = false;
+        bool isConst = false;
     };
     std::vector<PreparedArg> prepared(fixedCount);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         const AbelType target = typeFromAstInCurrentPackage(*p.type);
+        prepared[i].isConst = isReadOnlyBinding(target, p.type->isConst);
         if (target.isReference()) {
             AbelLocation* loc = evalLocation(*args[i]);
             if (!loc)
                 continue;
+            const auto* argName = dynamic_cast<const NameExprNode*>(args[i].get());
+            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
+            if (!prepared[i].isConst && argSlot && argSlot->isConst) {
+                error(QStringLiteral("E0566"),
+                      QStringLiteral("non-const method parameter '%1' cannot bind to const lvalue").arg(p.name),
+                      args[i]->span);
+                continue;
+            }
             AbelValue current = loc->read();
-            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+            if (!canBindReferenceValue(target, current.type())) {
                 error(QStringLiteral("E0566"),
                       QStringLiteral("cannot bind method parameter '%1' of type %2 to %3 lvalue")
                           .arg(p.name, target.displayName(), current.type().displayName()),
@@ -620,9 +636,9 @@ ExecResult Interpreter::callStructFunction(const FunctionDeclNode& fn,
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         if (prepared[i].byReference)
-            m_ctx->defineVariable(p.name, prepared[i].location, false, true, p.span);
+            m_ctx->defineVariable(p.name, prepared[i].location, prepared[i].isConst, true, p.span);
         else
-            m_ctx->defineValueVariable(p.name, prepared[i].value, false, p.span);
+            m_ctx->defineValueVariable(p.name, prepared[i].value, prepared[i].isConst, p.span);
     }
     if (variadic) {
         const ParameterNode& p = *fn.params.back();
@@ -665,12 +681,43 @@ ExecResult Interpreter::callFunction(const FunctionDeclNode& fn, const std::vect
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
-    RuntimeFrameGuard frame(*m_ctx, true, functionFrameSymbol(fn), fn.span);
+    struct PreparedArg {
+        AbelValue value;
+        AbelLocation* location = nullptr;
+        bool byReference = false;
+        bool isConst = false;
+    };
+    std::vector<PreparedArg> prepared(args.size());
     for (size_t i = 0; i < args.size(); ++i) {
         const ParameterNode& p = *fn.params[i];
         const AbelType target = typeFromAstInCurrentPackage(*p.type);
-        AbelValue converted = convertOrError(args[i], target, p.span);
-        m_ctx->defineValueVariable(p.name, converted, false, p.span);
+        prepared[i].isConst = isReadOnlyBinding(target, p.type->isConst);
+        if (target.isReference()) {
+            if (!prepared[i].isConst || !canBindReferenceValue(target, args[i].type())) {
+                error(QStringLiteral("E0541"),
+                      QStringLiteral("cannot bind parameter '%1' of type %2 to %3 value")
+                          .arg(p.name, target.displayName(), args[i].type().displayName()),
+                      p.span);
+                continue;
+            }
+            prepared[i].value = convertOrError(args[i], *target.pointee, p.span);
+            prepared[i].location = m_ctx->createStorage(prepared[i].value);
+            prepared[i].byReference = true;
+        } else {
+            prepared[i].value = convertOrError(args[i], target, p.span);
+        }
+    }
+    if (m_ctx->hasError()) {
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    RuntimeFrameGuard frame(*m_ctx, true, functionFrameSymbol(fn), fn.span);
+    for (size_t i = 0; i < args.size(); ++i) {
+        const ParameterNode& p = *fn.params[i];
+        if (prepared[i].byReference)
+            m_ctx->defineVariable(p.name, prepared[i].location, prepared[i].isConst, true, p.span);
+        else
+            m_ctx->defineValueVariable(p.name, prepared[i].value, prepared[i].isConst, p.span);
     }
     if (m_ctx->hasError()) {
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -720,17 +767,27 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
         AbelValue value;
         AbelLocation* location = nullptr;
         bool byReference = false;
+        bool isConst = false;
     };
     std::vector<PreparedArg> prepared(fixedCount);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         const AbelType target = typeFromAstInCurrentPackage(*p.type);
+        prepared[i].isConst = isReadOnlyBinding(target, p.type->isConst);
         if (target.isReference()) {
             AbelLocation* loc = evalLocation(*args[i]);
             if (!loc)
                 continue;
+            const auto* argName = dynamic_cast<const NameExprNode*>(args[i].get());
+            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
+            if (!prepared[i].isConst && argSlot && argSlot->isConst) {
+                error(QStringLiteral("E0541"),
+                      QStringLiteral("non-const parameter '%1' cannot bind to const lvalue").arg(p.name),
+                      args[i]->span);
+                continue;
+            }
             AbelValue current = loc->read();
-            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+            if (!canBindReferenceValue(target, current.type())) {
                 error(QStringLiteral("E0541"),
                       QStringLiteral("cannot bind parameter '%1' of type %2 to %3 lvalue")
                           .arg(p.name, target.displayName(), current.type().displayName()),
@@ -762,9 +819,9 @@ ExecResult Interpreter::callFunctionExpr(const FunctionDeclNode& fn,
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         if (prepared[i].byReference)
-            m_ctx->defineVariable(p.name, prepared[i].location, false, true, p.span);
+            m_ctx->defineVariable(p.name, prepared[i].location, prepared[i].isConst, true, p.span);
         else
-            m_ctx->defineValueVariable(p.name, prepared[i].value, false, p.span);
+            m_ctx->defineValueVariable(p.name, prepared[i].value, prepared[i].isConst, p.span);
     }
     if (variadic) {
         const ParameterNode& p = *fn.params.back();
@@ -827,18 +884,28 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
         AbelValue value;
         AbelLocation* location = nullptr;
         bool byReference = false;
+        bool isConst = false;
     };
     std::vector<PreparedArg> prepared(fixedCount);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         const AbelType target = typeFromAstInCurrentPackage(*p.type);
         const ExprNode& arg = argAt(i);
+        prepared[i].isConst = isReadOnlyBinding(target, p.type->isConst);
         if (target.isReference()) {
             AbelLocation* loc = evalLocation(arg);
             if (!loc)
                 continue;
+            const auto* argName = dynamic_cast<const NameExprNode*>(&arg);
+            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
+            if (!prepared[i].isConst && argSlot && argSlot->isConst) {
+                error(QStringLiteral("E0541"),
+                      QStringLiteral("non-const parameter '%1' cannot bind to const lvalue").arg(p.name),
+                      arg.span);
+                continue;
+            }
             AbelValue current = loc->read();
-            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+            if (!canBindReferenceValue(target, current.type())) {
                 error(QStringLiteral("E0541"),
                       QStringLiteral("cannot bind parameter '%1' of type %2 to %3 lvalue")
                           .arg(p.name, target.displayName(), current.type().displayName()),
@@ -869,9 +936,9 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         if (prepared[i].byReference)
-            m_ctx->defineVariable(p.name, prepared[i].location, false, true, p.span);
+            m_ctx->defineVariable(p.name, prepared[i].location, prepared[i].isConst, true, p.span);
         else
-            m_ctx->defineValueVariable(p.name, prepared[i].value, false, p.span);
+            m_ctx->defineValueVariable(p.name, prepared[i].value, prepared[i].isConst, p.span);
     }
     if (variadic) {
         const ParameterNode& p = *fn.params.back();
@@ -919,15 +986,23 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
     std::vector<AbelValue> values(args.size());
     std::vector<AbelLocation*> locations(args.size(), nullptr);
     std::vector<bool> byReference(args.size(), false);
+    std::vector<bool> paramConst(args.size(), false);
     for (size_t i = 0; i < args.size(); ++i) {
         const AbelType& target = fnValue.type().params[i];
+        paramConst[i] = isReadOnlyBinding(target, target.isConst);
         if (target.isReference()) {
             byReference[i] = true;
             AbelLocation* loc = evalLocation(*args[i]);
             if (!loc)
                 continue;
+            const auto* argName = dynamic_cast<const NameExprNode*>(args[i].get());
+            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
+            if (!paramConst[i] && argSlot && argSlot->isConst) {
+                error(QStringLiteral("E0583"), QStringLiteral("non-const function parameter cannot bind to const lvalue"), args[i]->span);
+                continue;
+            }
             AbelValue current = loc->read();
-            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+            if (!canBindReferenceValue(target, current.type())) {
                 error(QStringLiteral("E0583"),
                       QStringLiteral("cannot bind function parameter %1 to %2 lvalue")
                           .arg(target.displayName(), current.type().displayName()),
@@ -959,9 +1034,9 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
     for (size_t i = 0; i < args.size(); ++i) {
         const QString& name = lambda.paramNames[static_cast<qsizetype>(i)];
         if (byReference[i])
-            m_ctx->defineVariable(name, locations[i], false, true, lambda.span);
+            m_ctx->defineVariable(name, locations[i], paramConst[i], true, lambda.span);
         else
-            m_ctx->defineValueVariable(name, values[i], false, lambda.span);
+            m_ctx->defineValueVariable(name, values[i], paramConst[i], lambda.span);
     }
     if (m_ctx->hasError()) {
         return AbelValue::makeUnknown();
@@ -1012,16 +1087,24 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
     std::vector<AbelValue> values(argc);
     std::vector<AbelLocation*> locations(argc, nullptr);
     std::vector<bool> byReference(argc, false);
+    std::vector<bool> paramConst(argc, false);
     for (size_t i = 0; i < argc; ++i) {
         const AbelType& target = fnValue.type().params[i];
         const ExprNode& arg = argAt(i);
+        paramConst[i] = isReadOnlyBinding(target, target.isConst);
         if (target.isReference()) {
             byReference[i] = true;
             AbelLocation* loc = evalLocation(arg);
             if (!loc)
                 continue;
+            const auto* argName = dynamic_cast<const NameExprNode*>(&arg);
+            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
+            if (!paramConst[i] && argSlot && argSlot->isConst) {
+                error(QStringLiteral("E0583"), QStringLiteral("non-const function parameter cannot bind to const lvalue"), arg.span);
+                continue;
+            }
             AbelValue current = loc->read();
-            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+            if (!canBindReferenceValue(target, current.type())) {
                 error(QStringLiteral("E0583"),
                       QStringLiteral("cannot bind function parameter %1 to %2 lvalue")
                           .arg(target.displayName(), current.type().displayName()),
@@ -1053,9 +1136,9 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
     for (size_t i = 0; i < argc; ++i) {
         const QString& name = lambda.paramNames[static_cast<qsizetype>(i)];
         if (byReference[i])
-            m_ctx->defineVariable(name, locations[i], false, true, lambda.span);
+            m_ctx->defineVariable(name, locations[i], paramConst[i], true, lambda.span);
         else
-            m_ctx->defineValueVariable(name, values[i], false, lambda.span);
+            m_ctx->defineValueVariable(name, values[i], paramConst[i], lambda.span);
     }
     if (m_ctx->hasError()) {
         return AbelValue::makeUnknown();
@@ -1187,16 +1270,28 @@ ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
         AbelLocation* loc = evalLocation(*stmt.init);
         if (!loc)
             return ExecResult::normal();
-        const AbelType& referred = *type.pointee;
-        AbelValue current = loc->read();
-        if (!canAssignValue(referred, current.type())) {
+        if (!type.pointee) {
+            error(QStringLiteral("E0534"), QStringLiteral("cannot bind malformed reference type"), stmt.init->span);
+            return ExecResult::normal();
+        }
+        const bool bindingConst = isReadOnlyBinding(type, stmt.isConst || stmt.type->isConst);
+        const auto* initName = dynamic_cast<const NameExprNode*>(stmt.init.get());
+        const VariableSlot* initSlot = initName ? m_ctx->lookupVariable(initName->name) : nullptr;
+        if (!bindingConst && initSlot && initSlot->isConst) {
             error(QStringLiteral("E0534"),
-                  QStringLiteral("cannot bind %1& to %2 lvalue")
-                      .arg(referred.displayName(), current.type().displayName()),
+                  QStringLiteral("non-const reference variable '%1' cannot bind to const lvalue").arg(stmt.name),
                   stmt.init->span);
             return ExecResult::normal();
         }
-        m_ctx->defineVariable(stmt.name, loc, stmt.isConst || stmt.type->isConst, true, stmt.span);
+        AbelValue current = loc->read();
+        if (!canBindReferenceValue(type, current.type())) {
+            error(QStringLiteral("E0534"),
+                  QStringLiteral("cannot bind %1 to %2 lvalue")
+                      .arg(type.displayName(), current.type().displayName()),
+                  stmt.init->span);
+            return ExecResult::normal();
+        }
+        m_ctx->defineVariable(stmt.name, loc, bindingConst, true, stmt.span);
         return ExecResult::normal();
     }
     AbelValue value;
@@ -1216,7 +1311,7 @@ ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
         if (m_ctx->hasError())
             return ExecResult::normal();
     }
-    m_ctx->defineValueVariable(stmt.name, value, stmt.isConst || stmt.type->isConst, stmt.span);
+    m_ctx->defineValueVariable(stmt.name, value, isReadOnlyBinding(type, stmt.isConst || stmt.type->isConst), stmt.span);
     return ExecResult::normal();
 }
 
@@ -1273,7 +1368,7 @@ ExecResult Interpreter::execRangeFor(const RangeForStmtNode& stmt)
     for (size_t i = 0; i < vector->elements.size(); ++i) {
         AbelLocation* loc = m_ctx->createVectorElementLocation(vector.get(), i);
         m_ctx->pushFrame();
-        m_ctx->defineVariable(stmt.variable, loc, false, true, stmt.span);
+        m_ctx->defineVariable(stmt.variable, loc, range.type().isConst, true, stmt.span);
         ExecResult r = execBlock(*stmt.body);
         m_ctx->popFrame();
         if (r.kind == FlowKind::Return) {
@@ -1851,8 +1946,19 @@ AbelValue Interpreter::evalBackendCallByName(const QString& backendName,
                 locations.push_back(nullptr);
                 continue;
             }
+            const bool paramConst = isReadOnlyBinding(target, param.type->isConst);
+            const auto* argName = dynamic_cast<const NameExprNode*>(args[i].get());
+            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
+            if (!paramConst && argSlot && argSlot->isConst) {
+                error(QStringLiteral("E0609"),
+                      QStringLiteral("non-const backend parameter '%1' cannot bind to const lvalue").arg(param.name),
+                      args[i]->span);
+                values.push_back(AbelValue::makeUnknown());
+                locations.push_back(nullptr);
+                continue;
+            }
             AbelValue current = loc->read();
-            if (!target.pointee || !canAssignValue(*target.pointee, current.type())) {
+            if (!canBindReferenceValue(target, current.type())) {
                 error(QStringLiteral("E0609"),
                       QStringLiteral("cannot bind backend parameter '%1' of type %2 to %3 lvalue")
                           .arg(param.name, target.displayName(), current.type().displayName()),
@@ -2018,11 +2124,42 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
         return AbelValue::makeUnknown();
     }
 
-    std::vector<AbelValue> prepared;
-    prepared.reserve(args.size());
+    struct PreparedArg {
+        AbelValue value;
+        AbelLocation* location = nullptr;
+        bool byReference = false;
+        bool isConst = false;
+    };
+    std::vector<PreparedArg> prepared(args.size());
     for (size_t i = 0; i < args.size(); ++i) {
         const ParameterNode& p = *info.constructor->params[i];
-        prepared.push_back(convertOrError(evalExpr(*args[i]), typeFromAstInCurrentPackage(*p.type), args[i]->span));
+        const AbelType target = typeFromAstInCurrentPackage(*p.type);
+        prepared[i].isConst = isReadOnlyBinding(target, p.type->isConst);
+        if (target.isReference()) {
+            AbelLocation* loc = evalLocation(*args[i]);
+            if (!loc)
+                continue;
+            const auto* argName = dynamic_cast<const NameExprNode*>(args[i].get());
+            const VariableSlot* argSlot = argName ? m_ctx->lookupVariable(argName->name) : nullptr;
+            if (!prepared[i].isConst && argSlot && argSlot->isConst) {
+                error(QStringLiteral("E0576"),
+                      QStringLiteral("non-const constructor parameter '%1' cannot bind to const lvalue").arg(p.name),
+                      args[i]->span);
+                continue;
+            }
+            AbelValue current = loc->read();
+            if (!canBindReferenceValue(target, current.type())) {
+                error(QStringLiteral("E0576"),
+                      QStringLiteral("cannot bind constructor parameter '%1' of type %2 to %3 lvalue")
+                          .arg(p.name, target.displayName(), current.type().displayName()),
+                      args[i]->span);
+                continue;
+            }
+            prepared[i].location = loc;
+            prepared[i].byReference = true;
+        } else {
+            prepared[i].value = convertOrError(evalExpr(*args[i]), target, args[i]->span);
+        }
     }
     if (m_ctx->hasError())
         return AbelValue::makeUnknown();
@@ -2042,7 +2179,10 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
         m_ctx->defineVariable(fieldName, m_ctx->createStructFieldLocation(structValue.get(), fieldName), false, false, span);
     for (size_t i = 0; i < args.size(); ++i) {
         const ParameterNode& p = *info.constructor->params[i];
-        m_ctx->defineValueVariable(p.name, prepared[i], false, p.span);
+        if (prepared[i].byReference)
+            m_ctx->defineVariable(p.name, prepared[i].location, prepared[i].isConst, true, p.span);
+        else
+            m_ctx->defineValueVariable(p.name, prepared[i].value, prepared[i].isConst, p.span);
     }
     if (m_ctx->hasError())
         return AbelValue::makeUnknown();
@@ -2300,6 +2440,20 @@ AbelValue Interpreter::convertOrError(const AbelValue& value, const AbelType& ta
         return AbelValue::makeUnknown();
     }
     return convertValue(value, target);
+}
+
+bool Interpreter::isReadOnlyBinding(const AbelType& type, bool syntacticConst) const
+{
+    return syntacticConst || type.isConst || (type.isReference() && type.pointee && type.pointee->isConst);
+}
+
+bool Interpreter::canBindReferenceValue(const AbelType& referenceType, const AbelType& sourceType) const
+{
+    if (!referenceType.isReference() || !referenceType.pointee)
+        return false;
+    AbelType referred = *referenceType.pointee;
+    referred.isConst = false;
+    return canAssignValue(referred, sourceType);
 }
 
 void Interpreter::error(const QString& code, const QString& message, const SourceSpan& span)

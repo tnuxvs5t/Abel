@@ -29,6 +29,7 @@ enum class TypeKind {
 
 struct AbelType {
     TypeKind kind = TypeKind::Unknown;
+    bool isConst = false;
     QString spelling;
     std::shared_ptr<AbelType> pointee;
     std::vector<AbelType> params;
@@ -45,6 +46,7 @@ struct AbelType {
 };
 
 AbelType makeType(TypeKind kind, const QString& spelling = QString());
+AbelType makeConstType(const AbelType& type);
 AbelType makePointerType(const AbelType& pointee);
 AbelType makeReferenceType(const AbelType& referred);
 AbelType makeVectorType(const AbelType& element);

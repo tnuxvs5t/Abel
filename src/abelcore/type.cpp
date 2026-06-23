@@ -6,7 +6,7 @@ namespace abel {
 
 bool AbelType::operator==(const AbelType& other) const
 {
-    if (kind != other.kind)
+    if (kind != other.kind || isConst != other.isConst)
         return false;
     if ((kind == TypeKind::Pointer || kind == TypeKind::Reference || kind == TypeKind::Vector) && pointee && other.pointee)
         return *pointee == *other.pointee;
@@ -57,26 +57,30 @@ bool AbelType::isReference() const
 QString AbelType::displayName() const
 {
     if (!spelling.isEmpty())
-        return spelling;
+        return isConst ? QStringLiteral("const ") + spelling : spelling;
+    QString out;
     switch (kind) {
-    case TypeKind::Void: return QStringLiteral("void");
-    case TypeKind::Bool: return QStringLiteral("bool");
-    case TypeKind::I32: return QStringLiteral("i32");
-    case TypeKind::I64: return QStringLiteral("i64");
-    case TypeKind::F64: return QStringLiteral("f64");
-    case TypeKind::Char: return QStringLiteral("char");
-    case TypeKind::Str: return QStringLiteral("str");
-    case TypeKind::Any: return QStringLiteral("any");
+    case TypeKind::Void: out = QStringLiteral("void"); break;
+    case TypeKind::Bool: out = QStringLiteral("bool"); break;
+    case TypeKind::I32: out = QStringLiteral("i32"); break;
+    case TypeKind::I64: out = QStringLiteral("i64"); break;
+    case TypeKind::F64: out = QStringLiteral("f64"); break;
+    case TypeKind::Char: out = QStringLiteral("char"); break;
+    case TypeKind::Str: out = QStringLiteral("str"); break;
+    case TypeKind::Any: out = QStringLiteral("any"); break;
     case TypeKind::Pointer:
-        return pointee ? pointee->displayName() + QStringLiteral("*") : QStringLiteral("<unknown>*");
+        out = pointee ? pointee->displayName() + QStringLiteral("*") : QStringLiteral("<unknown>*");
+        break;
     case TypeKind::Reference:
-        return pointee ? pointee->displayName() + QStringLiteral("&") : QStringLiteral("<unknown>&");
-    case TypeKind::Nullptr: return QStringLiteral("nullptr");
+        out = pointee ? pointee->displayName() + QStringLiteral("&") : QStringLiteral("<unknown>&");
+        break;
+    case TypeKind::Nullptr: out = QStringLiteral("nullptr"); break;
     case TypeKind::Vector:
-        return pointee ? QStringLiteral("vector<") + pointee->displayName() + QStringLiteral(">") : QStringLiteral("vector<?>");
-    case TypeKind::Struct: return spelling.isEmpty() ? QStringLiteral("<struct>") : spelling;
+        out = pointee ? QStringLiteral("vector<") + pointee->displayName() + QStringLiteral(">") : QStringLiteral("vector<?>");
+        break;
+    case TypeKind::Struct: out = spelling.isEmpty() ? QStringLiteral("<struct>") : spelling; break;
     case TypeKind::Function: {
-        QString out = QStringLiteral("func ");
+        out = QStringLiteral("func ");
         out += pointee ? pointee->displayName() : QStringLiteral("<unknown>");
         out += QStringLiteral("(");
         for (size_t i = 0; i < params.size(); ++i) {
@@ -85,11 +89,11 @@ QString AbelType::displayName() const
             out += params[i].displayName();
         }
         out += QStringLiteral(")");
-        return out;
+        break;
     }
-    case TypeKind::Unknown: return QStringLiteral("<unknown>");
+    case TypeKind::Unknown: out = QStringLiteral("<unknown>"); break;
     }
-    return QStringLiteral("<unknown>");
+    return isConst ? QStringLiteral("const ") + out : out;
 }
 
 AbelType makeType(TypeKind kind, const QString& spelling)
@@ -97,6 +101,13 @@ AbelType makeType(TypeKind kind, const QString& spelling)
     AbelType t;
     t.kind = kind;
     t.spelling = spelling;
+    return t;
+}
+
+AbelType makeConstType(const AbelType& type)
+{
+    AbelType t = type;
+    t.isConst = true;
     return t;
 }
 
@@ -174,6 +185,8 @@ AbelType typeFromAst(const TypeNode& node)
             params.push_back(typeFromAst(*param));
         base = makeFunctionType(typeFromAst(*node.elementType), std::move(params));
     }
+    if (node.isConst)
+        base = makeConstType(base);
     for (int i = 0; i < node.pointerDepth; ++i)
         base = makePointerType(base);
     if (node.isReference)
@@ -183,22 +196,31 @@ AbelType typeFromAst(const TypeNode& node)
 
 bool canAssignValue(const AbelType& target, const AbelType& source)
 {
-    if (target.kind == TypeKind::Unknown || source.kind == TypeKind::Unknown)
+    AbelType targetValue = target;
+    AbelType sourceValue = source;
+    targetValue.isConst = false;
+    sourceValue.isConst = false;
+    if (targetValue.kind == TypeKind::Unknown || sourceValue.kind == TypeKind::Unknown)
         return true;
-    if (target.isReference())
-        return target.pointee && canAssignValue(*target.pointee, source);
-    if (target.isPointer() && source.kind == TypeKind::Nullptr)
+    if (targetValue.isReference()) {
+        if (!targetValue.pointee)
+            return false;
+        AbelType referred = *targetValue.pointee;
+        referred.isConst = false;
+        return canAssignValue(referred, sourceValue);
+    }
+    if (targetValue.isPointer() && sourceValue.kind == TypeKind::Nullptr)
         return true;
-    if (target.kind == TypeKind::Any)
+    if (targetValue.kind == TypeKind::Any)
         return true;
-    if (target.kind == source.kind)
-        return (target.kind != TypeKind::Pointer && target.kind != TypeKind::Vector && target.kind != TypeKind::Function)
-            || !target.pointee
-            || !source.pointee
-            || target == source;
-    if (target.isInteger() && source.isNumeric())
+    if (targetValue.kind == sourceValue.kind)
+        return (targetValue.kind != TypeKind::Pointer && targetValue.kind != TypeKind::Vector && targetValue.kind != TypeKind::Function)
+            || !targetValue.pointee
+            || !sourceValue.pointee
+            || targetValue == sourceValue;
+    if (targetValue.isInteger() && sourceValue.isNumeric())
         return true;
-    if (target.kind == TypeKind::F64 && source.isNumeric())
+    if (targetValue.kind == TypeKind::F64 && sourceValue.isNumeric())
         return true;
     return false;
 }

@@ -120,6 +120,8 @@ private:
     bool requireBool(const AbelValue& value, const SourceSpan& span, bool& out);
     bool requireInteger(const AbelValue& value, const SourceSpan& span, qint64& out);
     AbelValue convertOrError(const AbelValue& value, const AbelType& target, const SourceSpan& span);
+    bool isReadOnlyBinding(const AbelType& type, bool syntacticConst) const;
+    bool canBindReferenceValue(const AbelType& referenceType, const AbelType& sourceType) const;
     void error(const QString& code, const QString& message, const SourceSpan& span);
 };
 

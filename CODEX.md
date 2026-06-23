@@ -330,6 +330,30 @@ fn int main() {
 }
 ```
 
+只读引用示例：
+
+```abel
+fn int read(const int& x) {
+    return x;
+}
+
+fn int main() {
+    int a = 4;
+    const int b = 5;
+    println(build_string(read(a), " ", read(b)));
+    return 0;
+}
+```
+
+规则边界：
+
+```text
+const T& 是只读别名，函数体内不能通过它写入。
+T& 是可写别名，不能绑定已知 const lvalue。
+当前 const T& 只绑定 lvalue；不要生成 const int& r = 1; 这类依赖 prvalue 生命周期延长的代码。
+完整 const T* / T* const / prvalue lifetime matrix 仍是后续 v1 工作。
+```
+
 指针示例：
 
 ```abel
@@ -746,6 +770,7 @@ std::vector<bool/int/qint64/double/QChar/char/QString/AbelValue>
 任意 struct/class 自动拆装箱
 任意 pointer/reference 矩阵
 任意 T& 都会写回
+const std::vector<T>& 之外的完整 const pointer/reference 暴露矩阵
 AbelRuntimeContext& 可以放在非末尾参数
 跨 Qt/编译器 ABI 稳定
 ```

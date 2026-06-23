@@ -153,6 +153,10 @@ private:
     ExprType checkBuiltinMethodCall(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     ExprType checkIndex(const IndexExprNode& expr);
     ExprType checkInitListAgainst(const InitListExprNode& init, const AbelType& target);
+    void checkParameterArgument(const AbelType& paramType,
+                                const ExprType& arg,
+                                const SourceSpan& argSpan,
+                                const QString& label);
 
     void pushScope();
     void popScope();

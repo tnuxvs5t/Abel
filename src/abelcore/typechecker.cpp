@@ -57,6 +57,23 @@ ExprType unknownExprType()
     return {makeType(TypeKind::Unknown), ValueCategory::PRValue, false};
 }
 
+bool isConstReferenceType(const AbelType& type)
+{
+    return type.isReference() && type.pointee && type.pointee->isConst;
+}
+
+bool isReadOnlyBinding(const AbelType& type, bool syntacticConst)
+{
+    return syntacticConst || type.isConst || isConstReferenceType(type);
+}
+
+ExprType callReturnExprType(const AbelType& returnType)
+{
+    if (returnType.isReference() && returnType.pointee)
+        return {*returnType.pointee, ValueCategory::LValue, !returnType.pointee->isConst};
+    return {returnType, ValueCategory::PRValue, false};
+}
+
 QString declarationQualifiedName(const DeclNode& decl, const QString& name)
 {
     QStringList parts;
@@ -354,7 +371,7 @@ void TypeChecker::collectStructs(const ProgramNode& program)
                 AbelType type = typeFromAstForDecl(*field->type, *s, false);
                 if (type.isReference())
                     error(field->span, QStringLiteral("reference fields are not supported in v0"));
-                info.fields.insert(field->name, FieldInfo{type, field->type->isConst});
+                info.fields.insert(field->name, FieldInfo{type, isReadOnlyBinding(type, field->type->isConst)});
             }
         }
     }
@@ -711,6 +728,8 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
 {
     if (node.name == QStringLiteral("vector") && node.elementType) {
         AbelType base = makeVectorType(typeFromAstInPackage(*node.elementType, packageName, diagnose));
+        if (node.isConst)
+            base = makeConstType(base);
         for (int i = 0; i < node.pointerDepth; ++i)
             base = makePointerType(base);
         if (node.isReference)
@@ -723,6 +742,8 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
         for (const auto& param : node.functionParamTypes)
             params.push_back(typeFromAstInPackage(*param, packageName, diagnose));
         AbelType base = makeFunctionType(typeFromAstInPackage(*node.elementType, packageName, diagnose), std::move(params));
+        if (node.isConst)
+            base = makeConstType(base);
         for (int i = 0; i < node.pointerDepth; ++i)
             base = makePointerType(base);
         if (node.isReference)
@@ -739,6 +760,8 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
             base = makeStructType(structTypeName(*info->decl));
         }
     }
+    if (node.isConst)
+        base = makeConstType(base);
     for (int i = 0; i < node.pointerDepth; ++i)
         base = makePointerType(base);
     if (node.isReference)
@@ -837,7 +860,10 @@ void TypeChecker::checkConstructor(const StructDeclNode& owner, const Constructo
         AbelType paramType = typeFromAstInCurrentPackage(*param->type);
         if (!isSupportedType(paramType))
             error(param->span, QStringLiteral("unsupported parameter type '%1'").arg(param->type->displayName()));
-        defineVariable(param->name, param->variadic ? makeVectorType(makeType(TypeKind::Any)) : paramType, false, param->span);
+        defineVariable(param->name,
+                       param->variadic ? makeVectorType(makeType(TypeKind::Any)) : paramType,
+                       !param->variadic && isReadOnlyBinding(paramType, param->type->isConst),
+                       param->span);
     }
     checkBlock(*ctor.body, false);
     popScope();
@@ -862,7 +888,10 @@ void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNod
         AbelType paramType = typeFromAstInCurrentPackage(*param->type);
         if (!isSupportedType(paramType))
             error(param->span, QStringLiteral("unsupported parameter type '%1'").arg(param->type->displayName()));
-        defineVariable(param->name, param->variadic ? makeVectorType(makeType(TypeKind::Any)) : paramType, false, param->span);
+        defineVariable(param->name,
+                       param->variadic ? makeVectorType(makeType(TypeKind::Any)) : paramType,
+                       !param->variadic && isReadOnlyBinding(paramType, param->type->isConst),
+                       param->span);
     }
     if (method.body)
         checkBlock(*method.body, false);
@@ -908,7 +937,7 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
                 error(param.span, QStringLiteral("only any... variadic parameters are supported"));
             defineVariable(param.name, makeVectorType(makeType(TypeKind::Any)), false, param.span);
         } else {
-            defineVariable(param.name, paramType, false, param.span);
+            defineVariable(param.name, paramType, isReadOnlyBinding(paramType, param.type->isConst), param.span);
         }
     }
 
@@ -1022,10 +1051,18 @@ void TypeChecker::checkVarDecl(const VarDeclStmtNode& stmt)
             // Root diagnostic already emitted by the initializer; do not add a reference-binding cascade.
         } else if (init.category != ValueCategory::LValue)
             error(stmt.init->span, QStringLiteral("reference variable '%1' must bind to an lvalue").arg(stmt.name));
-        else if (!type.pointee || !isAssignable(*type.pointee, init.type))
-            error(stmt.init->span,
-                  QStringLiteral("cannot bind %1 to %2").arg(type.displayName(), init.type.displayName()));
-        defineVariable(stmt.name, type, stmt.isConst || stmt.type->isConst, stmt.span);
+        else if (!isConstReferenceType(type) && !init.isMutable)
+            error(stmt.init->span, QStringLiteral("non-const reference variable '%1' cannot bind to const lvalue").arg(stmt.name));
+        else if (type.pointee) {
+            AbelType referred = *type.pointee;
+            referred.isConst = false;
+            if (!isAssignable(referred, init.type))
+                error(stmt.init->span,
+                      QStringLiteral("cannot bind %1 to %2").arg(type.displayName(), init.type.displayName()));
+        } else {
+            error(stmt.init->span, QStringLiteral("cannot bind %1").arg(type.displayName()));
+        }
+        defineVariable(stmt.name, type, isReadOnlyBinding(type, stmt.isConst || stmt.type->isConst), stmt.span);
         return;
     }
 
@@ -1041,7 +1078,7 @@ void TypeChecker::checkVarDecl(const VarDeclStmtNode& stmt)
     } else if (!isDefaultConstructible(type)) {
         error(stmt.span, QStringLiteral("type %1 is not default-constructible").arg(type.displayName()));
     }
-    defineVariable(stmt.name, type, stmt.isConst || stmt.type->isConst, stmt.span);
+    defineVariable(stmt.name, type, isReadOnlyBinding(type, stmt.isConst || stmt.type->isConst), stmt.span);
 }
 
 void TypeChecker::checkFor(const ForStmtNode& stmt)
@@ -1073,7 +1110,7 @@ void TypeChecker::checkRangeFor(const RangeForStmtNode& stmt)
     }
 
     pushScope();
-    defineVariable(stmt.variable, makeReferenceType(*range.type.pointee), false, stmt.span);
+    defineVariable(stmt.variable, makeReferenceType(*range.type.pointee), !range.isMutable, stmt.span);
     ++m_loopDepth;
     checkBlock(*stmt.body, true);
     --m_loopDepth;
@@ -1141,7 +1178,7 @@ ExprType TypeChecker::checkUnary(const UnaryExprNode& expr)
             return unknownExprType();
         if (!inner.type.isPointer() || !inner.type.pointee)
             return errorExpr(expr.span, QStringLiteral("dereference requires pointer"));
-        return {*inner.type.pointee, ValueCategory::LValue, true};
+        return {*inner.type.pointee, ValueCategory::LValue, !inner.type.pointee->isConst};
     }
     ExprType inner = checkExpr(*expr.expr);
     if (isUnknownType(inner.type))
@@ -1385,16 +1422,10 @@ ExprType TypeChecker::checkFunctionCallShape(const QString& name,
             return;
         const ParameterNode& param = *fn.params[i];
         const AbelType paramType = typeFromAstForDecl(*param.type, fn);
-        if (paramType.isReference()) {
-            if (arg.category != ValueCategory::LValue)
-                error(argSpan, QStringLiteral("reference parameter '%1' requires lvalue").arg(param.name));
-            else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
-                error(argSpan, QStringLiteral("cannot bind reference parameter '%1'").arg(param.name));
-        } else if (!isAssignable(paramType, arg.type)) {
-            error(argSpan,
-                  QStringLiteral("cannot pass %1 to parameter '%2' of type %3")
-                      .arg(arg.type.displayName(), param.name, paramType.displayName()));
-        }
+        checkParameterArgument(paramType,
+                               arg,
+                               argSpan,
+                               QStringLiteral("parameter '%1'").arg(param.name));
     };
 
     for (size_t i = 0; i < fixedCount; ++i) {
@@ -1409,7 +1440,7 @@ ExprType TypeChecker::checkFunctionCallShape(const QString& name,
         if (i > 0)
             checkExpr(*restArgs[i - 1]);
     }
-    return {typeFromAstForDecl(*fn.returnType, fn), ValueCategory::PRValue, false};
+    return callReturnExprType(typeFromAstForDecl(*fn.returnType, fn));
 }
 
 ExprType TypeChecker::checkFunctionValueCallShape(const AbelType& functionType,
@@ -1431,17 +1462,7 @@ ExprType TypeChecker::checkFunctionValueCallShape(const AbelType& functionType,
         if (isUnknownType(arg.type))
             return;
         const AbelType& paramType = functionType.params[i];
-        if (paramType.isReference()) {
-            if (arg.category != ValueCategory::LValue)
-                error(argSpan, QStringLiteral("reference function parameter requires lvalue"));
-            else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
-                error(argSpan,
-                      QStringLiteral("cannot bind %1 to %2 lvalue").arg(paramType.displayName(), arg.type.displayName()));
-        } else if (!isAssignable(paramType, arg.type)) {
-            error(argSpan,
-                  QStringLiteral("cannot pass %1 to function parameter %2")
-                      .arg(arg.type.displayName(), paramType.displayName()));
-        }
+        checkParameterArgument(paramType, arg, argSpan, QStringLiteral("function parameter"));
     };
 
     checkOne(0, firstArg, span);
@@ -1449,7 +1470,7 @@ ExprType TypeChecker::checkFunctionValueCallShape(const AbelType& functionType,
         ExprType arg = checkExpr(*restArgs[i - 1]);
         checkOne(i, arg, restArgs[i - 1]->span);
     }
-    return {*functionType.pointee, ValueCategory::PRValue, false};
+    return callReturnExprType(*functionType.pointee);
 }
 
 ExprType TypeChecker::checkAssignment(const AssignExprNode& expr)
@@ -1486,15 +1507,20 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             const FunctionDeclNode* method = info->methods.value(field->field, nullptr);
             if (!method)
                 return errorExpr(field->span, QStringLiteral("unknown method '%1' on %2").arg(field->field, receiver.type.displayName()));
+            if (receiver.category == ValueCategory::LValue && !receiver.isMutable && !method->isConstMethod)
+                return errorExpr(field->span, QStringLiteral("method '%1' requires mutable receiver").arg(field->field));
             if (expr.args.size() != method->params.size())
                 return errorExpr(expr.span, QStringLiteral("method '%1' called with wrong argument count").arg(field->field));
             for (size_t i = 0; i < expr.args.size(); ++i) {
                 AbelType paramType = typeFromAstForDecl(*method->params[i]->type, *method);
                 ExprType arg = checkExpr(*expr.args[i]);
-                if (!isUnknownType(arg.type) && !isAssignable(paramType, arg.type))
-                    error(expr.args[i]->span, QStringLiteral("cannot pass %1 to method parameter %2").arg(arg.type.displayName(), paramType.displayName()));
+                if (!isUnknownType(arg.type))
+                    checkParameterArgument(paramType,
+                                           arg,
+                                           expr.args[i]->span,
+                                           QStringLiteral("method parameter '%1'").arg(method->params[i]->name));
             }
-            return {typeFromAstForDecl(*method->returnType, *method), method->returnType->isReference ? ValueCategory::LValue : ValueCategory::PRValue, false};
+            return callReturnExprType(typeFromAstForDecl(*method->returnType, *method));
         }
         return checkBuiltinMethodCall(*field, expr.args);
     }
@@ -1532,8 +1558,11 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             for (size_t i = 0; i < argc; ++i) {
                 AbelType paramType = typeFromAstForDecl(*info->constructor->params[i]->type, *info->decl);
                 ExprType arg = checkExpr(*expr.args[i]);
-                if (!isUnknownType(arg.type) && !isAssignable(paramType, arg.type))
-                    error(expr.args[i]->span, QStringLiteral("cannot pass %1 to constructor parameter %2").arg(arg.type.displayName(), paramType.displayName()));
+                if (!isUnknownType(arg.type))
+                    checkParameterArgument(paramType,
+                                           arg,
+                                           expr.args[i]->span,
+                                           QStringLiteral("constructor parameter '%1'").arg(info->constructor->params[i]->name));
             }
         }
         return {makeStructType(structTypeName(*info->decl)), ValueCategory::PRValue, false};
@@ -1555,20 +1584,14 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             ExprType arg = checkExpr(*expr.args[i]);
             if (isUnknownType(arg.type))
                 continue;
-            if (paramType.isReference()) {
-                if (arg.category != ValueCategory::LValue)
-                    error(expr.args[i]->span, QStringLiteral("reference parameter '%1' requires lvalue").arg(param.name));
-                else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
-                    error(expr.args[i]->span, QStringLiteral("cannot bind reference parameter '%1'").arg(param.name));
-            } else if (!isAssignable(paramType, arg.type)) {
-                error(expr.args[i]->span,
-                      QStringLiteral("cannot pass %1 to parameter '%2' of type %3")
-                          .arg(arg.type.displayName(), param.name, paramType.displayName()));
-            }
+            checkParameterArgument(paramType,
+                                   arg,
+                                   expr.args[i]->span,
+                                   QStringLiteral("parameter '%1'").arg(param.name));
         }
         for (size_t i = fixedCount; i < expr.args.size(); ++i)
             checkExpr(*expr.args[i]);
-        return {typeFromAstForDecl(*fn->returnType, *fn), ValueCategory::PRValue, false};
+        return callReturnExprType(typeFromAstForDecl(*fn->returnType, *fn));
     }
     if (m_functions.contains(name->name)) {
         for (const auto& argExpr : expr.args)
@@ -1751,8 +1774,11 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
         for (size_t i = 0; i < argc; ++i) {
             AbelType paramType = typeFromAstForDecl(*info.constructor->params[i]->type, *info.decl);
             ExprType arg = checkExpr(*args[i]);
-            if (!isUnknownType(arg.type) && !isAssignable(paramType, arg.type))
-                error(args[i]->span, QStringLiteral("cannot pass %1 to constructor parameter %2").arg(arg.type.displayName(), paramType.displayName()));
+            if (!isUnknownType(arg.type))
+                checkParameterArgument(paramType,
+                                       arg,
+                                       args[i]->span,
+                                       QStringLiteral("constructor parameter '%1'").arg(info.constructor->params[i]->name));
         }
     }
     return {makeStructType(structTypeName(*info.decl)), ValueCategory::PRValue, false};
@@ -1809,22 +1835,16 @@ ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
         ExprType arg = checkExpr(*args[i]);
         if (isUnknownType(arg.type))
             continue;
-        if (paramType.isReference()) {
-            if (arg.category != ValueCategory::LValue)
-                error(args[i]->span, QStringLiteral("backend reference parameter '%1' requires lvalue").arg(param.name));
-            else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
-                error(args[i]->span, QStringLiteral("cannot bind backend reference parameter '%1'").arg(param.name));
-        } else if (!isAssignable(paramType, arg.type)) {
-            error(args[i]->span,
-                  QStringLiteral("cannot pass %1 to backend parameter '%2' of type %3")
-                      .arg(arg.type.displayName(), param.name, paramType.displayName()));
-        }
+        checkParameterArgument(paramType,
+                               arg,
+                               args[i]->span,
+                               QStringLiteral("backend parameter '%1'").arg(param.name));
     }
     for (size_t i = fixedCount; i < args.size(); ++i)
         checkExpr(*args[i]);
 
     const AbelType returnType = typeFromAstForDecl(*fn->returnType, *fn);
-    return {returnType, returnType.isReference() ? ValueCategory::LValue : ValueCategory::PRValue, false};
+    return callReturnExprType(returnType);
 }
 
 ExprType TypeChecker::checkQualifiedFunctionCall(const QString& moduleName,
@@ -1849,21 +1869,15 @@ ExprType TypeChecker::checkQualifiedFunctionCall(const QString& moduleName,
         ExprType arg = checkExpr(*args[i]);
         if (isUnknownType(arg.type))
             continue;
-        if (paramType.isReference()) {
-            if (arg.category != ValueCategory::LValue)
-                error(args[i]->span, QStringLiteral("reference parameter '%1' requires lvalue").arg(param.name));
-            else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
-                error(args[i]->span, QStringLiteral("cannot bind reference parameter '%1'").arg(param.name));
-        } else if (!isAssignable(paramType, arg.type)) {
-            error(args[i]->span,
-                  QStringLiteral("cannot pass %1 to parameter '%2' of type %3")
-                      .arg(arg.type.displayName(), param.name, paramType.displayName()));
-        }
+        checkParameterArgument(paramType,
+                               arg,
+                               args[i]->span,
+                               QStringLiteral("parameter '%1'").arg(param.name));
     }
     for (size_t i = fixedCount; i < args.size(); ++i)
         checkExpr(*args[i]);
     const AbelType returnType = typeFromAstForDecl(*fn->returnType, *fn);
-    return {returnType, returnType.isReference() ? ValueCategory::LValue : ValueCategory::PRValue, false};
+    return callReturnExprType(returnType);
 }
 
 ExprType TypeChecker::checkFunctionValueCall(const AbelType& functionType,
@@ -1884,19 +1898,9 @@ ExprType TypeChecker::checkFunctionValueCall(const AbelType& functionType,
         ExprType arg = checkExpr(*args[i]);
         if (isUnknownType(arg.type))
             continue;
-        if (paramType.isReference()) {
-            if (arg.category != ValueCategory::LValue)
-                error(args[i]->span, QStringLiteral("reference function parameter requires lvalue"));
-            else if (!paramType.pointee || !isAssignable(*paramType.pointee, arg.type))
-                error(args[i]->span,
-                      QStringLiteral("cannot bind %1 to %2 lvalue").arg(paramType.displayName(), arg.type.displayName()));
-        } else if (!isAssignable(paramType, arg.type)) {
-            error(args[i]->span,
-                  QStringLiteral("cannot pass %1 to function parameter %2")
-                      .arg(arg.type.displayName(), paramType.displayName()));
-        }
+        checkParameterArgument(paramType, arg, args[i]->span, QStringLiteral("function parameter"));
     }
-    return {*functionType.pointee, ValueCategory::PRValue, false};
+    return callReturnExprType(*functionType.pointee);
 }
 
 ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
@@ -1974,7 +1978,10 @@ ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
         defineVariable(it.key(), it.value().type, it.value().isConst, expr.span);
     pushScope();
     for (size_t i = 0; i < params.size(); ++i)
-        defineVariable(expr.paramNames[static_cast<qsizetype>(i)], params[i], false, expr.span);
+        defineVariable(expr.paramNames[static_cast<qsizetype>(i)],
+                       params[i],
+                       isReadOnlyBinding(params[i], expr.paramTypes[i]->isConst),
+                       expr.span);
     checkBlock(*expr.ownedBody, false);
     if (returnType.kind != TypeKind::Void
         && m_diagnostics.size() == diagnosticsBeforeLambda
@@ -2075,6 +2082,41 @@ ExprType TypeChecker::checkInitListAgainst(const InitListExprNode& init, const A
             error(value->span, QStringLiteral("cannot put %1 into %2").arg(element.type.displayName(), target.displayName()));
     }
     return {target, ValueCategory::PRValue, false};
+}
+
+void TypeChecker::checkParameterArgument(const AbelType& paramType,
+                                         const ExprType& arg,
+                                         const SourceSpan& argSpan,
+                                         const QString& label)
+{
+    if (isUnknownType(arg.type))
+        return;
+    if (paramType.isReference()) {
+        if (arg.category != ValueCategory::LValue) {
+            error(argSpan, QStringLiteral("%1 requires lvalue").arg(label));
+            return;
+        }
+        if (!isConstReferenceType(paramType) && !arg.isMutable) {
+            error(argSpan, QStringLiteral("non-const %1 cannot bind to const lvalue").arg(label));
+            return;
+        }
+        if (!paramType.pointee) {
+            error(argSpan, QStringLiteral("cannot bind %1").arg(label));
+            return;
+        }
+        AbelType referred = *paramType.pointee;
+        referred.isConst = false;
+        if (!isAssignable(referred, arg.type))
+            error(argSpan,
+                  QStringLiteral("cannot bind %1 of type %2 to %3 lvalue")
+                      .arg(label, paramType.displayName(), arg.type.displayName()));
+        return;
+    }
+    if (!isAssignable(paramType, arg.type)) {
+        error(argSpan,
+              QStringLiteral("cannot pass %1 to %2 of type %3")
+                  .arg(arg.type.displayName(), label, paramType.displayName()));
+    }
 }
 
 void TypeChecker::pushScope()

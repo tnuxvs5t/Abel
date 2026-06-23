@@ -244,10 +244,28 @@ fn int main() {
 
 运行结果应返回 `5`。
 
+只读引用第一片：
+
+```abel
+fn int read(const int& x) {
+    return x;
+}
+
+fn int main() {
+    int a = 4;
+    const int b = 5;
+    return read(a) + read(b);
+}
+```
+
+`const T&` 当前用于“只读别名”：可以绑定已存在的 lvalue，函数体内不能通过它赋值；`T&` 仍是可写别名，不能绑定已知 const lvalue。注意当前第一片仍不做 C++ 那种 prvalue 生命周期延长，所以 `const int& r = 1;` 仍会被拒绝。
+
 学习检查：
 
 - `int& r;` 必须报错，因为引用必须初始化；
 - `int& r = 1;` 必须报错，因为非常量引用不能绑定 prvalue；
+- `const int& r = 1;` 当前也必须报错，因为 Abel 还没有 prvalue 生命周期延长；
+- `fn void f(int& x); const int c = 1; f(c);` 必须报错，因为可写引用不能绑定 const lvalue；
 - `int x = y;` 是复制，不是共享对象。
 
 ---
@@ -1442,7 +1460,7 @@ $ABEL run .
 
 ```text
 scan
-完整 const 指针/引用矩阵
+完整 const 指针/引用矩阵与 prvalue 生命周期策略
 backend binder 类型矩阵
 struct private/public 与高级项
 用户自定义 operator
