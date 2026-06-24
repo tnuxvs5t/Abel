@@ -33,6 +33,8 @@ C/C++ 值模型
 + struct / lambda / any / any...
 + builtin print / println / build_string / scan
 + builtin read_text / write_text / append_text / read_lines / write_lines / path_exists / path_is_file / path_is_dir / copy_file / move_path / remove_path / path_join / path_dirname / path_basename / path_ext / path_absolute / path_clean / mkdirs / current_dir / env_exists / env_get
++ builtin char_code / char_from_code / char_is_* / char_upper / char_lower / char_to_str
++ builtin any_type / any_is / any_is_* inspection helpers; typed extraction still uses cast<T>(any)
 + backend block 调 Qt/C++ plugin
 + abel.package.json 项目入口骨架
 + 本地 path dependency / 本地 registry dependency + SemVer version requirement + abel.lock.json
@@ -526,6 +528,26 @@ cast 类型不匹配是 runtime error。
 any... 最多一个，必须是最后一个参数。
 ```
 
+`std.any` 检查 helper 可用于分支和 debug，但不能替代 `cast<T>(any)`：
+
+```abel
+fn int main() {
+    any x = 7;
+    if (any_is_int(x) && (x |> any_is("integer"))) {
+        return cast<int>(x);
+    }
+    return 0;
+}
+```
+
+可用检查：
+
+```text
+any_type(any) -> str
+any_is(any, str expected) -> bool
+any_is_bool/int/double/char/str/vector/pointer(any) -> bool
+```
+
 ---
 
 ## 11. 字符串与输出
@@ -547,6 +569,26 @@ fn int main() {
     println(s);
     return 0;
 }
+```
+
+字符 helper：
+
+```abel
+fn int main() {
+    char c = 'a';
+    bool ok = c |> char_upper |> char_is_upper;
+    return char_code(char_lower('A'));
+}
+```
+
+可用能力：
+
+```text
+char_code(char) -> int
+char_from_code(int) -> char
+char_is_digit/letter/alnum/space/upper/lower(char) -> bool
+char_upper/lower(char) -> char
+char_to_str(char) -> str
 ```
 
 ---

@@ -727,6 +727,60 @@ private slots:
         QCOMPARE(result.exitCode, 22);
     }
 
+    void charAndAnyBuiltinsWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                char a = 'a';
+                int code = char_code(a);
+                char from = char_from_code(code);
+                any x = 7;
+                any text = "kappa";
+                any chars = str_to_chars("ab");
+                bool ok = from == a
+                    && char_is_lower(a)
+                    && char_is_upper(char_upper(a))
+                    && char_lower('A') == a
+                    && char_is_digit('7')
+                    && char_is_letter('河')
+                    && char_is_alnum('8')
+                    && char_is_space(' ')
+                    && char_to_str(from) == "a"
+                    && any_type(x) == "i32"
+                    && any_is(x, "integer")
+                    && any_is_int(x)
+                    && !any_is_double(x)
+                    && any_is_str(text)
+                    && any_is_vector(chars)
+                    && (a |> char_upper |> char_is_upper)
+                    && (x |> any_is_int)
+                    && (x |> any_is("i32"));
+                if (ok) {
+                    return code;
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 97);
+    }
+
+    void charFromCodeRejectsBadRangeAtRuntime()
+    {
+        auto result = runSource(QStringLiteral(R"(
+            fn int main() {
+                char c = char_from_code(70000);
+                return char_code(c);
+            }
+        )"));
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 1);
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("char_from_code expects codepoint")));
+    }
+
     void stringBuiltinMethodsWork()
     {
         const QString src = QStringLiteral(R"(

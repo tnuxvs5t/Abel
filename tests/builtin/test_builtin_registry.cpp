@@ -404,6 +404,26 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("env_get")));
         QVERIFY(registry.hasFunction(QStringLiteral("str_to_chars")));
         QVERIFY(registry.hasFunction(QStringLiteral("chars_to_str")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_code")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_from_code")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_is_digit")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_is_letter")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_is_alnum")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_is_space")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_is_upper")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_is_lower")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_upper")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_lower")));
+        QVERIFY(registry.hasFunction(QStringLiteral("char_to_str")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_type")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_is")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_is_bool")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_is_int")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_is_double")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_is_char")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_is_str")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_is_vector")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_is_pointer")));
         QVERIFY(registry.hasFunction(QStringLiteral("abs")));
         QVERIFY(registry.hasFunction(QStringLiteral("sqrt")));
         QVERIFY(registry.hasFunction(QStringLiteral("floor")));
@@ -782,6 +802,67 @@ private slots:
         auto text = registry.callFunction(std::move(toStr));
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(text.asString(), QStringLiteral("ab"));
+    }
+
+    void charAndAnyBuiltinsRunThroughRegistry()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+
+        auto call = [&](const QString& name, std::vector<abel::AbelValue> args) {
+            return registry.callFunction(abel::BuiltinFunctionCall{ctx, name, std::move(args), {}, {}});
+        };
+
+        QCOMPARE(call(QStringLiteral("char_code"), {abel::AbelValue::makeChar(QChar('A'))}).asInt(), 65);
+        QCOMPARE(call(QStringLiteral("char_from_code"), {abel::AbelValue::makeInt(97)}).asChar(), QChar('a'));
+        QVERIFY(call(QStringLiteral("char_is_digit"), {abel::AbelValue::makeChar(QChar('7'))}).asBool());
+        QVERIFY(call(QStringLiteral("char_is_letter"), {abel::AbelValue::makeChar(QChar('k'))}).asBool());
+        QVERIFY(call(QStringLiteral("char_is_alnum"), {abel::AbelValue::makeChar(QChar('8'))}).asBool());
+        QVERIFY(call(QStringLiteral("char_is_space"), {abel::AbelValue::makeChar(QChar(' '))}).asBool());
+        QVERIFY(call(QStringLiteral("char_is_upper"), {abel::AbelValue::makeChar(QChar('A'))}).asBool());
+        QVERIFY(call(QStringLiteral("char_is_lower"), {abel::AbelValue::makeChar(QChar('a'))}).asBool());
+        QCOMPARE(call(QStringLiteral("char_upper"), {abel::AbelValue::makeChar(QChar('a'))}).asChar(), QChar('A'));
+        QCOMPARE(call(QStringLiteral("char_lower"), {abel::AbelValue::makeChar(QChar('A'))}).asChar(), QChar('a'));
+        QCOMPARE(call(QStringLiteral("char_to_str"), {abel::AbelValue::makeChar(QChar('z'))}).asString(), QStringLiteral("z"));
+
+        abel::AbelValue anyInt = abel::AbelValue::makeAny(abel::AbelValue::makeInt(7, abel::TypeKind::I64));
+        QCOMPARE(call(QStringLiteral("any_type"), {anyInt}).asString(), QStringLiteral("i64"));
+        QVERIFY(call(QStringLiteral("any_is"), {anyInt, abel::AbelValue::makeString(QStringLiteral("integer"))}).asBool());
+        QVERIFY(call(QStringLiteral("any_is_int"), {anyInt}).asBool());
+        QVERIFY(!call(QStringLiteral("any_is_str"), {anyInt}).asBool());
+
+        abel::AbelValue anyVector = abel::AbelValue::makeAny(
+            abel::AbelValue::makeVector(abel::makeType(abel::TypeKind::Str),
+                                        {abel::AbelValue::makeString(QStringLiteral("x"))}));
+        QVERIFY(call(QStringLiteral("any_is_vector"), {anyVector}).asBool());
+        QVERIFY(ctx.diagnostics().isEmpty());
+    }
+
+    void charAndAnyBuiltinsReportRuntimeMisuse()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+
+        registry.callFunction(abel::BuiltinFunctionCall{
+            ctx,
+            QStringLiteral("char_from_code"),
+            {abel::AbelValue::makeInt(70000)},
+            {},
+            {},
+        });
+        QVERIFY(!ctx.diagnostics().isEmpty());
+        QCOMPARE(ctx.diagnostics().back().code, QStringLiteral("E0451"));
+
+        abel::AbelRuntimeContext anyCtx;
+        registry.callFunction(abel::BuiltinFunctionCall{
+            anyCtx,
+            QStringLiteral("any_type"),
+            {abel::AbelValue::makeInt(1)},
+            {},
+            {},
+        });
+        QVERIFY(!anyCtx.diagnostics().isEmpty());
+        QCOMPARE(anyCtx.diagnostics().back().code, QStringLiteral("E0460"));
     }
 
     void debugAssertReportsOnlyWhenFalse()

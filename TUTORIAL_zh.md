@@ -550,6 +550,33 @@ fn int main() {
 }
 ```
 
+常用字符 helper 属于 v1 `std.char` 第一片，按 Qt `QChar` 语义工作：
+
+```abel
+fn int main() {
+    char c = 'a';
+    int code = char_code(c);
+    char back = char_from_code(code);
+
+    bool ok = char_is_letter(c)
+        && char_is_lower(c)
+        && char_is_upper(char_upper(c))
+        && char_lower('A') == c
+        && char_is_digit('7')
+        && char_is_alnum('8')
+        && char_is_space(' ')
+        && char_to_str(back) == "a";
+
+    return code;
+}
+```
+
+`char_from_code(int)` 接受 `0..65535` 的 Qt/UTF-16 code unit；越界是运行期诊断。`char_*` 也支持 pipe：
+
+```abel
+bool ok = 'a' |> char_upper |> char_is_upper;
+```
+
 ---
 
 ## 12. operator
@@ -690,7 +717,38 @@ fn int main() {
 
 	这些 API 不把 Abel 变成安全沙箱：路径权限、覆盖写入、删除目录树、符号链接、并发写入等仍按宿主系统/Qt 行为处理。失败时产生运行期诊断；类型和参数个数错误应由 `abel check` 拦住。
 
-### 13.3 调试与测试
+### 13.3 any 检查
+
+`std.any` 第一片提供运行时类型观察和谓词，但不提供动态兜底：
+
+```abel
+fn int main() {
+    any x = 7;
+    any s = "kappa";
+
+    bool ok = any_type(x) == "i32"
+        && any_is(x, "integer")
+        && any_is_int(x)
+        && any_is_str(s)
+        && (x |> any_is_int)
+        && (x |> any_is("i32"));
+
+    int y = cast<int>(x);   // 真正取出值仍然用 cast<T>(any)
+    return y;
+}
+```
+
+规则：
+
+```text
+any_type(any) -> str
+any_is(any, str expected) -> bool
+any_is_bool/int/double/char/str/vector/pointer(any) -> bool
+```
+
+`any_is(x, "integer")` / `"numeric"` / `"vector"` / `"pointer"` 等是检查工具；从 `any` 取出静态类型值仍必须显式 `cast<T>(x)`。不要把 `any` 当成 Python 式动态 fallback。
+
+### 13.4 调试与测试
 
 ```abel
 debug_break();

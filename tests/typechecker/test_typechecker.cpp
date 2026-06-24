@@ -225,6 +225,71 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsCharAndAnyBuiltins()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                char a = 'a';
+                int code = char_code(a);
+                char b = char_from_code(code);
+                bool charOk = char_is_lower(a)
+                    && char_is_upper(char_upper(a))
+                    && char_is_letter(a)
+                    && char_is_digit('7')
+                    && char_is_alnum('8')
+                    && char_is_space(' ')
+                    && char_lower('A') == a
+                    && char_to_str(b).len() == 1;
+
+                any x = 7;
+                any s = "kappa";
+                any chars = str_to_chars("ab");
+                bool anyOk = any_type(x).len() > 0
+                    && any_is(x, "integer")
+                    && any_is_int(x)
+                    && !any_is_double(x)
+                    && any_is_str(s)
+                    && any_is_vector(chars);
+
+                bool pipeOk = a |> char_upper |> char_is_upper;
+                bool pipeAny = x |> any_is_int;
+                bool pipeNamed = x |> any_is("i32");
+                if (charOk && anyOk && pipeOk && pipeAny && pipeNamed) {
+                    return code;
+                }
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsCharAndAnyBuiltinMisuse()
+    {
+        auto badCharArg = checkSource(QStringLiteral("fn int main() { int x = char_code(1); return x; }"));
+        QVERIFY(!badCharArg.diagnostics.isEmpty());
+
+        auto badCodeArg = checkSource(QStringLiteral("fn int main() { char c = char_from_code(\"x\"); return 0; }"));
+        QVERIFY(!badCodeArg.diagnostics.isEmpty());
+
+        auto badAnyValue = checkSource(QStringLiteral("fn int main() { str t = any_type(1); return t.len(); }"));
+        QVERIFY(!badAnyValue.diagnostics.isEmpty());
+
+        auto badAnyExpected = checkSource(QStringLiteral(R"(
+            fn int main() {
+                any x = 1;
+                bool ok = any_is(x, 1);
+                return ok;
+            }
+        )"));
+        QVERIFY(!badAnyExpected.diagnostics.isEmpty());
+
+        auto badPipeAny = checkSource(QStringLiteral("fn int main() { bool ok = 1 |> any_is_int; return ok; }"));
+        QVERIFY(!badPipeAny.diagnostics.isEmpty());
+    }
+
     void acceptsStringBuiltinMethods()
     {
         const QString src = QStringLiteral(R"(

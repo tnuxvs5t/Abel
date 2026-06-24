@@ -722,6 +722,141 @@ AbelValue builtinCharsToStr(BuiltinFunctionCall& call)
     return AbelValue::makeString(out);
 }
 
+AbelValue builtinChar(BuiltinFunctionCall& call)
+{
+    const QString& name = call.name;
+    const AbelValue& value = call.args[0];
+    const SourceSpan span = call.argSpans.empty() ? call.callSpan : call.argSpans[0];
+
+    if (name == QStringLiteral("char_from_code")) {
+        if (!value.type().isInteger()) {
+            call.ctx.error(QStringLiteral("E0450"),
+                           QStringLiteral("char_from_code expects integer, got %1").arg(value.type().displayName()),
+                           span);
+            return AbelValue::makeUnknown();
+        }
+        const qint64 code = value.asInt();
+        if (code < 0 || code > 0xffff) {
+            call.ctx.error(QStringLiteral("E0451"),
+                           QStringLiteral("char_from_code expects codepoint in 0..65535, got %1").arg(code),
+                           span);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeChar(QChar(static_cast<char16_t>(code)));
+    }
+
+    if (value.type().kind != TypeKind::Char) {
+        call.ctx.error(QStringLiteral("E0450"),
+                       QStringLiteral("%1 expects char, got %2").arg(name, value.type().displayName()),
+                       span);
+        return AbelValue::makeUnknown();
+    }
+
+    const QChar ch = value.asChar();
+    if (name == QStringLiteral("char_code"))
+        return AbelValue::makeInt(ch.unicode(), TypeKind::I32);
+    if (name == QStringLiteral("char_is_digit"))
+        return AbelValue::makeBool(ch.isDigit());
+    if (name == QStringLiteral("char_is_letter"))
+        return AbelValue::makeBool(ch.isLetter());
+    if (name == QStringLiteral("char_is_alnum"))
+        return AbelValue::makeBool(ch.isLetterOrNumber());
+    if (name == QStringLiteral("char_is_space"))
+        return AbelValue::makeBool(ch.isSpace());
+    if (name == QStringLiteral("char_is_upper"))
+        return AbelValue::makeBool(ch.isUpper());
+    if (name == QStringLiteral("char_is_lower"))
+        return AbelValue::makeBool(ch.isLower());
+    if (name == QStringLiteral("char_upper"))
+        return AbelValue::makeChar(ch.toUpper());
+    if (name == QStringLiteral("char_lower"))
+        return AbelValue::makeChar(ch.toLower());
+    if (name == QStringLiteral("char_to_str"))
+        return AbelValue::makeString(QString(ch));
+
+    call.ctx.error(QStringLiteral("E0452"), QStringLiteral("unknown char builtin '%1'").arg(name), call.callSpan);
+    return AbelValue::makeUnknown();
+}
+
+QString runtimeTypeName(const AbelValue& value)
+{
+    if (value.type().kind == TypeKind::Any)
+        return runtimeTypeName(value.asAny()->value);
+    return value.type().displayName();
+}
+
+bool runtimeTypeMatches(const AbelValue& value, const QString& expected)
+{
+    const AbelValue& unwrapped = value.type().kind == TypeKind::Any ? value.asAny()->value : value;
+    const AbelType& type = unwrapped.type();
+    const QString normalized = expected.trimmed().toLower();
+
+    if (normalized == QStringLiteral("integer"))
+        return type.isInteger();
+    if (normalized == QStringLiteral("numeric") || normalized == QStringLiteral("number"))
+        return type.isNumeric();
+    if (normalized == QStringLiteral("pointer"))
+        return type.isPointer();
+    if (normalized == QStringLiteral("vector"))
+        return type.kind == TypeKind::Vector;
+    if (normalized == QStringLiteral("struct"))
+        return type.kind == TypeKind::Struct;
+    if (normalized == QStringLiteral("function") || normalized == QStringLiteral("func"))
+        return type.kind == TypeKind::Function;
+    if (normalized == QStringLiteral("int"))
+        return type.kind == TypeKind::I32;
+    if (normalized == QStringLiteral("long") || normalized == QStringLiteral("ll"))
+        return type.kind == TypeKind::I64;
+    if (normalized == QStringLiteral("double"))
+        return type.kind == TypeKind::F64;
+
+    return type.displayName() == expected || type.displayName().toLower() == normalized;
+}
+
+AbelValue builtinAny(BuiltinFunctionCall& call)
+{
+    const QString& name = call.name;
+    if (call.args.empty())
+        return AbelValue::makeUnknown();
+
+    const AbelValue& value = call.args[0];
+    const SourceSpan span = call.argSpans.empty() ? call.callSpan : call.argSpans[0];
+    if (value.type().kind != TypeKind::Any) {
+        call.ctx.error(QStringLiteral("E0460"),
+                       QStringLiteral("%1 expects any argument, got %2").arg(name, value.type().displayName()),
+                       span);
+        return AbelValue::makeUnknown();
+    }
+
+    if (name == QStringLiteral("any_type"))
+        return AbelValue::makeString(runtimeTypeName(value));
+
+    if (name == QStringLiteral("any_is")) {
+        auto expected = requireStringArg(call, 1);
+        if (!expected.has_value())
+            return AbelValue::makeUnknown();
+        return AbelValue::makeBool(runtimeTypeMatches(value, *expected));
+    }
+
+    if (name == QStringLiteral("any_is_bool"))
+        return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("bool")));
+    if (name == QStringLiteral("any_is_int"))
+        return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("integer")));
+    if (name == QStringLiteral("any_is_double"))
+        return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("f64")));
+    if (name == QStringLiteral("any_is_char"))
+        return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("char")));
+    if (name == QStringLiteral("any_is_str"))
+        return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("str")));
+    if (name == QStringLiteral("any_is_vector"))
+        return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("vector")));
+    if (name == QStringLiteral("any_is_pointer"))
+        return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("pointer")));
+
+    call.ctx.error(QStringLiteral("E0461"), QStringLiteral("unknown any builtin '%1'").arg(name), call.callSpan);
+    return AbelValue::makeUnknown();
+}
+
 std::optional<AbelValue> scanTokenToValue(BuiltinFunctionCall& call, const AbelType& target, const SourceSpan& span)
 {
     if (!call.readToken) {
@@ -1527,6 +1662,26 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("env_get"), 1, 1, false, builtinFilePath, QStringLiteral("read environment variable")});
     registry.registerFunction({QStringLiteral("str_to_chars"), 1, 1, false, builtinStrToChars, QStringLiteral("convert str to vector<char>")});
     registry.registerFunction({QStringLiteral("chars_to_str"), 1, 1, false, builtinCharsToStr, QStringLiteral("convert vector<char> to str")});
+    registry.registerFunction({QStringLiteral("char_code"), 1, 1, false, builtinChar, QStringLiteral("Unicode code unit of char")});
+    registry.registerFunction({QStringLiteral("char_from_code"), 1, 1, false, builtinChar, QStringLiteral("char from Unicode code unit")});
+    registry.registerFunction({QStringLiteral("char_is_digit"), 1, 1, false, builtinChar, QStringLiteral("digit char test")});
+    registry.registerFunction({QStringLiteral("char_is_letter"), 1, 1, false, builtinChar, QStringLiteral("letter char test")});
+    registry.registerFunction({QStringLiteral("char_is_alnum"), 1, 1, false, builtinChar, QStringLiteral("letter-or-number char test")});
+    registry.registerFunction({QStringLiteral("char_is_space"), 1, 1, false, builtinChar, QStringLiteral("space char test")});
+    registry.registerFunction({QStringLiteral("char_is_upper"), 1, 1, false, builtinChar, QStringLiteral("uppercase char test")});
+    registry.registerFunction({QStringLiteral("char_is_lower"), 1, 1, false, builtinChar, QStringLiteral("lowercase char test")});
+    registry.registerFunction({QStringLiteral("char_upper"), 1, 1, false, builtinChar, QStringLiteral("uppercase char")});
+    registry.registerFunction({QStringLiteral("char_lower"), 1, 1, false, builtinChar, QStringLiteral("lowercase char")});
+    registry.registerFunction({QStringLiteral("char_to_str"), 1, 1, false, builtinChar, QStringLiteral("single-char string")});
+    registry.registerFunction({QStringLiteral("any_type"), 1, 1, false, builtinAny, QStringLiteral("runtime type name inside any")});
+    registry.registerFunction({QStringLiteral("any_is"), 2, 2, false, builtinAny, QStringLiteral("test runtime type inside any")});
+    registry.registerFunction({QStringLiteral("any_is_bool"), 1, 1, false, builtinAny, QStringLiteral("test any contains bool")});
+    registry.registerFunction({QStringLiteral("any_is_int"), 1, 1, false, builtinAny, QStringLiteral("test any contains integer")});
+    registry.registerFunction({QStringLiteral("any_is_double"), 1, 1, false, builtinAny, QStringLiteral("test any contains f64")});
+    registry.registerFunction({QStringLiteral("any_is_char"), 1, 1, false, builtinAny, QStringLiteral("test any contains char")});
+    registry.registerFunction({QStringLiteral("any_is_str"), 1, 1, false, builtinAny, QStringLiteral("test any contains str")});
+    registry.registerFunction({QStringLiteral("any_is_vector"), 1, 1, false, builtinAny, QStringLiteral("test any contains vector")});
+    registry.registerFunction({QStringLiteral("any_is_pointer"), 1, 1, false, builtinAny, QStringLiteral("test any contains pointer")});
     registry.registerFunction({QStringLiteral("abs"), 1, 1, false, builtinMath, QStringLiteral("absolute value")});
     registry.registerFunction({QStringLiteral("sqrt"), 1, 1, false, builtinMath, QStringLiteral("square root as f64")});
     registry.registerFunction({QStringLiteral("floor"), 1, 1, false, builtinMath, QStringLiteral("floor as f64")});

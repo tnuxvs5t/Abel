@@ -218,6 +218,63 @@ bool mathBuiltinRequiresInteger(const QString& name)
         || name == QStringLiteral("lcm");
 }
 
+bool isCharBuiltinName(const QString& name)
+{
+    return name == QStringLiteral("char_code")
+        || name == QStringLiteral("char_from_code")
+        || name == QStringLiteral("char_is_digit")
+        || name == QStringLiteral("char_is_letter")
+        || name == QStringLiteral("char_is_alnum")
+        || name == QStringLiteral("char_is_space")
+        || name == QStringLiteral("char_is_upper")
+        || name == QStringLiteral("char_is_lower")
+        || name == QStringLiteral("char_upper")
+        || name == QStringLiteral("char_lower")
+        || name == QStringLiteral("char_to_str");
+}
+
+AbelType charBuiltinReturnType(const QString& name)
+{
+    if (name == QStringLiteral("char_code"))
+        return makeType(TypeKind::I32);
+    if (name == QStringLiteral("char_is_digit")
+        || name == QStringLiteral("char_is_letter")
+        || name == QStringLiteral("char_is_alnum")
+        || name == QStringLiteral("char_is_space")
+        || name == QStringLiteral("char_is_upper")
+        || name == QStringLiteral("char_is_lower")) {
+        return makeType(TypeKind::Bool);
+    }
+    if (name == QStringLiteral("char_to_str"))
+        return makeType(TypeKind::Str);
+    return makeType(TypeKind::Char);
+}
+
+bool isAnyBuiltinName(const QString& name)
+{
+    return name == QStringLiteral("any_type")
+        || name == QStringLiteral("any_is")
+        || name == QStringLiteral("any_is_bool")
+        || name == QStringLiteral("any_is_int")
+        || name == QStringLiteral("any_is_double")
+        || name == QStringLiteral("any_is_char")
+        || name == QStringLiteral("any_is_str")
+        || name == QStringLiteral("any_is_vector")
+        || name == QStringLiteral("any_is_pointer");
+}
+
+int anyBuiltinArity(const QString& name)
+{
+    return name == QStringLiteral("any_is") ? 2 : 1;
+}
+
+AbelType anyBuiltinReturnType(const QString& name)
+{
+    if (name == QStringLiteral("any_type"))
+        return makeType(TypeKind::Str);
+    return makeType(TypeKind::Bool);
+}
+
 ExprType unknownExprType()
 {
     return {makeType(TypeKind::Unknown), ValueCategory::PRValue, false};
@@ -1801,6 +1858,34 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
+        if (isCharBuiltinName(name)) {
+            if (argc != 1)
+                return errorExpr(span, QStringLiteral("%1 expects one argument").arg(name));
+            if (name == QStringLiteral("char_from_code")) {
+                if (!lhs.type.isInteger())
+                    return errorExpr(span, QStringLiteral("char_from_code expects integer, got %1").arg(lhs.type.displayName()));
+            } else if (lhs.type.kind != TypeKind::Char) {
+                return errorExpr(span, QStringLiteral("%1 expects char, got %2").arg(name, lhs.type.displayName()));
+            }
+            return {charBuiltinReturnType(name), ValueCategory::PRValue, false};
+        }
+        if (isAnyBuiltinName(name)) {
+            const qsizetype expected = anyBuiltinArity(name);
+            if (argc != expected)
+                return errorExpr(span, QStringLiteral("%1 expects %2 argument(s)").arg(name).arg(expected));
+            bool hasUnknown = false;
+            if (lhs.type.kind != TypeKind::Any)
+                error(span, QStringLiteral("%1 argument 1 expects any, got %2").arg(name, lhs.type.displayName()));
+            if (name == QStringLiteral("any_is")) {
+                ExprType expectedName = checkExpr(*args[0]);
+                hasUnknown = hasUnknown || isUnknownType(expectedName.type);
+                if (!isUnknownType(expectedName.type) && expectedName.type.kind != TypeKind::Str)
+                    error(args[0]->span, QStringLiteral("any_is argument 2 expects str, got %1").arg(expectedName.type.displayName()));
+            }
+            if (hasUnknown)
+                return unknownExprType();
+            return {anyBuiltinReturnType(name), ValueCategory::PRValue, false};
+        }
         if (isFilePathBuiltinName(name)) {
             const qsizetype expected = filePathBuiltinArity(name);
             if (argc != expected)
@@ -2197,6 +2282,43 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                 }
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (isCharBuiltinName(name->name)) {
+            if (argc != 1)
+                return errorExpr(expr.span, QStringLiteral("%1 expects one argument").arg(name->name));
+            ExprType arg = checkExpr(*expr.args[0]);
+            if (!isUnknownType(arg.type)) {
+                if (name->name == QStringLiteral("char_from_code")) {
+                    if (!arg.type.isInteger())
+                        return errorExpr(expr.args[0]->span,
+                                         QStringLiteral("char_from_code expects integer, got %1").arg(arg.type.displayName()));
+                } else if (arg.type.kind != TypeKind::Char) {
+                    return errorExpr(expr.args[0]->span,
+                                     QStringLiteral("%1 expects char, got %2").arg(name->name, arg.type.displayName()));
+                }
+            }
+            return {charBuiltinReturnType(name->name), ValueCategory::PRValue, false};
+        }
+        if (isAnyBuiltinName(name->name)) {
+            const qsizetype expected = anyBuiltinArity(name->name);
+            if (argc != expected)
+                return errorExpr(expr.span, QStringLiteral("%1 expects %2 argument(s)").arg(name->name).arg(expected));
+            bool hasUnknown = false;
+            ExprType value = checkExpr(*expr.args[0]);
+            hasUnknown = hasUnknown || isUnknownType(value.type);
+            if (!isUnknownType(value.type) && value.type.kind != TypeKind::Any)
+                error(expr.args[0]->span,
+                      QStringLiteral("%1 argument 1 expects any, got %2").arg(name->name, value.type.displayName()));
+            if (name->name == QStringLiteral("any_is")) {
+                ExprType expectedName = checkExpr(*expr.args[1]);
+                hasUnknown = hasUnknown || isUnknownType(expectedName.type);
+                if (!isUnknownType(expectedName.type) && expectedName.type.kind != TypeKind::Str)
+                    error(expr.args[1]->span,
+                          QStringLiteral("any_is argument 2 expects str, got %1").arg(expectedName.type.displayName()));
+            }
+            if (hasUnknown)
+                return unknownExprType();
+            return {anyBuiltinReturnType(name->name), ValueCategory::PRValue, false};
         }
         if (isFilePathBuiltinName(name->name)) {
             const qsizetype expected = filePathBuiltinArity(name->name);
