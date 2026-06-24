@@ -1538,8 +1538,17 @@ private slots:
                 int y;
             }
 
+            struct Size {
+                int w;
+                int h;
+            }
+
             fn Point operator +(Point a, Point b) {
                 return Point(a.x + b.x, a.y + b.y);
+            }
+
+            fn Size operator +(Size a, Size b) {
+                return Size(a.w + b.w, a.h + b.h);
             }
 
             fn bool operator ==(Point a, Point b) {
@@ -1551,7 +1560,8 @@ private slots:
                 Point b = Point(3, 4);
                 Point c = a + b;
                 if (c == Point(4, 6)) {
-                    return c.x + c.y;
+                    Size s = Size(5, 6) + Size(7, 8);
+                    return c.x + c.y + s.w + s.h;
                 }
                 return 0;
             }
@@ -1595,6 +1605,46 @@ private slots:
             }
         )"));
         QVERIFY(!badOperand.diagnostics.isEmpty());
+
+        auto duplicateSignature = checkSource(QStringLiteral(R"(
+            struct Point {
+                int x;
+            }
+
+            fn Point operator +(Point a, Point b) {
+                return a;
+            }
+
+            fn Point operator +(Point a, Point b) {
+                return b;
+            }
+
+            fn int main() {
+                return 0;
+            }
+        )"));
+        QVERIFY(!duplicateSignature.diagnostics.isEmpty());
+
+        auto ambiguous = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+
+            fn Box operator +(Box a, any b) {
+                return a;
+            }
+
+            fn Box operator +(any a, Box b) {
+                return b;
+            }
+
+            fn int main() {
+                Box a = Box(1);
+                Box c = a + a;
+                return c.x;
+            }
+        )"));
+        QVERIFY(!ambiguous.diagnostics.isEmpty());
     }
 };
 

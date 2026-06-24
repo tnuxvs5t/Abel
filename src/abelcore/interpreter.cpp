@@ -515,6 +515,18 @@ bool Interpreter::collectFunctions(const ProgramNode& program, AbelRuntimeContex
             bool duplicateInModule = false;
             for (const FunctionDeclNode* other : existing) {
                 if (sameDeclNamespace(*other, *fn)) {
+                    if (fn->isOperator && other->isOperator && fn->operatorSymbol == other->operatorSymbol) {
+                        if (sameOperatorSignature(*other, *fn)) {
+                            ctx.error(QStringLiteral("E0506"),
+                                      QStringLiteral("duplicate operator '%1' overload with the same signature in package '%2' module '%3'")
+                                          .arg(fn->operatorSymbol, fn->packageName, fn->moduleName),
+                                      fn->span);
+                            ok = false;
+                            duplicateInModule = true;
+                            break;
+                        }
+                        continue;
+                    }
                     ctx.error(QStringLiteral("E0506"),
                               QStringLiteral("duplicate function '%1' in package '%2' module '%3'")
                                   .arg(fn->name, fn->packageName, fn->moduleName),
@@ -529,6 +541,21 @@ bool Interpreter::collectFunctions(const ProgramNode& program, AbelRuntimeContex
         }
     }
     return ok;
+}
+
+bool Interpreter::sameOperatorSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs)
+{
+    if (!lhs.isOperator || !rhs.isOperator || lhs.operatorSymbol != rhs.operatorSymbol)
+        return false;
+    if (lhs.params.size() != rhs.params.size())
+        return false;
+    for (size_t i = 0; i < lhs.params.size(); ++i) {
+        const AbelType lhsType = typeFromAstForDecl(*lhs.params[i]->type, lhs);
+        const AbelType rhsType = typeFromAstForDecl(*rhs.params[i]->type, rhs);
+        if (lhsType != rhsType)
+            return false;
+    }
+    return true;
 }
 
 bool Interpreter::collectEnums(const ProgramNode& program, AbelRuntimeContext& ctx)
@@ -618,6 +645,24 @@ const FunctionDeclNode* Interpreter::findRootFunctionInFile(const QString& name,
             return fn;
     }
     return nullptr;
+}
+
+QList<const FunctionDeclNode*> Interpreter::resolveFunctionCandidates(const QString& name) const
+{
+    const auto candidates = m_functions.value(name);
+    if (candidates.isEmpty())
+        return {};
+    QList<const FunctionDeclNode*> current;
+    QList<const FunctionDeclNode*> visible;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (isDeclInCurrentModule(*fn))
+            current.push_back(fn);
+        else if (isDeclVisible(*fn, fn->exported))
+            visible.push_back(fn);
+    }
+    if (!current.isEmpty())
+        return current;
+    return visible;
 }
 
 const FunctionDeclNode* Interpreter::resolveFunction(const QString& name) const
@@ -2192,20 +2237,55 @@ std::optional<AbelValue> Interpreter::evalUserBinaryOperator(const QString& op,
                                                              const SourceSpan& span)
 {
     const QString name = QStringLiteral("operator ") + op;
-    const FunctionDeclNode* fn = resolveFunction(name);
-    if (!fn)
+    const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name);
+    if (candidates.isEmpty())
         return std::nullopt;
-    if (!fn->isOperator || fn->operatorSymbol != op) {
-        error(QStringLiteral("E0521"), QStringLiteral("function '%1' is not a valid operator overload").arg(name), fn->span);
+
+    QList<const FunctionDeclNode*> matches;
+    bool sawOperator = false;
+    int bestScore = 1'000'000;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (!fn || !fn->isOperator || fn->operatorSymbol != op)
+            continue;
+        sawOperator = true;
+        if (fn->params.size() != 2 || (!fn->params.empty() && fn->params.back()->variadic))
+            continue;
+        const AbelType lhsParam = typeFromAstForDecl(*fn->params[0]->type, *fn);
+        const AbelType rhsParam = typeFromAstForDecl(*fn->params[1]->type, *fn);
+        const auto lhsScore = scoreValueArgument(lhsParam, lhs);
+        const auto rhsScore = scoreValueArgument(rhsParam, rhs);
+        if (!lhsScore || !rhsScore)
+            continue;
+        const int score = *lhsScore + *rhsScore;
+        if (score < bestScore) {
+            bestScore = score;
+            matches.clear();
+            matches.push_back(fn);
+        } else if (score == bestScore) {
+            matches.push_back(fn);
+        }
+    }
+
+    if (!sawOperator) {
+        error(QStringLiteral("E0521"), QStringLiteral("function '%1' is not a valid operator overload").arg(name), span);
         return AbelValue::makeUnknown();
     }
-    if (fn->params.size() != 2 || (!fn->params.empty() && fn->params.back()->variadic)) {
+    if (matches.isEmpty()) {
         error(QStringLiteral("E0521"),
-              QStringLiteral("operator '%1' overload must take exactly two parameters").arg(op),
-              fn->span);
+              QStringLiteral("no matching operator '%1' overload for %2 and %3")
+                  .arg(op, lhs.type().displayName(), rhs.type().displayName()),
+              span);
+        return AbelValue::makeUnknown();
+    }
+    if (matches.size() > 1) {
+        error(QStringLiteral("E0521"),
+              QStringLiteral("operator '%1' is ambiguous for %2 and %3")
+                  .arg(op, lhs.type().displayName(), rhs.type().displayName()),
+              span);
         return AbelValue::makeUnknown();
     }
 
+    const FunctionDeclNode* fn = matches.front();
     RuntimeFrameGuard frame(*m_ctx, true, QStringLiteral("operator %1").arg(op), span);
     return callFunction(*fn, {lhs, rhs}).value;
 }
@@ -3089,6 +3169,23 @@ bool Interpreter::canBindReferenceValue(const AbelType& referenceType, const Abe
     AbelType referred = *referenceType.pointee;
     referred.isConst = false;
     return canAssignValue(referred, sourceType);
+}
+
+std::optional<int> Interpreter::scoreValueArgument(const AbelType& paramType, const AbelValue& arg) const
+{
+    if (arg.type().kind == TypeKind::Unknown)
+        return 0;
+    if (paramType.isReference()) {
+        const bool isConstRef = paramType.pointee && paramType.pointee->isConst;
+        if (!isConstRef || !canBindReferenceValue(paramType, arg.type()))
+            return std::nullopt;
+        AbelType referred = *paramType.pointee;
+        referred.isConst = false;
+        return referred == arg.type() ? 1 : 2;
+    }
+    if (!canAssignValue(paramType, arg.type()))
+        return std::nullopt;
+    return paramType == arg.type() ? 0 : 1;
 }
 
 void Interpreter::error(const QString& code, const QString& message, const SourceSpan& span)

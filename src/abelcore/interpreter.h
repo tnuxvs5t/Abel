@@ -67,8 +67,10 @@ private:
     bool collectEnums(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectTypeAliases(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx);
+    bool sameOperatorSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
     const FunctionDeclNode* findRootFunctionInFile(const QString& name, const QString& file) const;
+    QList<const FunctionDeclNode*> resolveFunctionCandidates(const QString& name) const;
     const FunctionDeclNode* resolveFunction(const QString& name) const;
     const FunctionDeclNode* resolveFunctionInModule(const QString& moduleName, const QString& name) const;
     const StructRuntimeInfo* resolveStruct(const QString& name) const;
@@ -155,6 +157,7 @@ private:
     AbelValue convertOrError(const AbelValue& value, const AbelType& target, const SourceSpan& span);
     bool isReadOnlyBinding(const AbelType& type, bool syntacticConst) const;
     bool canBindReferenceValue(const AbelType& referenceType, const AbelType& sourceType) const;
+    std::optional<int> scoreValueArgument(const AbelType& paramType, const AbelValue& arg) const;
     void error(const QString& code, const QString& message, const SourceSpan& span);
 };
 

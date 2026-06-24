@@ -1712,8 +1712,17 @@ private slots:
                 int y;
             }
 
+            struct Size {
+                int w;
+                int h;
+            }
+
             fn Point operator +(Point a, Point b) {
                 return Point(a.x + b.x, a.y + b.y);
+            }
+
+            fn Size operator +(Size a, Size b) {
+                return Size(a.w + b.w, a.h + b.h);
             }
 
             fn bool operator ==(Point a, Point b) {
@@ -1726,7 +1735,8 @@ private slots:
                 Point c = a + b;
                 Point d = c + Point(1, 2);
                 if (d == Point(5, 8)) {
-                    return d.x + d.y;
+                    Size s = Size(5, 6) + Size(7, 8);
+                    return d.x + d.y + s.w + s.h;
                 }
                 return 0;
             }
@@ -1735,7 +1745,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 13);
+        QCOMPARE(result.exitCode, 39);
     }
 };
 

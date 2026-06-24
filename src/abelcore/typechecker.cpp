@@ -714,6 +714,16 @@ void TypeChecker::collectFunctions(const ProgramNode& program)
             bool duplicateInPackage = false;
             for (const FunctionDeclNode* other : existing) {
                 if (sameDeclNamespace(*other, *fn)) {
+                    if (fn->isOperator && other->isOperator && fn->operatorSymbol == other->operatorSymbol) {
+                        if (sameOperatorSignature(*other, *fn)) {
+                            error(fn->span,
+                                  QStringLiteral("duplicate operator '%1' overload with the same signature in package '%2' module '%3'")
+                                      .arg(fn->operatorSymbol, fn->packageName, fn->moduleName));
+                            duplicateInPackage = true;
+                            break;
+                        }
+                        continue;
+                    }
                     error(fn->span, QStringLiteral("duplicate function '%1' in package '%2' module '%3'")
                                         .arg(fn->name, fn->packageName, fn->moduleName));
                     duplicateInPackage = true;
@@ -728,6 +738,21 @@ void TypeChecker::collectFunctions(const ProgramNode& program)
     }
 }
 
+bool TypeChecker::sameOperatorSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs)
+{
+    if (!lhs.isOperator || !rhs.isOperator || lhs.operatorSymbol != rhs.operatorSymbol)
+        return false;
+    if (lhs.params.size() != rhs.params.size())
+        return false;
+    for (size_t i = 0; i < lhs.params.size(); ++i) {
+        const AbelType lhsType = typeFromAstForDecl(*lhs.params[i]->type, lhs, false);
+        const AbelType rhsType = typeFromAstForDecl(*rhs.params[i]->type, rhs, false);
+        if (lhsType != rhsType)
+            return false;
+    }
+    return true;
+}
+
 const FunctionDeclNode* TypeChecker::findRootFunction(const QString& name) const
 {
     const auto candidates = m_functions.value(name);
@@ -737,6 +762,37 @@ const FunctionDeclNode* TypeChecker::findRootFunction(const QString& name) const
             return fn;
     }
     return nullptr;
+}
+
+QList<const FunctionDeclNode*> TypeChecker::resolveFunctionCandidates(const QString& name, const SourceSpan& span, bool diagnose)
+{
+    const auto candidates = m_functions.value(name);
+    if (candidates.isEmpty())
+        return {};
+
+    QList<const FunctionDeclNode*> current;
+    QList<const FunctionDeclNode*> visible;
+    QList<const FunctionDeclNode*> hidden;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (isDeclInCurrentModule(*fn))
+            current.push_back(fn);
+        else if (isFunctionVisible(*fn))
+            visible.push_back(fn);
+        else
+            hidden.push_back(fn);
+    }
+    if (!current.isEmpty())
+        return current;
+    if (!visible.isEmpty())
+        return visible;
+    if (hidden.size() == 1) {
+        if (diagnose)
+            requireFunctionVisible(*hidden.front(), span);
+        return {};
+    }
+    if (!hidden.isEmpty() && diagnose)
+        error(span, QStringLiteral("function '%1' exists but is not visible from current module").arg(name));
+    return {};
 }
 
 const FunctionDeclNode* TypeChecker::resolveFunction(const QString& name, const SourceSpan& span, bool diagnose)
@@ -1778,18 +1834,53 @@ ExprType TypeChecker::checkUserBinaryOperator(const QString& op,
                                               const QString& fallbackMessage)
 {
     const QString name = QStringLiteral("operator ") + op;
-    const FunctionDeclNode* fn = resolveFunction(name, span, false);
-    if (!fn)
+    const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name, span, false);
+    if (candidates.isEmpty())
         return errorExpr(span, fallbackMessage);
-    if (!fn->isOperator || fn->operatorSymbol != op)
-        return errorExpr(span, QStringLiteral("function '%1' is not a valid operator overload").arg(name));
-    if (fn->params.size() != 2 || (!fn->params.empty() && fn->params.back()->variadic))
-        return errorExpr(fn->span, QStringLiteral("operator '%1' overload must take exactly two parameters").arg(op));
 
-    const AbelType lhsParam = typeFromAstForDecl(*fn->params[0]->type, *fn);
-    const AbelType rhsParam = typeFromAstForDecl(*fn->params[1]->type, *fn);
-    checkParameterArgument(lhsParam, lhs, span, QStringLiteral("operator left operand"));
-    checkParameterArgument(rhsParam, rhs, span, QStringLiteral("operator right operand"));
+    QList<const FunctionDeclNode*> matches;
+    QList<const FunctionDeclNode*> considered;
+    int bestScore = 1'000'000;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (!fn || !fn->isOperator || fn->operatorSymbol != op)
+            continue;
+        considered.push_back(fn);
+        if (fn->params.size() != 2 || (!fn->params.empty() && fn->params.back()->variadic))
+            continue;
+        const AbelType lhsParam = typeFromAstForDecl(*fn->params[0]->type, *fn);
+        const AbelType rhsParam = typeFromAstForDecl(*fn->params[1]->type, *fn);
+        const auto lhsScore = scoreParameterArgument(lhsParam, lhs);
+        const auto rhsScore = scoreParameterArgument(rhsParam, rhs);
+        if (!lhsScore || !rhsScore)
+            continue;
+        const int score = *lhsScore + *rhsScore;
+        if (score < bestScore) {
+            bestScore = score;
+            matches.clear();
+            matches.push_back(fn);
+        } else if (score == bestScore) {
+            matches.push_back(fn);
+        }
+    }
+
+    if (considered.isEmpty())
+        return errorExpr(span, QStringLiteral("function '%1' is not a valid operator overload").arg(name));
+    if (matches.isEmpty()) {
+        return errorExpr(span,
+                         QStringLiteral("no matching operator '%1' overload for %2 and %3")
+                             .arg(op, lhs.type.displayName(), rhs.type.displayName()));
+    }
+    if (matches.size() > 1) {
+        const QStringList origins = declOriginList(matches, [](const FunctionDeclNode& fn) { return fn.name; });
+        return errorExpr(span,
+                         QStringLiteral("operator '%1' is ambiguous for %2 and %3; candidates: %4")
+                             .arg(op,
+                                  lhs.type.displayName(),
+                                  rhs.type.displayName(),
+                                  origins.join(QStringLiteral(", "))));
+    }
+
+    const FunctionDeclNode* fn = matches.front();
     return callReturnExprType(typeFromAstForDecl(*fn->returnType, *fn));
 }
 
@@ -3161,6 +3252,28 @@ void TypeChecker::checkParameterArgument(const AbelType& paramType,
               QStringLiteral("cannot pass %1 to %2 of type %3")
                   .arg(arg.type.displayName(), label, paramType.displayName()));
     }
+}
+
+std::optional<int> TypeChecker::scoreParameterArgument(const AbelType& paramType, const ExprType& arg) const
+{
+    if (isUnknownType(arg.type))
+        return 0;
+    if (paramType.isReference()) {
+        if (arg.category != ValueCategory::LValue)
+            return std::nullopt;
+        if (!isConstReferenceType(paramType) && !arg.isMutable)
+            return std::nullopt;
+        if (!paramType.pointee)
+            return std::nullopt;
+        AbelType referred = *paramType.pointee;
+        referred.isConst = false;
+        if (!isAssignable(referred, arg.type))
+            return std::nullopt;
+        return referred == arg.type ? 1 : 2;
+    }
+    if (!isAssignable(paramType, arg.type))
+        return std::nullopt;
+    return paramType == arg.type ? 0 : 1;
 }
 
 void TypeChecker::pushScope()

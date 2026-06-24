@@ -8,6 +8,8 @@
 #include <QList>
 #include <QSet>
 
+#include <optional>
+
 namespace abel {
 
 struct TypeCheckResult {
@@ -80,8 +82,10 @@ private:
     void collectEnums(const ProgramNode& program);
     void collectTypeAliases(const ProgramNode& program);
     void collectFunctions(const ProgramNode& program);
+    bool sameOperatorSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs);
     void collectBackends(const ProgramNode& program);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
+    QList<const FunctionDeclNode*> resolveFunctionCandidates(const QString& name, const SourceSpan& span, bool diagnose = true);
     const FunctionDeclNode* resolveFunction(const QString& name, const SourceSpan& span, bool diagnose = true);
     const FunctionDeclNode* resolveFunctionInModule(const QString& moduleName,
                                                     const QString& name,
@@ -188,6 +192,7 @@ private:
                                 const ExprType& arg,
                                 const SourceSpan& argSpan,
                                 const QString& label);
+    std::optional<int> scoreParameterArgument(const AbelType& paramType, const ExprType& arg) const;
 
     void pushScope();
     void popScope();
