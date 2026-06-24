@@ -1,57 +1,55 @@
 # Abel
 
-Abel is an experimental programming language runtime built with Qt 6 and C++23.
+Abel is an experimental programming language and runtime built with **Qt 6 + C++23**.
 
-Current implementation scope:
+It is public for visibility and timestamped disclosure, but it is **not open source**. See `LICENSE`.
 
-- lexer, parser, AST, basic name/type checking, and tree-run interpreter;
-- C/C++-style value model with storage, lvalues/prvalues, pointers, mutable `T&`, read-only `const T&`, structs, and vector values;
-- `any`, `any...`, lambda/function values, control flow, and core builtins such as `build_string`, `print`, vector/string methods, char helpers, any inspection helpers, math helpers, and first-slice file/path helpers;
-- backend blocks, resource-node JSON, `QPluginLoader` loading, and Qt/C++ plugin dispatch through `libabelcore.so`;
-- static definite-return checking for functions, methods, and lambdas, so non-void callables missing a return are rejected by `abel check` before `abel run`;
-- runtime diagnostics with Abel stack frames, `file:line:column`, source-line excerpts, and caret lines for the primary error and stack call sites; runtime conversion diagnostics now point at the argument, return expression, assignment RHS, or backend call that caused the conversion instead of falling back to declarations;
-- `std.io` / `std.path` / `std.env` first slices through builtins `scan`, `read_text`, `write_text`, `append_text`, `read_lines`, `write_lines`, `path_exists`, `path_is_file`, `path_is_dir`, `copy_file`, `move_path`, `remove_path`, `path_join`, `path_dirname`, `path_basename`, `path_ext`, `path_absolute`, `path_clean`, `mkdirs`, `current_dir`, `env_exists`, and `env_get`, with TypeChecker and Interpreter sharing the same signatures including pipe-shaped calls;
-- `std.char` / `std.any` first slices through builtins `char_code`, `char_from_code`, `char_is_digit`, `char_is_letter`, `char_is_alnum`, `char_is_space`, `char_is_upper`, `char_is_lower`, `char_upper`, `char_lower`, `char_to_str`, `any_type`, `any_is`, and typed `any_is_*` predicates; these are inspection/conversion helpers only, while `cast<T>(any)` remains the typed extraction mechanism;
-- `std.debug` first slice through builtins `debug_break()` and `debug_assert(bool, any...)`, plus `std.test` first-slice builtins `test_assert`, `test_eq`, `test_ne`, and `test_close`, all reporting through the same runtime diagnostic/stack/source-location path;
-- module/use/export syntax first slice and package multi-file entry: project `abel check/run/build` now parses root-package `src/**/*.abel`, also consumes dependency package non-entry `src/**/*.abel` library sources, keeps the root manifest entry file last, typechecks/runs the merged program while preserving per-file source spans, enforces explicit `use` for cross-module lookup, supports `export use` re-export propagation, supports module-qualified and import-alias-qualified function/struct/backend lookup, and rejects root-package access to non-exported dependency functions/structs/backends;
-- v1 package skeleton with `abel init [project-dir]`, `abel.package.json`, `abel add/remove/update/build`, `abel package publish` into a local registry, local registry index/list/check commands, local path dependencies, local registry dependencies that pick the highest satisfying SemVer version into `.abel/cache/packages`, `file://` registry URI mirror cache under `.abel/cache/registries`, `abel.lock.json`, package graph consumption, same-package-name conflict diagnostics, CMake backend artifact auto-build metadata, and project-local backend artifact cache under `.abel/cache/backend` with `.abel-cache.json` sidecar validation;
-- installable Abel SDK first slice: headers, `libabelcore.so`, `abel` CLI, `AbelConfig.cmake`, `AbelTargets.cmake`, external backend fixture coverage for `find_package(Abel REQUIRED)`, and a backend binder matrix for common scalar/vector types plus `AbelRuntimeContext&` diagnostics and `bindVariadic` / `AbelVariadicArgs` for Abel `any...`;
-- CLI commands: `abel init`, `abel add`, `abel remove`, `abel update`, `abel build`, `abel test`, `abel check`, `abel run`, `abel package check`, `abel package publish`, `abel package registry index/check/list`, `abel resources check`, and `abel run --resource`.
+## What Abel is
 
-Abel still does **not** implement split/JIT, a large VM, HTTP/network registry downloads, a full registry SemVer solver, full versioned/ABI cache invalidation, a stable cross-Qt/cross-compiler ABI, a manifest/hash audit system, or a context exporter. `const T&` currently means a read-only lvalue reference first slice; it does not yet implement prvalue lifetime extension or the full `const T*` / `T* const` matrix. `module` / `use` are now enforced for same-package cross-module lookup; dependency `export` is enforced for cross-package top-level functions/structs/backends; `export use some.module;` re-exports an imported module through the current module; module-qualified lookup and `use some.module as Alias;` work for functions, struct types/constructors, and backend calls. A complete public/private module system and full import/export surface remain v1 follow-up work. Local path and local registry dependencies now support SemVer requirement checks and reject a graph that resolves the same package name to different versions/sources; registry support is currently local directory publish/index/cache plus `file://` URI mirror-cache first slice, and backend plugin auto-build currently exists only as a first CMake-based `backendArtifacts[].build` slice.
+Abel is designed around:
 
-Local registry layout:
+- C/C++-style value semantics: storage, lvalues/prvalues, pointers, references, structs, and vectors.
+- A tree-run interpreter with a static type checker.
+- Qt-native `str` / `char` values (`QString` / `QChar`).
+- Builtin standard-library slices for strings, vectors, math, file/path/env, debug, and tests.
+- `backend` blocks that call Qt/C++ plugins through `libabelcore.so`.
+- Package projects with `abel.package.json`, local dependencies, local registries, lockfiles, backend artifact caching, and project tests.
 
-```text
-registry/
-  .abel-registry.json
-  dep/
-    1.0.0/abel.package.json
-    1.2.0/abel.package.json
-```
+Abel intentionally does **not** pretend to be a safe scripting language. Pointer/null/reference/container invalidation risks follow the C/C++ capability model unless a specific diagnostic is implemented.
 
-Add a registry dependency:
+## Current command surface
 
 ```bash
-build/abel package publish <dep-project-dir> ../registry
-build/abel package registry check ../registry
-build/abel package registry list ../registry
-build/abel add registry dep '^1.0.0' ../registry <project-dir>
-# equivalent URI form:
-build/abel add registry dep '^1.0.0' file:///absolute/path/to/registry <project-dir>
+abel init <project-dir>
+abel check <file-or-project>
+abel run <file-or-project>
+abel test <project-dir>
+abel update <project-dir>
+abel build <project-dir>
+abel add path <dependency-dir> <project-dir>
+abel add registry <name> <version-requirement> <registry-or-file-uri> <project-dir>
+abel remove <dependency-name> <project-dir>
+abel package check <project-dir>
+abel package publish [--overwrite] <project-dir> <registry-dir>
+abel package registry index <registry-dir>
+abel package registry check <registry-dir>
+abel package registry list <registry-dir>
+abel resources check <resource.json>
 ```
 
-`abel package publish <project-dir> <registry-dir>` copies a package to `<registry>/<name>/<version>` while skipping the package's `.abel` cache and refreshes `<registry>/.abel-registry.json`. Existing versions are rejected unless `--overwrite` is passed. `abel package registry index <registry-dir>` rebuilds the index from disk, `abel package registry check <registry-dir>` verifies the index is current, and `abel package registry list <registry-dir>` prints package/version/path rows. When `.abel-registry.json` exists, registry dependency resolution verifies and consumes that index; a stale or malformed index is rejected instead of being silently bypassed. If no index exists yet, Abel still falls back to scanning the local registry directory. `file://` registry URIs are mirrored into `<project-dir>/.abel/cache/registries/...` before normal registry resolution. `abel update/build` copies the selected version into `<project-dir>/.abel/cache/packages/dep/<version>` and records the cached path in `abel.lock.json`.
+Extra runtime flags:
 
-Resource JSON `qtVersion`, `kit`, `platform`, `compiler`, `compilerVersion`, `cxxStandard`, and `abelAbi` are now load-time gates: `abel resources check` validates JSON shape only, while `abel run --resource` / package backend loading rejects resources whose compatibility strings do not match the Abel runtime. Package `backendArtifacts` fill these fields from the current runtime by default, so normal users should not hand-write low-level ResourceNode JSON.
+```bash
+abel run --resource <resource.json> <file-or-project>
+abel test --filter <substring> <project-dir>
+abel test --expect-fail <substring> <project-dir>
+abel test --report-json <report.json> <project-dir>
+abel test --report-junit <report.xml> <project-dir>
+```
 
-`abel build <project-dir>` copies root/dependency backend artifacts into `.abel/cache/backend/...` and writes a neighboring `<plugin>.abel-cache.json` sidecar. `abel run <project-dir>` only prefers the cached plugin when that sidecar still matches the current source artifact path, size, mtime, ResourceNode fields, platform/compiler/C++/Abel ABI strings, and symbol list; if metadata is missing or stale, it falls back to the source artifact path until `abel build` refreshes the cache.
+## Build this repository
 
-`abel test <project-dir>` runs every `tests/**/*.abel` file in a package project. Each test is checked with the same package graph as `abel check`, gets root/dependency library sources, uses the test file as its own entry `main`, auto-loads package backend artifacts, and passes only when it exits with code `0`. If a test file declares `fn void setup()` or `fn void teardown()`, `abel test` calls them before and after `main`; `teardown` still runs after a failing `main`. Use `--filter <substring>` to run only tests whose relative path matches, `--expect-fail <substring>` to track known failing tests by relative path, `--report-json <file>` to write a machine-readable report with total/passed/failed/xfail/xpass counts plus per-test status, phase, exit code, and diagnostics, or `--report-junit <file>` to write a CI-friendly JUnit XML report. Test files can use `test_assert(cond, any...)`, `test_eq(actual, expected, any...)`, and `test_ne(actual, expected, any...)`; assertion failures produce Abel source spans and stack traces.
-
-## Build
-
-This repository is currently pinned to the local Qt/GCC toolchain described in `AGENTS.md`:
+This checkout is pinned to the local Qt/GCC kit recorded in `AGENTS.md`.
 
 ```bash
 /home/tnuzy/Qt/Tools/CMake/bin/cmake -S . -B build -G Ninja \
@@ -63,15 +61,19 @@ This repository is currently pinned to the local Qt/GCC toolchain described in `
 /home/tnuzy/Qt/Tools/CMake/bin/cmake --build build
 ```
 
-## Install / SDK
+Run tests with a 4GB virtual-memory cap:
 
-Install into a local prefix:
+```bash
+/bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+```
+
+## Install the SDK
 
 ```bash
 /home/tnuzy/Qt/Tools/CMake/bin/cmake --install build --prefix build/abel-sdk
 ```
 
-External Qt backend plugins can then use:
+External backend plugins can then use:
 
 ```cmake
 find_package(Abel REQUIRED)
@@ -80,36 +82,60 @@ add_library(my_backend MODULE my_backend.cpp)
 target_link_libraries(my_backend PRIVATE Abel::abelcore)
 ```
 
-The installed SDK is still tied to the same Qt kit/compiler ABI used to build Abel.
+The SDK is tied to the same Qt kit, compiler, C++ standard, and Abel ABI metadata as the runtime that loads the plugin.
 
-## Test
-
-Use the 4GB memory cap when running tests:
+## Minimal Abel project
 
 ```bash
-/bin/bash -lc 'ulimit -v 4194304; /home/tnuzy/Qt/Tools/CMake/bin/ctest --test-dir build --output-on-failure -j1'
+build/abel init build/my_project
+build/abel check build/my_project
+build/abel run build/my_project
 ```
 
-## Smoke examples
+Typical project:
+
+```text
+my_project/
+  abel.package.json
+  src/
+    main.abel
+  tests/
+    smoke.abel
+```
+
+Minimal program:
+
+```abel
+fn int main() {
+    println("hello from Abel");
+    return 0;
+}
+```
+
+## Smoke commands
 
 ```bash
 build/abel check examples/smoke/hello.abel
 build/abel run examples/smoke/hello.abel
-build/abel init build/abel_init_smoke/project
-build/abel build build/abel_init_smoke/project
+
 build/abel package check examples/project
 build/abel check examples/project
 build/abel run examples/project
 build/abel test examples/project
-build/abel package check examples/project_backend
+
 build/abel build examples/project_backend
 build/abel run examples/project_backend
+
 build/abel resources check plugins/examples/math_backend/resource.json
 build/abel run --resource plugins/examples/math_backend/resource.json examples/smoke/backend.abel
 ```
 
+## Main documents
+
+- `AGENTS.md` — current development manual and agent operating contract for this repository.
+- `TUTORIAL_zh.md` — Chinese tutorial for learning Abel and building Abel projects.
+- `CODEX.md` — prompt file for using Codex inside a new Abel user project.
+
 ## License
 
-This repository is public for visibility and timestamped disclosure, but it is **not open source**.
-
-All source code, documentation, examples, tests, designs, names, and related materials are proprietary and all rights are reserved. See `LICENSE`.
+This repository is public but proprietary. All rights are reserved unless a separate written license says otherwise.
