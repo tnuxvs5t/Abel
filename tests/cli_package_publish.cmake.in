@@ -45,11 +45,42 @@ endif()
 if(NOT EXISTS "${registry_dir}/dep/1.2.0/abel.package.json")
     message(FATAL_ERROR "abel package publish did not write registry manifest")
 endif()
+if(NOT EXISTS "${registry_dir}/.abel-registry.json")
+    message(FATAL_ERROR "abel package publish did not write registry index")
+endif()
 if(NOT EXISTS "${registry_dir}/dep/1.2.0/src/lib/value.abel")
     message(FATAL_ERROR "abel package publish did not copy package source")
 endif()
 if(EXISTS "${registry_dir}/dep/1.2.0/.abel/ignored.txt")
     message(FATAL_ERROR "abel package publish copied package .abel cache")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" package registry check "${registry_dir}"
+    RESULT_VARIABLE registry_check_result
+    OUTPUT_VARIABLE registry_check_stdout
+    ERROR_VARIABLE registry_check_stderr
+)
+if(NOT registry_check_result EQUAL 0)
+    message(FATAL_ERROR "abel package registry check unexpectedly failed:\n${registry_check_stdout}\n${registry_check_stderr}")
+endif()
+string(FIND "${registry_check_stdout}" "packages 1" registry_check_packages_pos)
+if(registry_check_packages_pos EQUAL -1)
+    message(FATAL_ERROR "abel package registry check did not report package count:\n${registry_check_stdout}\n${registry_check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" package registry list "${registry_dir}"
+    RESULT_VARIABLE registry_list_result
+    OUTPUT_VARIABLE registry_list_stdout
+    ERROR_VARIABLE registry_list_stderr
+)
+if(NOT registry_list_result EQUAL 0)
+    message(FATAL_ERROR "abel package registry list unexpectedly failed:\n${registry_list_stdout}\n${registry_list_stderr}")
+endif()
+string(FIND "${registry_list_stdout}" "dep 1.2.0 dep/1.2.0" registry_list_dep_pos)
+if(registry_list_dep_pos EQUAL -1)
+    message(FATAL_ERROR "abel package registry list did not show published dep:\n${registry_list_stdout}\n${registry_list_stderr}")
 endif()
 
 execute_process(
@@ -86,6 +117,48 @@ endif()
 string(FIND "${overwrite_publish_stdout}" "published overwrite dep 1.2.0" overwrite_publish_message_pos)
 if(overwrite_publish_message_pos EQUAL -1)
     message(FATAL_ERROR "abel package publish --overwrite did not report overwrite:\n${overwrite_publish_stdout}\n${overwrite_publish_stderr}")
+endif()
+
+file(MAKE_DIRECTORY "${registry_dir}/dep/0.9.0/src")
+file(WRITE "${registry_dir}/dep/0.9.0/abel.package.json" [=[
+{
+  "name": "dep",
+  "version": "0.9.0",
+  "entry": "src/main.abel"
+}
+]=])
+file(WRITE "${registry_dir}/dep/0.9.0/src/main.abel" [=[
+fn int main() {
+    return 0;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" package registry check "${registry_dir}"
+    RESULT_VARIABLE stale_registry_check_result
+    OUTPUT_VARIABLE stale_registry_check_stdout
+    ERROR_VARIABLE stale_registry_check_stderr
+)
+if(stale_registry_check_result EQUAL 0)
+    message(FATAL_ERROR "abel package registry check unexpectedly accepted stale index:\n${stale_registry_check_stdout}\n${stale_registry_check_stderr}")
+endif()
+string(FIND "${stale_registry_check_stderr}" "stale" stale_registry_message_pos)
+if(stale_registry_message_pos EQUAL -1)
+    message(FATAL_ERROR "abel package registry check did not diagnose stale index:\n${stale_registry_check_stdout}\n${stale_registry_check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" package registry index "${registry_dir}"
+    RESULT_VARIABLE registry_index_result
+    OUTPUT_VARIABLE registry_index_stdout
+    ERROR_VARIABLE registry_index_stderr
+)
+if(NOT registry_index_result EQUAL 0)
+    message(FATAL_ERROR "abel package registry index unexpectedly failed:\n${registry_index_stdout}\n${registry_index_stderr}")
+endif()
+string(FIND "${registry_index_stdout}" "indexed 2 package version(s)" registry_index_message_pos)
+if(registry_index_message_pos EQUAL -1)
+    message(FATAL_ERROR "abel package registry index did not report refreshed package count:\n${registry_index_stdout}\n${registry_index_stderr}")
 endif()
 
 file(WRITE "${publish_project_root}/app/abel.package.json" [=[

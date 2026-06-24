@@ -946,11 +946,53 @@ int main(int argc, char** argv)
                 << Qt::endl;
             out << "registry " << published.registryRoot << Qt::endl;
             out << "target " << published.targetDir << Qt::endl;
+            out << "index " << published.indexFile << Qt::endl;
             return 0;
+        }
+        if (args.size() >= 3 && args[1] == QStringLiteral("registry")) {
+            if (args.size() == 4 && args[2] == QStringLiteral("index")) {
+                auto index = abel::writeLocalPackageRegistryIndex(args[3]);
+                for (const auto& d : index.diagnostics)
+                    printDiagnostic(d);
+                if (!index.ok())
+                    return 1;
+                out << "indexed " << index.entries.size() << " package version(s)" << Qt::endl;
+                out << "registry " << index.registryRoot << Qt::endl;
+                out << "index " << index.indexFile << Qt::endl;
+                return 0;
+            }
+            if (args.size() == 4 && args[2] == QStringLiteral("check")) {
+                auto index = abel::checkLocalPackageRegistryIndex(args[3]);
+                for (const auto& d : index.diagnostics)
+                    printDiagnostic(d);
+                if (!index.ok())
+                    return 1;
+                out << "ok" << Qt::endl;
+                out << "registry " << index.registryRoot << Qt::endl;
+                out << "packages " << index.entries.size() << Qt::endl;
+                return 0;
+            }
+            if (args.size() == 4 && args[2] == QStringLiteral("list")) {
+                auto index = abel::scanLocalPackageRegistry(args[3]);
+                for (const auto& d : index.diagnostics)
+                    printDiagnostic(d);
+                if (!index.ok())
+                    return 1;
+                for (const auto& entry : index.entries) {
+                    out << entry.name
+                        << " "
+                        << entry.version
+                        << " "
+                        << entry.path
+                        << Qt::endl;
+                }
+                return 0;
+            }
         }
         {
             err << "E0007: package expects: abel package check <project-dir> "
-                   "or abel package publish [--overwrite] <project-dir> <registry-dir>"
+                   "or abel package publish [--overwrite] <project-dir> <registry-dir> "
+                   "or abel package registry index|check|list <registry-dir>"
                 << Qt::endl;
             return 2;
         }

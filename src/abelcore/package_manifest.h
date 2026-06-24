@@ -99,7 +99,29 @@ struct PackagePublishResult {
     PackageManifest package;
     QString registryRoot;
     QString targetDir;
+    QString indexFile;
     bool overwritten = false;
+    QList<Diagnostic> diagnostics;
+
+    bool ok() const { return diagnostics.isEmpty(); }
+};
+
+struct PackageRegistryEntry {
+    QString name;
+    QString version;
+    QString path;
+    QString manifestFile;
+    QString entry;
+    int dependencyCount = 0;
+    int backendArtifactCount = 0;
+};
+
+struct PackageRegistryIndexResult {
+    QString registryRoot;
+    QString indexFile;
+    QList<PackageRegistryEntry> entries;
+    bool written = false;
+    bool stale = false;
     QList<Diagnostic> diagnostics;
 
     bool ok() const { return diagnostics.isEmpty(); }
@@ -150,6 +172,7 @@ struct PackageBackendCacheResult {
 
 QString packageManifestFileName();
 QString packageLockFileName();
+QString packageLocalRegistryIndexFileName();
 QString packageCacheRoot(const QString& rootDir);
 QString packageBackendCacheDir(const QString& rootDir);
 QString packageRegistryCacheDir(const QString& rootDir);
@@ -175,6 +198,9 @@ PackageDependencyChangeResult removePackageDependency(const QString& dir, const 
 PackagePublishResult publishPackageToLocalRegistry(const QString& dir,
                                                    const QString& registryDir,
                                                    bool overwrite = false);
+PackageRegistryIndexResult scanLocalPackageRegistry(const QString& registryDir);
+PackageRegistryIndexResult writeLocalPackageRegistryIndex(const QString& registryDir);
+PackageRegistryIndexResult checkLocalPackageRegistryIndex(const QString& registryDir);
 PackageManifestParseResult packageManifestFromJson(const QJsonObject& object,
                                                    const QString& rootDir = {},
                                                    const SourceSpan& span = {});

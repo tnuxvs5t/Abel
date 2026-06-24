@@ -532,6 +532,66 @@ private slots:
         QVERIFY(QFileInfo(QDir(overwritten.targetDir).absoluteFilePath(QStringLiteral("src/lib/extra.abel"))).isFile());
     }
 
+    void indexesAndChecksLocalRegistry()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        writePackage(root, QStringLiteral("registry/dep/1.0.0"), QStringLiteral("dep"), QStringLiteral("1.0.0"));
+        writePackage(root, QStringLiteral("registry/dep/1.2.0"), QStringLiteral("dep"), QStringLiteral("1.2.0"));
+        writePackage(root, QStringLiteral("registry/tool/0.1.0"), QStringLiteral("tool"), QStringLiteral("0.1.0"));
+
+        const QString registryRoot = root.absoluteFilePath(QStringLiteral("registry"));
+        auto indexed = abel::writeLocalPackageRegistryIndex(registryRoot);
+        for (const auto& d : indexed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(indexed.diagnostics.isEmpty());
+        QVERIFY(indexed.written);
+        QCOMPARE(indexed.entries.size(), 3);
+        QCOMPARE(indexed.indexFile, QDir(registryRoot).absoluteFilePath(abel::packageLocalRegistryIndexFileName()));
+        QVERIFY(QFileInfo(indexed.indexFile).isFile());
+
+        QFile file(indexed.indexFile);
+        QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+        QVERIFY(doc.isObject());
+        QCOMPARE(doc.object().value(QStringLiteral("kind")).toString(), QStringLiteral("abel.localRegistry"));
+        QCOMPARE(doc.object().value(QStringLiteral("packages")).toArray().size(), 3);
+
+        auto checked = abel::checkLocalPackageRegistryIndex(registryRoot);
+        for (const auto& d : checked.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(checked.diagnostics.isEmpty());
+        QVERIFY(!checked.stale);
+        QCOMPARE(checked.entries.size(), 3);
+
+        writePackage(root, QStringLiteral("registry/dep/1.3.0"), QStringLiteral("dep"), QStringLiteral("1.3.0"));
+        auto stale = abel::checkLocalPackageRegistryIndex(registryRoot);
+        QVERIFY(!stale.diagnostics.isEmpty());
+        QVERIFY(stale.stale);
+        bool sawStale = false;
+        for (const auto& d : stale.diagnostics)
+            sawStale = sawStale || d.message.contains(QStringLiteral("stale"));
+        QVERIFY(sawStale);
+    }
+
+    void rejectsRegistryDirectoryManifestMismatch()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        writePackage(root, QStringLiteral("registry/dep/1.0.0"), QStringLiteral("other"), QStringLiteral("1.0.0"));
+
+        auto indexed = abel::scanLocalPackageRegistry(root.absoluteFilePath(QStringLiteral("registry")));
+        QVERIFY(!indexed.diagnostics.isEmpty());
+        bool sawMismatch = false;
+        for (const auto& d : indexed.diagnostics)
+            sawMismatch = sawMismatch || d.message.contains(QStringLiteral("contains manifest package"));
+        QVERIFY(sawMismatch);
+    }
+
     void rejectsSharedPathDependencyVersionConflict()
     {
         QTemporaryDir dir;

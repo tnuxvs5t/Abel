@@ -15,6 +15,7 @@
 #include <QTextStream>
 #include <QtGlobal>
 
+#include <algorithm>
 #include <optional>
 
 namespace abel {
@@ -23,6 +24,7 @@ namespace {
 
 constexpr auto kPackageManifestFileName = "abel.package.json";
 constexpr auto kPackageLockFileName = "abel.lock.json";
+constexpr auto kPackageLocalRegistryIndexFileName = ".abel-registry.json";
 constexpr auto kPackageCacheDirName = ".abel";
 constexpr auto kPackageCacheBackendDir = "cache/backend";
 constexpr auto kPackageCachePackagesDir = "cache/packages";
@@ -162,6 +164,18 @@ QString canonicalOrAbsoluteFilePath(const QFileInfo& info)
 {
     const QString canonical = info.canonicalFilePath();
     return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
+}
+
+QString localRegistryRootPath(const QString& registryDir)
+{
+    const QString registryInput = registryDir.trimmed().isEmpty() ? QStringLiteral(".") : registryDir;
+    QFileInfo registryInfo(registryInput);
+    if (!registryInfo.isAbsolute())
+        registryInfo = QFileInfo(QDir::current().absoluteFilePath(registryInput));
+    const QString canonical = registryInfo.canonicalFilePath();
+    return registryInfo.exists() && !canonical.isEmpty()
+        ? canonical
+        : registryInfo.absoluteFilePath();
 }
 
 QString fileSizeStamp(const QFileInfo& info)
@@ -754,6 +768,86 @@ bool copyDirectoryRecursively(const QString& sourceDir, const QString& targetDir
     return true;
 }
 
+QJsonObject registryEntryToJson(const PackageRegistryEntry& entry)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("name"), entry.name);
+    object.insert(QStringLiteral("version"), entry.version);
+    object.insert(QStringLiteral("path"), entry.path);
+    object.insert(QStringLiteral("manifest"), entry.manifestFile);
+    object.insert(QStringLiteral("entry"), entry.entry);
+    object.insert(QStringLiteral("dependencies"), entry.dependencyCount);
+    object.insert(QStringLiteral("backendArtifacts"), entry.backendArtifactCount);
+    return object;
+}
+
+QJsonDocument registryIndexToJson(const PackageRegistryIndexResult& index)
+{
+    QJsonObject root;
+    root.insert(QStringLiteral("formatVersion"), 1);
+    root.insert(QStringLiteral("kind"), QStringLiteral("abel.localRegistry"));
+    QJsonArray packages;
+    for (const PackageRegistryEntry& entry : index.entries)
+        packages.push_back(registryEntryToJson(entry));
+    root.insert(QStringLiteral("packages"), packages);
+    return QJsonDocument(root);
+}
+
+PackageRegistryEntry registryEntryFromJson(const QJsonObject& object,
+                                           QList<Diagnostic>& diagnostics,
+                                           const SourceSpan& span)
+{
+    PackageRegistryEntry entry;
+    entry.name = requiredString(object, QStringLiteral("name"), diagnostics, span);
+    entry.version = requiredString(object, QStringLiteral("version"), diagnostics, span);
+    entry.path = requiredString(object, QStringLiteral("path"), diagnostics, span);
+    entry.manifestFile = requiredString(object, QStringLiteral("manifest"), diagnostics, span);
+    entry.entry = requiredString(object, QStringLiteral("entry"), diagnostics, span);
+    entry.dependencyCount = object.value(QStringLiteral("dependencies")).toInt(-1);
+    entry.backendArtifactCount = object.value(QStringLiteral("backendArtifacts")).toInt(-1);
+    if (entry.dependencyCount < 0)
+        addPackageError(diagnostics, QStringLiteral("registry index package entry requires integer field 'dependencies'"), span);
+    if (entry.backendArtifactCount < 0)
+        addPackageError(diagnostics, QStringLiteral("registry index package entry requires integer field 'backendArtifacts'"), span);
+    return entry;
+}
+
+bool sameRegistryEntry(const PackageRegistryEntry& a, const PackageRegistryEntry& b)
+{
+    return a.name == b.name
+        && a.version == b.version
+        && a.path == b.path
+        && a.manifestFile == b.manifestFile
+        && a.entry == b.entry
+        && a.dependencyCount == b.dependencyCount
+        && a.backendArtifactCount == b.backendArtifactCount;
+}
+
+bool sameRegistryEntries(const QList<PackageRegistryEntry>& a, const QList<PackageRegistryEntry>& b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (qsizetype i = 0; i < a.size(); ++i) {
+        if (!sameRegistryEntry(a.at(i), b.at(i)))
+            return false;
+    }
+    return true;
+}
+
+bool registryEntryLess(const PackageRegistryEntry& a, const PackageRegistryEntry& b)
+{
+    if (a.name != b.name)
+        return a.name < b.name;
+    SemVer av;
+    SemVer bv;
+    if (parseSemVerCore(a.version, av) && parseSemVerCore(b.version, bv)) {
+        const int cmp = compareSemVer(av, bv);
+        if (cmp != 0)
+            return cmp < 0;
+    }
+    return a.version < b.version;
+}
+
 struct RegistryCandidate {
     PackageManifest package;
     QString sourceRoot;
@@ -1241,6 +1335,11 @@ QString packageLockFileName()
     return QString::fromLatin1(kPackageLockFileName);
 }
 
+QString packageLocalRegistryIndexFileName()
+{
+    return QString::fromLatin1(kPackageLocalRegistryIndexFileName);
+}
+
 QString packageCacheRoot(const QString& rootDir)
 {
     return QDir(QFileInfo(rootDir).absoluteFilePath()).absoluteFilePath(QString::fromLatin1(kPackageCacheDirName)
@@ -1267,6 +1366,226 @@ bool isPackageDirectory(const QString& path)
     if (!info.isDir())
         return false;
     return QFileInfo(QDir(info.absoluteFilePath()).absoluteFilePath(packageManifestFileName())).isFile();
+}
+
+PackageRegistryIndexResult scanLocalPackageRegistry(const QString& registryDir)
+{
+    PackageRegistryIndexResult result;
+    result.registryRoot = localRegistryRootPath(registryDir);
+    result.indexFile = QDir(result.registryRoot).absoluteFilePath(packageLocalRegistryIndexFileName());
+
+    const QFileInfo rootInfo(result.registryRoot);
+    SourceSpan span;
+    span.file = result.registryRoot;
+    if (!rootInfo.exists()) {
+        addPackageError(result.diagnostics,
+                        QStringLiteral("registry directory '%1' does not exist").arg(registryDir),
+                        span);
+        return result;
+    }
+    if (!rootInfo.isDir()) {
+        addPackageError(result.diagnostics,
+                        QStringLiteral("registry path '%1' is not a directory").arg(registryDir),
+                        span);
+        return result;
+    }
+
+    const auto packageDirs = QDir(result.registryRoot).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot,
+                                                                     QDir::Name);
+    QSet<QString> seenIdentities;
+    for (const QFileInfo& packageInfo : packageDirs) {
+        const QString packageDirName = packageInfo.fileName();
+        if (packageDirName.startsWith(QLatin1Char('.')))
+            continue;
+
+        const auto versionDirs = QDir(packageInfo.absoluteFilePath()).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot,
+                                                                                    QDir::Name);
+        for (const QFileInfo& versionInfo : versionDirs) {
+            if (versionInfo.fileName().startsWith(QLatin1Char('.')))
+                continue;
+
+            SourceSpan versionSpan;
+            versionSpan.file = versionInfo.absoluteFilePath();
+            if (!isPackageDirectory(versionInfo.absoluteFilePath())) {
+                addPackageError(result.diagnostics,
+                                QStringLiteral("registry entry '%1/%2' is not an Abel package")
+                                    .arg(packageDirName, versionInfo.fileName()),
+                                versionSpan);
+                continue;
+            }
+
+            auto parsed = packageManifestFromDirectory(versionInfo.absoluteFilePath());
+            result.diagnostics.append(parsed.diagnostics);
+            if (!parsed.ok())
+                continue;
+
+            if (parsed.package.name != packageDirName) {
+                addPackageError(result.diagnostics,
+                                QStringLiteral("registry package directory '%1' contains manifest package '%2'")
+                                    .arg(packageDirName, parsed.package.name),
+                                SourceSpan{parsed.package.filePath});
+                continue;
+            }
+            if (parsed.package.version != versionInfo.fileName()) {
+                addPackageError(result.diagnostics,
+                                QStringLiteral("registry version directory '%1/%2' contains manifest version '%3'")
+                                    .arg(packageDirName, versionInfo.fileName(), parsed.package.version),
+                                SourceSpan{parsed.package.filePath});
+                continue;
+            }
+            SemVer ignored;
+            if (!parseSemVerCore(parsed.package.version, ignored)) {
+                addPackageError(result.diagnostics,
+                                QStringLiteral("registry package '%1' version '%2' is not SemVer major.minor.patch")
+                                    .arg(parsed.package.name, parsed.package.version),
+                                SourceSpan{parsed.package.filePath});
+                continue;
+            }
+
+            const QString identity = parsed.package.name + QLatin1Char('@') + parsed.package.version;
+            if (seenIdentities.contains(identity)) {
+                addPackageError(result.diagnostics,
+                                QStringLiteral("registry contains duplicate package identity '%1'")
+                                    .arg(identity),
+                                SourceSpan{parsed.package.filePath});
+                continue;
+            }
+            seenIdentities.insert(identity);
+
+            PackageRegistryEntry entry;
+            entry.name = parsed.package.name;
+            entry.version = parsed.package.version;
+            entry.path = QDir(result.registryRoot).relativeFilePath(parsed.package.rootDir);
+            entry.manifestFile = QDir(result.registryRoot).relativeFilePath(parsed.package.filePath);
+            entry.entry = parsed.package.entry;
+            entry.dependencyCount = parsed.package.dependencies.size();
+            entry.backendArtifactCount = parsed.package.backendArtifacts.size();
+            result.entries.push_back(entry);
+        }
+    }
+
+    std::sort(result.entries.begin(), result.entries.end(), registryEntryLess);
+    return result;
+}
+
+PackageRegistryIndexResult writeLocalPackageRegistryIndex(const QString& registryDir)
+{
+    const QString registryRoot = localRegistryRootPath(registryDir);
+    PackageRegistryIndexResult result;
+    result.registryRoot = registryRoot;
+    result.indexFile = QDir(registryRoot).absoluteFilePath(packageLocalRegistryIndexFileName());
+
+    QFileInfo rootInfo(registryRoot);
+    if (rootInfo.exists() && !rootInfo.isDir()) {
+        SourceSpan span;
+        span.file = registryRoot;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("registry path '%1' is not a directory").arg(registryDir),
+                        span);
+        return result;
+    }
+    if (!rootInfo.exists() && !QDir().mkpath(registryRoot)) {
+        SourceSpan span;
+        span.file = registryRoot;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("cannot create registry directory '%1'").arg(registryRoot),
+                        span);
+        return result;
+    }
+
+    result = scanLocalPackageRegistry(registryRoot);
+    if (!result.ok())
+        return result;
+
+    QFile file(result.indexFile);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        SourceSpan span;
+        span.file = result.indexFile;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("cannot write registry index '%1'").arg(result.indexFile),
+                        span);
+        return result;
+    }
+    const QByteArray bytes = registryIndexToJson(result).toJson(QJsonDocument::Indented);
+    if (file.write(bytes) != bytes.size()) {
+        SourceSpan span;
+        span.file = result.indexFile;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("failed to write registry index '%1'").arg(result.indexFile),
+                        span);
+        return result;
+    }
+    result.written = true;
+    return result;
+}
+
+PackageRegistryIndexResult checkLocalPackageRegistryIndex(const QString& registryDir)
+{
+    PackageRegistryIndexResult scanned = scanLocalPackageRegistry(registryDir);
+    if (!scanned.ok())
+        return scanned;
+
+    PackageRegistryIndexResult result = scanned;
+    QFile file(result.indexFile);
+    SourceSpan span;
+    span.file = result.indexFile;
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        result.stale = true;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("registry index '%1' is missing; run 'abel package registry index <registry-dir>'")
+                            .arg(result.indexFile),
+                        span);
+        return result;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        result.stale = true;
+        addPackageError(result.diagnostics,
+                        parseError.error == QJsonParseError::NoError
+                            ? QStringLiteral("registry index JSON must be an object")
+                            : QStringLiteral("invalid registry index JSON: %1").arg(parseError.errorString()),
+                        span);
+        return result;
+    }
+
+    const QJsonObject object = doc.object();
+    if (object.value(QStringLiteral("formatVersion")).toInt() != 1) {
+        result.stale = true;
+        addPackageError(result.diagnostics, QStringLiteral("registry index formatVersion must be 1"), span);
+    }
+    if (object.value(QStringLiteral("kind")).toString() != QStringLiteral("abel.localRegistry")) {
+        result.stale = true;
+        addPackageError(result.diagnostics, QStringLiteral("registry index kind must be 'abel.localRegistry'"), span);
+    }
+
+    QList<PackageRegistryEntry> indexedEntries;
+    const QJsonValue packagesValue = object.value(QStringLiteral("packages"));
+    if (!packagesValue.isArray()) {
+        result.stale = true;
+        addPackageError(result.diagnostics, QStringLiteral("registry index requires array field 'packages'"), span);
+    } else {
+        for (const QJsonValue& raw : packagesValue.toArray()) {
+            if (!raw.isObject()) {
+                result.stale = true;
+                addPackageError(result.diagnostics, QStringLiteral("registry index package entry must be an object"), span);
+                continue;
+            }
+            indexedEntries.push_back(registryEntryFromJson(raw.toObject(), result.diagnostics, span));
+        }
+    }
+    std::sort(indexedEntries.begin(), indexedEntries.end(), registryEntryLess);
+
+    if (result.diagnostics.isEmpty() && !sameRegistryEntries(indexedEntries, scanned.entries)) {
+        result.stale = true;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("registry index '%1' is stale; run 'abel package registry index <registry-dir>'")
+                            .arg(result.indexFile),
+                        span);
+    }
+    result.entries = scanned.entries;
+    return result;
 }
 
 PackageInitResult initPackageProject(const PackageInitOptions& options)
@@ -1927,9 +2246,7 @@ PackagePublishResult publishPackageToLocalRegistry(const QString& dir,
     QFileInfo registryInfo(registryInput);
     if (!registryInfo.isAbsolute())
         registryInfo = QFileInfo(QDir::current().absoluteFilePath(registryInput));
-    result.registryRoot = registryInfo.exists()
-        ? canonicalOrAbsoluteFilePath(registryInfo)
-        : registryInfo.absoluteFilePath();
+    result.registryRoot = localRegistryRootPath(registryInput);
     if (registryInfo.exists() && !registryInfo.isDir()) {
         SourceSpan registrySpan;
         registrySpan.file = result.registryRoot;
@@ -1991,6 +2308,12 @@ PackagePublishResult publishPackageToLocalRegistry(const QString& dir,
         return result;
     }
     result.package = published.package;
+
+    const auto indexed = writeLocalPackageRegistryIndex(result.registryRoot);
+    result.indexFile = indexed.indexFile;
+    result.diagnostics.append(indexed.diagnostics);
+    if (!indexed.ok())
+        return result;
     return result;
 }
 
