@@ -29,10 +29,11 @@ ParseResult Parser::parse(const QList<Token>& tokens)
     auto program = std::make_unique<ProgramNode>();
     while (!atEnd()) {
         auto decl = parseDeclaration();
-        if (decl)
+        if (decl) {
             program->declarations.push_back(std::move(decl));
-        else if (!atEnd())
-            ++m_pos;
+        } else if (!atEnd()) {
+            synchronizeDeclaration();
+        }
     }
     if (!program->declarations.empty())
         program->span = mergeSpans(program->declarations.front()->span, program->declarations.back()->span);
@@ -62,9 +63,16 @@ Token Parser::consume(TokenKind kind, const QString& message)
     if (check(kind))
         return m_tokens[m_pos++];
     errorAt(peek(), message);
+    if (shouldNotConsumeMissing(kind, peek().kind))
+        return syntheticToken(kind, peek().span);
     if (!atEnd())
         return m_tokens[m_pos++];
-    return peek();
+    return syntheticToken(kind, peek().span);
+}
+
+Token Parser::syntheticToken(TokenKind kind, const SourceSpan& span) const
+{
+    return Token{kind, QString(), span};
 }
 
 void Parser::errorAt(const Token& token, const QString& message)
@@ -80,6 +88,127 @@ void Parser::errorAtSpan(const SourceSpan& span, const QString& message)
     d.message = message;
     d.primary = span;
     m_diagnostics.push_back(d);
+}
+
+bool Parser::shouldNotConsumeMissing(TokenKind expected, TokenKind found) const
+{
+    if (found == TokenKind::End)
+        return true;
+
+    switch (expected) {
+    case TokenKind::Semicolon:
+        return found == TokenKind::RBrace
+            || isStatementStart(found)
+            || isTopLevelDeclarationStart(found);
+    case TokenKind::RBrace:
+        return isTopLevelDeclarationStart(found);
+    case TokenKind::RParen:
+        return found == TokenKind::LBrace
+            || found == TokenKind::Semicolon
+            || found == TokenKind::RBrace
+            || isStatementStart(found)
+            || isTopLevelDeclarationStart(found);
+    case TokenKind::RBracket:
+        return found == TokenKind::LBrace
+            || found == TokenKind::Semicolon
+            || found == TokenKind::RBrace
+            || isStatementStart(found)
+            || isTopLevelDeclarationStart(found);
+    case TokenKind::Greater:
+        return found == TokenKind::Identifier
+            || found == TokenKind::LParen
+            || found == TokenKind::Semicolon
+            || found == TokenKind::RBrace
+            || isStatementStart(found)
+            || isTopLevelDeclarationStart(found);
+    case TokenKind::LBrace:
+        return found == TokenKind::RBrace
+            || isStatementStart(found)
+            || isTopLevelDeclarationStart(found);
+    case TokenKind::LParen:
+    case TokenKind::Less:
+    case TokenKind::Identifier:
+        return found == TokenKind::Semicolon
+            || found == TokenKind::RBrace
+            || isStatementStart(found)
+            || isTopLevelDeclarationStart(found);
+    default:
+        return false;
+    }
+}
+
+bool Parser::isTopLevelDeclarationStart(TokenKind kind) const
+{
+    return kind == TokenKind::KwModule
+        || kind == TokenKind::KwUse
+        || kind == TokenKind::KwExport
+        || kind == TokenKind::KwDebt
+        || kind == TokenKind::KwBackend
+        || kind == TokenKind::KwStruct
+        || kind == TokenKind::KwEnum
+        || kind == TokenKind::KwType
+        || kind == TokenKind::KwFn;
+}
+
+bool Parser::isTopLevelDeclarationStart() const
+{
+    return isTopLevelDeclarationStart(peek().kind);
+}
+
+bool Parser::isStatementStart(TokenKind kind) const
+{
+    return kind == TokenKind::KwReturn
+        || kind == TokenKind::KwIf
+        || kind == TokenKind::KwWhile
+        || kind == TokenKind::KwFor
+        || kind == TokenKind::KwRepeat
+        || kind == TokenKind::KwBreak
+        || kind == TokenKind::KwContinue
+        || kind == TokenKind::LBrace
+        || kind == TokenKind::KwConst
+        || kind == TokenKind::KwVector
+        || kind == TokenKind::KwAny
+        || kind == TokenKind::KwFunc
+        || kind == TokenKind::KwCast
+        || kind == TokenKind::KwLambda
+        || kind == TokenKind::KwThis
+        || kind == TokenKind::KwTrue
+        || kind == TokenKind::KwFalse
+        || kind == TokenKind::KwNullptr
+        || kind == TokenKind::Identifier
+        || kind == TokenKind::Integer
+        || kind == TokenKind::Float
+        || kind == TokenKind::String
+        || kind == TokenKind::Char
+        || kind == TokenKind::LParen
+        || kind == TokenKind::LBracket
+        || kind == TokenKind::Bang
+        || kind == TokenKind::Minus
+        || kind == TokenKind::Plus
+        || kind == TokenKind::Amp
+        || kind == TokenKind::Star;
+}
+
+void Parser::synchronizeDeclaration()
+{
+    while (!atEnd()) {
+        if (isTopLevelDeclarationStart())
+            return;
+        ++m_pos;
+    }
+}
+
+void Parser::synchronizeStatement()
+{
+    while (!atEnd()) {
+        if (previous().kind == TokenKind::Semicolon)
+            return;
+        if (check(TokenKind::RBrace))
+            return;
+        if (isStatementStart(peek().kind))
+            return;
+        ++m_pos;
+    }
 }
 
 std::unique_ptr<DeclNode> Parser::parseDeclaration()
@@ -360,8 +489,17 @@ std::unique_ptr<BlockStmtNode> Parser::parseBlock()
 {
     const Token open = consume(TokenKind::LBrace, QStringLiteral("expected '{'"));
     auto block = std::make_unique<BlockStmtNode>();
-    while (!check(TokenKind::RBrace) && !atEnd())
-        block->statements.push_back(parseStatement());
+    while (!check(TokenKind::RBrace) && !isTopLevelDeclarationStart() && !atEnd()) {
+        const qsizetype before = m_pos;
+        auto stmt = parseStatement();
+        if (stmt) {
+            block->statements.push_back(std::move(stmt));
+            continue;
+        }
+        if (m_pos == before && !atEnd())
+            ++m_pos;
+        synchronizeStatement();
+    }
     const Token close = consume(TokenKind::RBrace, QStringLiteral("expected '}'"));
     block->span = mergeSpans(open.span, close.span);
     return block;

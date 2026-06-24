@@ -28,8 +28,15 @@ private:
     bool check(TokenKind kind) const;
     bool match(TokenKind kind);
     Token consume(TokenKind kind, const QString& message);
+    Token syntheticToken(TokenKind kind, const SourceSpan& span) const;
     void errorAt(const Token& token, const QString& message);
     void errorAtSpan(const SourceSpan& span, const QString& message);
+    bool shouldNotConsumeMissing(TokenKind expected, TokenKind found) const;
+    bool isTopLevelDeclarationStart(TokenKind kind) const;
+    bool isTopLevelDeclarationStart() const;
+    bool isStatementStart(TokenKind kind) const;
+    void synchronizeDeclaration();
+    void synchronizeStatement();
 
     std::unique_ptr<DeclNode> parseDeclaration();
     std::unique_ptr<ModuleDeclNode> parseModule();

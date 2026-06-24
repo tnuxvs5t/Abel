@@ -96,6 +96,63 @@ private slots:
         QVERIFY(!parse(QStringLiteral("fn int bad(int... xs) { return 0; }")).isEmpty());
     }
 
+    void recoversAfterMissingStatementSemicolon()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 1
+                return x;
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        QVERIFY(!parsed.diagnostics.isEmpty());
+        QVERIFY(parsed.program != nullptr);
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
+
+        auto* fn = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[0].get());
+        QVERIFY(fn != nullptr);
+        QVERIFY(fn->body != nullptr);
+        QCOMPARE(fn->body->statements.size(), static_cast<size_t>(2));
+        QVERIFY(dynamic_cast<abel::VarDeclStmtNode*>(fn->body->statements[0].get()) != nullptr);
+        QVERIFY(dynamic_cast<abel::ReturnStmtNode*>(fn->body->statements[1].get()) != nullptr);
+    }
+
+    void recoversNextDeclarationAfterUnclosedBlock()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int broken() {
+                int x = 1;
+
+            fn int main() {
+                return 0;
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        QVERIFY(!parsed.diagnostics.isEmpty());
+        QVERIFY(parsed.program != nullptr);
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(2));
+
+        auto* broken = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[0].get());
+        auto* main = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[1].get());
+        QVERIFY(broken != nullptr);
+        QVERIFY(main != nullptr);
+        QCOMPARE(broken->name, QStringLiteral("broken"));
+        QCOMPARE(main->name, QStringLiteral("main"));
+        QVERIFY(main->body != nullptr);
+        QCOMPARE(main->body->statements.size(), static_cast<size_t>(1));
+        QVERIFY(dynamic_cast<abel::ReturnStmtNode*>(main->body->statements[0].get()) != nullptr);
+    }
+
     void parsesForLoops()
     {
         const QString src = QStringLiteral(R"(

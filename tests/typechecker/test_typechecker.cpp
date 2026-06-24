@@ -903,6 +903,22 @@ private slots:
         QCOMPARE(countMessagesContaining(result, QStringLiteral("may end without returning")), 0);
     }
 
+    void parserErrorDoesNotCascadeIntoMissingReturn()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 1
+                return x;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QCOMPARE(result.diagnostics.size(), 1);
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("expected ';'")));
+        QCOMPARE(countMessagesContaining(result, QStringLiteral("may end without returning")), 0);
+    }
+
     void rejectsBreakOutsideLoop()
     {
         auto result = checkSource(QStringLiteral("fn int main() { break; return 0; }"));
