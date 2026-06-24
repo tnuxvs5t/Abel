@@ -31,7 +31,8 @@ C/C++ 值模型
 + Qt 字符串/字符
 + vector<T>
 + struct / lambda / any / any...
-+ builtin print / println / build_string
++ builtin print / println / build_string / scan
++ builtin read_text / write_text / read_lines / write_lines / path_exists / path_is_file / path_is_dir / mkdirs
 + backend block 调 Qt/C++ plugin
 + abel.package.json 项目入口骨架
 + 本地 path dependency / 本地 registry dependency + SemVer version requirement + abel.lock.json
@@ -643,12 +644,12 @@ Abel CLI 路径
 适合 backend：
 
 ```text
-文件系统
+内建 read_text/write_text/read_lines/write_lines/path_* / mkdirs 覆盖不了的文件系统能力
 复杂 Qt API
 高性能排序/图像/网络/数据库
 系统调用
 现有 C++ 库
-Abel v0 尚未实现的 IO 能力
+Abel 当前内建 IO 尚未实现的格式化输入、流式 IO、网络或平台能力
 ```
 
 不适合 backend：
@@ -657,6 +658,7 @@ Abel v0 尚未实现的 IO 能力
 普通算术
 普通 vector 处理
 普通 struct 数据整理
+普通 UTF-8 文本读写、按行读写、路径存在/文件/目录判断、递归建目录
 能用 Abel 写清楚的小逻辑
 ```
 

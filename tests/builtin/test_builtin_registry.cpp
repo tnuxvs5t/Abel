@@ -1,5 +1,7 @@
 #include "abelcore/builtin_registry.h"
 
+#include <QFile>
+#include <QTemporaryDir>
 #include <QtTest/QtTest>
 
 class AbelBuiltinRegistryTests final : public QObject {
@@ -378,6 +380,14 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("print")));
         QVERIFY(registry.hasFunction(QStringLiteral("println")));
         QVERIFY(registry.hasFunction(QStringLiteral("scan")));
+        QVERIFY(registry.hasFunction(QStringLiteral("read_text")));
+        QVERIFY(registry.hasFunction(QStringLiteral("write_text")));
+        QVERIFY(registry.hasFunction(QStringLiteral("read_lines")));
+        QVERIFY(registry.hasFunction(QStringLiteral("write_lines")));
+        QVERIFY(registry.hasFunction(QStringLiteral("path_exists")));
+        QVERIFY(registry.hasFunction(QStringLiteral("path_is_file")));
+        QVERIFY(registry.hasFunction(QStringLiteral("path_is_dir")));
+        QVERIFY(registry.hasFunction(QStringLiteral("mkdirs")));
         QVERIFY(registry.hasFunction(QStringLiteral("str_to_chars")));
         QVERIFY(registry.hasFunction(QStringLiteral("chars_to_str")));
         QVERIFY(registry.hasFunction(QStringLiteral("abs")));
@@ -439,6 +449,53 @@ private slots:
 
         QVERIFY(ctx.diagnostics().isEmpty());
         QCOMPARE(value.asString(), QStringLiteral("x=7, ok=true"));
+    }
+
+    void fileAndPathBuiltinsRunThroughRegistry()
+    {
+        auto registry = abel::BuiltinRegistry::makeDefault();
+        abel::AbelRuntimeContext ctx;
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+
+        const QString dir = temp.path() + QStringLiteral("/nested/io");
+        const QString file = dir + QStringLiteral("/story.txt");
+
+        auto call = [&](const QString& name, std::vector<abel::AbelValue> args) {
+            return registry.callFunction(abel::BuiltinFunctionCall{ctx, name, std::move(args), {}, {}});
+        };
+
+        auto made = call(QStringLiteral("mkdirs"), {abel::AbelValue::makeString(dir)});
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(made.type().kind, abel::TypeKind::Void);
+        QVERIFY(QFile::exists(dir));
+
+        auto wrote = call(QStringLiteral("write_text"), {
+            abel::AbelValue::makeString(file),
+            abel::AbelValue::makeString(QStringLiteral("alpha\nbeta")),
+        });
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(wrote.type().kind, abel::TypeKind::Void);
+
+        QCOMPARE(call(QStringLiteral("read_text"), {abel::AbelValue::makeString(file)}).asString(),
+                 QStringLiteral("alpha\nbeta"));
+        QVERIFY(call(QStringLiteral("path_exists"), {abel::AbelValue::makeString(file)}).asBool());
+        QVERIFY(call(QStringLiteral("path_is_file"), {abel::AbelValue::makeString(file)}).asBool());
+        QVERIFY(call(QStringLiteral("path_is_dir"), {abel::AbelValue::makeString(dir)}).asBool());
+
+        auto lineVector = abel::AbelValue::makeVector(abel::makeType(abel::TypeKind::Str), {
+            abel::AbelValue::makeString(QStringLiteral("hakurei")),
+            abel::AbelValue::makeString(QStringLiteral("kappa")),
+        });
+        call(QStringLiteral("write_lines"), {abel::AbelValue::makeString(file), lineVector});
+        QVERIFY(ctx.diagnostics().isEmpty());
+
+        auto lines = call(QStringLiteral("read_lines"), {abel::AbelValue::makeString(file)});
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(lines.type().kind, abel::TypeKind::Vector);
+        QCOMPARE(lines.asVector()->elements.size(), static_cast<size_t>(2));
+        QCOMPARE(lines.asVector()->elements[0].asString(), QStringLiteral("hakurei"));
+        QCOMPARE(lines.asVector()->elements[1].asString(), QStringLiteral("kappa"));
     }
 
     void mathBuiltinsRunThroughRegistry()

@@ -435,6 +435,57 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsFileAndPathBuiltins()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                str dir = "/tmp/abel";
+                str path = build_string(dir, "/note.txt");
+                mkdirs(dir);
+                write_text(path, "alpha");
+                str text = read_text(path);
+                vector<str> lines = {"beta", "gamma"};
+                write_lines(path, lines);
+                vector<str> read = read_lines(path);
+                bool ok = path_exists(path) && path_is_file(path) && path_is_dir(dir);
+                bool pipeOk = path |> path_exists;
+                path |> write_text("delta");
+                if (ok && pipeOk) {
+                    return text.len() + read.len() + 2;
+                }
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsFileAndPathBuiltinMisuse()
+    {
+        auto badReadPath = checkSource(QStringLiteral("fn int main() { str s = read_text(1); return s.len(); }"));
+        QVERIFY(!badReadPath.diagnostics.isEmpty());
+
+        auto badWriteContent = checkSource(QStringLiteral("fn int main() { write_text(\"x\", 1); return 0; }"));
+        QVERIFY(!badWriteContent.diagnostics.isEmpty());
+
+        auto badWriteLines = checkSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1};
+                write_lines("x", xs);
+                return 0;
+            }
+        )"));
+        QVERIFY(!badWriteLines.diagnostics.isEmpty());
+
+        auto badArity = checkSource(QStringLiteral("fn int main() { bool ok = path_exists(); return ok; }"));
+        QVERIFY(!badArity.diagnostics.isEmpty());
+
+        auto badPipePath = checkSource(QStringLiteral("fn int main() { str s = 1 |> read_text; return s.len(); }"));
+        QVERIFY(!badPipePath.diagnostics.isEmpty());
+    }
+
     void acceptsMathBuiltins()
     {
         const QString src = QStringLiteral(R"(

@@ -593,7 +593,94 @@ fn int main() {
 
 ---
 
-## 13. backend：Abel 调 Qt/C++ 插件
+## 13. 标准库第一片：IO、文件、路径、调试和测试
+
+当前标准库仍以 builtin 形式进入语言核心，但已经覆盖一批常用能力。
+
+### 13.1 终端 IO 与字符串构建
+
+```abel
+fn int main() {
+    println("hello ", 7);
+
+    int x;
+    str name;
+    scan(&x, &name);
+
+    println(build_string("x=", x, ", name=", name));
+    return 0;
+}
+```
+
+`scan(&x, ...)` 按空白分隔 token 输入，当前支持写入 `bool`、整数、`double/f64`、`char`、`str` 和 `any`。它要求参数是可写指针；`scan(x)` 或 `scan(&const_x)` 会在 `abel check` 阶段被拒绝。
+
+### 13.2 文件与路径
+
+文件/路径 builtin 是 v1 std.io/std.path 的第一片：
+
+```abel
+fn int main() {
+    str dir = "/tmp/abel-demo";
+    str file = build_string(dir, "/note.txt");
+
+    mkdirs(dir);
+    write_text(file, "alpha\nbeta");
+    str text = read_text(file);
+
+    vector<str> lines = {"hakurei", "kappa"};
+    write_lines(file, lines);
+    vector<str> back = read_lines(file);
+
+    if (path_exists(file) && path_is_file(file) && path_is_dir(dir)) {
+        return text.len() + back.len();
+    }
+    return 0;
+}
+```
+
+也支持 pipe 形态：
+
+```abel
+fn int main() {
+    str path = "/tmp/abel-demo/note.txt";
+    path |> write_text("delta");
+    bool ok = path |> path_exists;
+    return 0;
+}
+```
+
+签名：
+
+```text
+read_text(str path) -> str
+write_text(str path, str content) -> void
+read_lines(str path) -> vector<str>
+write_lines(str path, vector<str> lines) -> void
+path_exists(str path) -> bool
+path_is_file(str path) -> bool
+path_is_dir(str path) -> bool
+mkdirs(str path) -> void
+```
+
+这些 API 不把 Abel 变成安全沙箱：路径权限、覆盖写入、符号链接、并发写入等仍按宿主系统/Qt 行为处理。失败时产生运行期诊断；类型和参数个数错误应由 `abel check` 拦住。
+
+### 13.3 调试与测试
+
+```abel
+debug_break();
+debug_assert(x > 0, "x must be positive");
+
+test_assert(ok, "case=", id);
+test_eq(actual, expected);
+test_ne(left, right);
+test_close(3.14159, 3.14, 0.01);
+```
+
+这些诊断会复用 Abel runtime stack、源码行 excerpt 和 caret 输出。`test_*` 主要配合 `abel test .` 使用。
+
+---
+
+## 14. backend：Abel 调 Qt/C++ 插件
 
 Abel 用 `backend` 声明外部能力系统：
 
@@ -633,7 +720,7 @@ echo $?
 
 ---
 
-## 14. 写一个 Qt backend plugin
+## 15. 写一个 Qt backend plugin
 
 插件开发者不应该手写大量 `AbelValue` 拆箱逻辑。v0 提供 `AbelBackendPluginBase` / binder。
 
@@ -689,7 +776,7 @@ public:
 }
 ```
 
-### 14.1 Abel SDK 当前实际范围
+### 15.1 Abel SDK 当前实际范围
 
 先把机关量清楚：当前 Abel 已有 **安装版 SDK 第一片**。它不是最终稳定 ABI 发行包，但已经能让外部 backend 工程用 CMake 正常消费：
 
@@ -859,7 +946,7 @@ bind(QStringLiteral("ExampleSystem.notify"), [](QString message) {
 
 `void` 返回可以表达“只执行不返回值”的能力；如果调用方需要知道失败原因或状态，v0 更推荐返回 `bool` / `int` / `str` 等显式结果。
 
-### 14.2 从 0 搭建外部 backend 工程（MathSystem 示例）
+### 15.2 从 0 搭建外部 backend 工程（MathSystem 示例）
 
 这一节是操作闭环，不只是概念。
 
@@ -1152,7 +1239,7 @@ v1 binder 当前覆盖常用标量/vector/诊断通道，不是完整 C++ 类型
 
 ---
 
-## 15. 搭建自己的 Abel 小工程
+## 16. 搭建自己的 Abel 小工程
 
 推荐最小目录：
 
@@ -1512,7 +1599,7 @@ $ABEL run .
 
 ---
 
-## 16. 如何继续开发 Abel 本体
+## 17. 如何继续开发 Abel 本体
 
 先读 `AGENTS.md`。它是本仓库唯一工程规格。
 
@@ -1556,9 +1643,9 @@ struct private/public 与高级项
 
 ---
 
-## 17. 常见坑
+## 18. 常见坑
 
-### 17.1 把 Abel 当脚本语言
+### 18.1 把 Abel 当脚本语言
 
 错误直觉：
 
@@ -1578,7 +1665,7 @@ any 会自动转换。
 any 必须显式 cast。
 ```
 
-### 17.2 条件写 int
+### 18.2 条件写 int
 
 Abel 条件要 bool：
 
@@ -1596,7 +1683,7 @@ if (x) {
 }
 ```
 
-### 17.3 非 void 函数漏写 return
+### 18.3 非 void 函数漏写 return
 
 `fn int`、返回 `str` 的函数、返回非 void 的方法和 lambda 都必须保证所有可静态确认的路径返回值。当前 TypeChecker 已做保守 definite-return 检查：
 
@@ -1626,7 +1713,7 @@ fn int ok(bool b) {
 
 如果函数体已经有根因错误，例如调用未知函数，TypeChecker 不再额外追加“可能缺 return”的噪音，避免一个根因污染成诊断瀑布。运行期仍保留 ended-without-return 防线，但正常 `abel run` 会先执行同一套 check。
 
-### 17.4 backend 声明和插件 symbol 不一致
+### 18.4 backend 声明和插件 symbol 不一致
 
 三处必须咬合：
 
@@ -1638,7 +1725,7 @@ resource symbols:   MathSystem.fast_add
 
 任一处错，ResourceNode/BackendRegistry 应给 E06xx 类诊断。
 
-### 17.5 运行期错误怎么看
+### 18.5 运行期错误怎么看
 
 Abel 的运行期诊断已经包含 Abel 调用栈、源码位置、源码行 excerpt 和 caret。先看 primary error，再沿 `stack:` 往下看调用链：
 
@@ -1706,7 +1793,7 @@ actual/expected 和 message 都必须可 stringify，struct 需要用户提供 t
 断言失败同样带 primary 源码行、caret 和 Abel 调用栈。
 ```
 
-### 17.5 修改 parser 后不加错误恢复测试
+### 18.6 修改 parser 后不加错误恢复测试
 
 parser 曾经因为错误恢复不前进导致内存爆炸。以后动 parser，要特别检查：
 
@@ -1720,7 +1807,7 @@ parser 曾经因为错误恢复不前进导致内存爆炸。以后动 parser，
 
 ---
 
-## 18. 学习路线
+## 19. 学习路线
 
 最短路线：
 

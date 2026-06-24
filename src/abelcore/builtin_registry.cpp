@@ -1,5 +1,8 @@
 #include "abelcore/builtin_registry.h"
 
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QStringList>
 #include <QTextStream>
 
@@ -433,6 +436,154 @@ AbelValue builtinPrintln(BuiltinFunctionCall& call)
     }
     out << Qt::endl;
     return AbelValue::makeVoid();
+}
+
+std::optional<QString> requireStringArg(BuiltinFunctionCall& call, int index)
+{
+    const AbelValue& value = call.args[static_cast<size_t>(index)];
+    if (value.type().kind != TypeKind::Str) {
+        const SourceSpan span = index < static_cast<int>(call.argSpans.size())
+            ? call.argSpans[static_cast<size_t>(index)]
+            : call.callSpan;
+        call.ctx.error(QStringLiteral("E0440"),
+                       QStringLiteral("%1 expects str argument %2, got %3")
+                           .arg(call.name)
+                           .arg(index + 1)
+                           .arg(value.type().displayName()),
+                       span);
+        return std::nullopt;
+    }
+    return value.asString();
+}
+
+std::optional<std::vector<QString>> requireStringVectorArg(BuiltinFunctionCall& call, int index)
+{
+    const AbelValue& value = call.args[static_cast<size_t>(index)];
+    const AbelType expected = makeVectorType(makeType(TypeKind::Str));
+    if (!canAssignValue(expected, value.type())) {
+        const SourceSpan span = index < static_cast<int>(call.argSpans.size())
+            ? call.argSpans[static_cast<size_t>(index)]
+            : call.callSpan;
+        call.ctx.error(QStringLiteral("E0440"),
+                       QStringLiteral("%1 expects vector<str> argument %2, got %3")
+                           .arg(call.name)
+                           .arg(index + 1)
+                           .arg(value.type().displayName()),
+                       span);
+        return std::nullopt;
+    }
+    std::vector<QString> out;
+    const auto vector = value.asVector();
+    out.reserve(vector->elements.size());
+    for (const AbelValue& element : vector->elements)
+        out.push_back(element.asString());
+    return out;
+}
+
+AbelValue builtinFilePath(BuiltinFunctionCall& call)
+{
+    const QString& name = call.name;
+    auto path = requireStringArg(call, 0);
+    if (!path.has_value())
+        return AbelValue::makeUnknown();
+
+    if (name == QStringLiteral("read_text")) {
+        QFile file(*path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            call.ctx.error(QStringLiteral("E0441"),
+                           QStringLiteral("read_text cannot open '%1': %2").arg(*path, file.errorString()),
+                           call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeString(QString::fromUtf8(file.readAll()));
+    }
+
+    if (name == QStringLiteral("write_text")) {
+        auto content = requireStringArg(call, 1);
+        if (!content.has_value())
+            return AbelValue::makeUnknown();
+        QFile file(*path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            call.ctx.error(QStringLiteral("E0442"),
+                           QStringLiteral("write_text cannot open '%1': %2").arg(*path, file.errorString()),
+                           call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+            return AbelValue::makeUnknown();
+        }
+        const QByteArray bytes = content->toUtf8();
+        if (file.write(bytes) != bytes.size()) {
+            call.ctx.error(QStringLiteral("E0443"),
+                           QStringLiteral("write_text cannot write '%1': %2").arg(*path, file.errorString()),
+                           call.callSpan);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeVoid();
+    }
+
+    if (name == QStringLiteral("read_lines")) {
+        QFile file(*path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            call.ctx.error(QStringLiteral("E0441"),
+                           QStringLiteral("read_lines cannot open '%1': %2").arg(*path, file.errorString()),
+                           call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+            return AbelValue::makeUnknown();
+        }
+        QString text = QString::fromUtf8(file.readAll());
+        text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+        text.replace(QChar('\r'), QChar('\n'));
+        QStringList lines = text.isEmpty() ? QStringList{} : text.split(QChar('\n'));
+        if (!lines.isEmpty() && lines.back().isEmpty())
+            lines.removeLast();
+        std::vector<AbelValue> values;
+        values.reserve(static_cast<size_t>(lines.size()));
+        for (const QString& line : lines)
+            values.push_back(AbelValue::makeString(line));
+        return AbelValue::makeVector(makeType(TypeKind::Str), std::move(values));
+    }
+
+    if (name == QStringLiteral("write_lines")) {
+        auto lines = requireStringVectorArg(call, 1);
+        if (!lines.has_value())
+            return AbelValue::makeUnknown();
+        QStringList joined;
+        joined.reserve(static_cast<qsizetype>(lines->size()));
+        for (const QString& line : *lines)
+            joined.push_back(line);
+        QFile file(*path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            call.ctx.error(QStringLiteral("E0442"),
+                           QStringLiteral("write_lines cannot open '%1': %2").arg(*path, file.errorString()),
+                           call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+            return AbelValue::makeUnknown();
+        }
+        const QByteArray bytes = joined.join(QChar('\n')).toUtf8();
+        if (file.write(bytes) != bytes.size()) {
+            call.ctx.error(QStringLiteral("E0443"),
+                           QStringLiteral("write_lines cannot write '%1': %2").arg(*path, file.errorString()),
+                           call.callSpan);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeVoid();
+    }
+
+    if (name == QStringLiteral("path_exists"))
+        return AbelValue::makeBool(QFileInfo::exists(*path));
+    if (name == QStringLiteral("path_is_file"))
+        return AbelValue::makeBool(QFileInfo(*path).isFile());
+    if (name == QStringLiteral("path_is_dir"))
+        return AbelValue::makeBool(QFileInfo(*path).isDir());
+
+    if (name == QStringLiteral("mkdirs")) {
+        if (!QDir().mkpath(*path)) {
+            call.ctx.error(QStringLiteral("E0444"),
+                           QStringLiteral("mkdirs cannot create '%1'").arg(*path),
+                           call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeVoid();
+    }
+
+    call.ctx.error(QStringLiteral("E0445"), QStringLiteral("unknown file/path builtin '%1'").arg(name), call.callSpan);
+    return AbelValue::makeUnknown();
 }
 
 AbelValue builtinStrToChars(BuiltinFunctionCall& call)
@@ -1254,6 +1405,14 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("print"), 0, -1, true, builtinPrint, QStringLiteral("print stringified values")});
     registry.registerFunction({QStringLiteral("println"), 0, -1, true, builtinPrintln, QStringLiteral("print stringified values plus newline")});
     registry.registerFunction({QStringLiteral("scan"), 0, -1, true, builtinScan, QStringLiteral("scan whitespace tokens into pointer targets")});
+    registry.registerFunction({QStringLiteral("read_text"), 1, 1, false, builtinFilePath, QStringLiteral("read UTF-8 text file")});
+    registry.registerFunction({QStringLiteral("write_text"), 2, 2, false, builtinFilePath, QStringLiteral("write UTF-8 text file")});
+    registry.registerFunction({QStringLiteral("read_lines"), 1, 1, false, builtinFilePath, QStringLiteral("read UTF-8 text file as vector<str> lines")});
+    registry.registerFunction({QStringLiteral("write_lines"), 2, 2, false, builtinFilePath, QStringLiteral("write vector<str> lines as UTF-8 text file")});
+    registry.registerFunction({QStringLiteral("path_exists"), 1, 1, false, builtinFilePath, QStringLiteral("test path existence")});
+    registry.registerFunction({QStringLiteral("path_is_file"), 1, 1, false, builtinFilePath, QStringLiteral("test regular file path")});
+    registry.registerFunction({QStringLiteral("path_is_dir"), 1, 1, false, builtinFilePath, QStringLiteral("test directory path")});
+    registry.registerFunction({QStringLiteral("mkdirs"), 1, 1, false, builtinFilePath, QStringLiteral("create directory tree")});
     registry.registerFunction({QStringLiteral("str_to_chars"), 1, 1, false, builtinStrToChars, QStringLiteral("convert str to vector<char>")});
     registry.registerFunction({QStringLiteral("chars_to_str"), 1, 1, false, builtinCharsToStr, QStringLiteral("convert vector<char> to str")});
     registry.registerFunction({QStringLiteral("abs"), 1, 1, false, builtinMath, QStringLiteral("absolute value")});

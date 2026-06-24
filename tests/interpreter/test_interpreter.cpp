@@ -2,6 +2,7 @@
 #include "abelcore/lexer.h"
 #include "abelcore/parser.h"
 
+#include <QTemporaryDir>
 #include <QtTest/QtTest>
 
 class AbelInterpreterTests final : public QObject {
@@ -795,6 +796,52 @@ private slots:
         QVERIFY(!badBool.diagnostics.isEmpty());
         QCOMPARE(badBool.exitCode, 1);
         QVERIFY(badBool.diagnostics.front().message.contains(QStringLiteral("parse_bool")));
+    }
+
+    void fileAndPathBuiltinsWork()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString dir = temp.path() + QStringLiteral("/nested/io");
+        const QString file = dir + QStringLiteral("/story.txt");
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                str dir = "%1";
+                str file = "%2";
+                mkdirs(dir);
+                write_text(file, "alpha\nbeta");
+                str text = read_text(file);
+                vector<str> lines = {"hakurei", "kappa"};
+                write_lines(file, lines);
+                vector<str> read = read_lines(file);
+                bool ok = path_exists(file) && path_is_file(file) && path_is_dir(dir);
+                bool pipeOk = file |> path_exists;
+                file |> write_text("delta");
+                str final = read_text(file);
+                if (ok && pipeOk && final == "delta") {
+                    return text.len() + read.len() + read[0].len() + read[1].len() + 2;
+                }
+                return 0;
+            }
+        )").arg(dir, file);
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 26);
+    }
+
+    void fileBuiltinReportsRuntimeErrors()
+    {
+        auto result = runSource(QStringLiteral(R"(
+            fn int main() {
+                str text = read_text("/definitely/missing/abel-file.txt");
+                return text.len();
+            }
+        )"));
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 1);
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("read_text cannot open")));
     }
 
     void castPipeAndExtendedOperatorsWork()

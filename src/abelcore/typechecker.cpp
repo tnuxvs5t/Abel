@@ -95,6 +95,50 @@ bool isMathBuiltinName(const QString& name)
         || name == QStringLiteral("clamp");
 }
 
+bool isFilePathBuiltinName(const QString& name)
+{
+    return name == QStringLiteral("read_text")
+        || name == QStringLiteral("write_text")
+        || name == QStringLiteral("read_lines")
+        || name == QStringLiteral("write_lines")
+        || name == QStringLiteral("path_exists")
+        || name == QStringLiteral("path_is_file")
+        || name == QStringLiteral("path_is_dir")
+        || name == QStringLiteral("mkdirs");
+}
+
+int filePathBuiltinArity(const QString& name)
+{
+    if (name == QStringLiteral("write_text") || name == QStringLiteral("write_lines"))
+        return 2;
+    return 1;
+}
+
+std::optional<AbelType> filePathBuiltinArgType(const QString& name, qsizetype index)
+{
+    if (index == 0)
+        return makeType(TypeKind::Str);
+    if (index == 1 && name == QStringLiteral("write_text"))
+        return makeType(TypeKind::Str);
+    if (index == 1 && name == QStringLiteral("write_lines"))
+        return makeVectorType(makeType(TypeKind::Str));
+    return std::nullopt;
+}
+
+AbelType filePathBuiltinReturnType(const QString& name)
+{
+    if (name == QStringLiteral("read_text"))
+        return makeType(TypeKind::Str);
+    if (name == QStringLiteral("read_lines"))
+        return makeVectorType(makeType(TypeKind::Str));
+    if (name == QStringLiteral("path_exists")
+        || name == QStringLiteral("path_is_file")
+        || name == QStringLiteral("path_is_dir")) {
+        return makeType(TypeKind::Bool);
+    }
+    return makeType(TypeKind::Void);
+}
+
 int mathBuiltinArity(const QString& name)
 {
     if (name == QStringLiteral("pow")
@@ -1719,6 +1763,33 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
+        if (isFilePathBuiltinName(name)) {
+            const qsizetype expected = filePathBuiltinArity(name);
+            if (argc != expected)
+                return errorExpr(span, QStringLiteral("%1 expects %2 argument(s)").arg(name).arg(expected));
+            bool hasUnknown = isUnknownType(lhs.type);
+            if (!hasUnknown) {
+                auto expectedType = filePathBuiltinArgType(name, 0);
+                if (expectedType.has_value() && !isAssignable(*expectedType, lhs.type))
+                    error(span, QStringLiteral("%1 argument 1 expects %2, got %3")
+                                    .arg(name, expectedType->displayName(), lhs.type.displayName()));
+            }
+            for (size_t i = 0; i < args.size(); ++i) {
+                ExprType arg = checkExpr(*args[i]);
+                hasUnknown = hasUnknown || isUnknownType(arg.type);
+                auto expectedType = filePathBuiltinArgType(name, static_cast<qsizetype>(i + 1));
+                if (!isUnknownType(arg.type) && expectedType.has_value() && !isAssignable(*expectedType, arg.type)) {
+                    error(args[i]->span,
+                          QStringLiteral("%1 argument %2 expects %3, got %4")
+                              .arg(name)
+                              .arg(i + 2)
+                              .arg(expectedType->displayName(), arg.type.displayName()));
+                }
+            }
+            if (hasUnknown)
+                return unknownExprType();
+            return {filePathBuiltinReturnType(name), ValueCategory::PRValue, false};
+        }
         if (isMathBuiltinName(name)) {
             const qsizetype expected = mathBuiltinArity(name);
             if (argc != expected)
@@ -2088,6 +2159,27 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                 }
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
+        if (isFilePathBuiltinName(name->name)) {
+            const qsizetype expected = filePathBuiltinArity(name->name);
+            if (argc != expected)
+                return errorExpr(expr.span, QStringLiteral("%1 expects %2 argument(s)").arg(name->name).arg(expected));
+            bool hasUnknown = false;
+            for (size_t i = 0; i < expr.args.size(); ++i) {
+                ExprType arg = checkExpr(*expr.args[i]);
+                hasUnknown = hasUnknown || isUnknownType(arg.type);
+                auto expectedType = filePathBuiltinArgType(name->name, static_cast<qsizetype>(i));
+                if (!isUnknownType(arg.type) && expectedType.has_value() && !isAssignable(*expectedType, arg.type)) {
+                    error(expr.args[i]->span,
+                          QStringLiteral("%1 argument %2 expects %3, got %4")
+                              .arg(name->name)
+                              .arg(i + 1)
+                              .arg(expectedType->displayName(), arg.type.displayName()));
+                }
+            }
+            if (hasUnknown)
+                return unknownExprType();
+            return {filePathBuiltinReturnType(name->name), ValueCategory::PRValue, false};
         }
         if (isMathBuiltinName(name->name)) {
             const qsizetype expected = mathBuiltinArity(name->name);
