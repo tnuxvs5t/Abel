@@ -176,6 +176,7 @@ QString packageLocalRegistryIndexFileName();
 QString packageCacheRoot(const QString& rootDir);
 QString packageBackendCacheDir(const QString& rootDir);
 QString packageRegistryCacheDir(const QString& rootDir);
+QString packageRegistryMirrorCacheDir(const QString& rootDir);
 bool isPackageDirectory(const QString& path);
 
 PackageInitResult initPackageProject(const PackageInitOptions& options);

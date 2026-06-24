@@ -13,6 +13,7 @@
 #include <QProcess>
 #include <QSet>
 #include <QTextStream>
+#include <QUrl>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -28,6 +29,7 @@ constexpr auto kPackageLocalRegistryIndexFileName = ".abel-registry.json";
 constexpr auto kPackageCacheDirName = ".abel";
 constexpr auto kPackageCacheBackendDir = "cache/backend";
 constexpr auto kPackageCachePackagesDir = "cache/packages";
+constexpr auto kPackageCacheRegistriesDir = "cache/registries";
 
 void addPackageError(QList<Diagnostic>& diagnostics, const QString& message, const SourceSpan& span)
 {
@@ -127,6 +129,11 @@ QString sanitizeCacheSegment(QString value)
     return out.isEmpty() ? QStringLiteral("_") : out;
 }
 
+bool copyDirectoryRecursively(const QString& sourceDir,
+                              const QString& targetDir,
+                              QList<Diagnostic>& diagnostics,
+                              const SourceSpan& span);
+
 QString backendArtifactSourcePath(const PackageResolvedResource& resource)
 {
     return absolutePathFrom(resource.packageRoot, resource.node.path);
@@ -155,6 +162,12 @@ QString registryPackageCachePath(const QString& rootDir, const QString& name, co
                                      + sanitizeCacheSegment(version));
 }
 
+QString registryMirrorCachePath(const QString& rootDir, const QString& registry)
+{
+    QDir cacheDir(packageRegistryMirrorCacheDir(rootDir));
+    return cacheDir.absoluteFilePath(sanitizeCacheSegment(registry));
+}
+
 QString backendArtifactCacheMetadataPath(const QString& cachedPath)
 {
     return cachedPath + QStringLiteral(".abel-cache.json");
@@ -176,6 +189,58 @@ QString localRegistryRootPath(const QString& registryDir)
     return registryInfo.exists() && !canonical.isEmpty()
         ? canonical
         : registryInfo.absoluteFilePath();
+}
+
+std::optional<QString> localSourcePathForRegistryUri(const QString& registry,
+                                                     const QString& packageRoot,
+                                                     QList<Diagnostic>& diagnostics,
+                                                     const SourceSpan& span)
+{
+    const QString trimmed = registry.trimmed();
+    const QUrl url(trimmed);
+    if (!url.isValid() || url.scheme() != QStringLiteral("file")) {
+        addPackageError(diagnostics,
+                        QStringLiteral("registry URI '%1' is not supported yet; only file:// registry mirrors are implemented")
+                            .arg(registry),
+                        span);
+        return std::nullopt;
+    }
+    QString path = url.toLocalFile();
+    if (path.isEmpty()) {
+        addPackageError(diagnostics,
+                        QStringLiteral("file registry URI '%1' does not contain a local path").arg(registry),
+                        span);
+        return std::nullopt;
+    }
+    return absolutePathFrom(packageRoot, path);
+}
+
+std::optional<QString> registryResolutionRoot(const QString& registry,
+                                              const QString& packageRoot,
+                                              const QString& projectRoot,
+                                              QList<Diagnostic>& diagnostics,
+                                              const SourceSpan& span)
+{
+    if (!registry.contains(QStringLiteral("://")))
+        return absolutePathFrom(packageRoot, registry);
+
+    const auto sourcePath = localSourcePathForRegistryUri(registry, packageRoot, diagnostics, span);
+    if (!sourcePath.has_value())
+        return std::nullopt;
+
+    const QFileInfo sourceInfo(*sourcePath);
+    if (!sourceInfo.isDir()) {
+        addPackageError(diagnostics,
+                        QStringLiteral("registry URI '%1' points to missing directory '%2'")
+                            .arg(registry, *sourcePath),
+                        span);
+        return std::nullopt;
+    }
+
+    const QString mirrorPath = registryMirrorCachePath(projectRoot, registry);
+    if (!copyDirectoryRecursively(*sourcePath, mirrorPath, diagnostics, span))
+        return std::nullopt;
+    return mirrorPath;
 }
 
 QString fileSizeStamp(const QFileInfo& info)
@@ -870,7 +935,14 @@ std::optional<RegistryCandidate> findRegistryCandidate(const PackageDependency& 
                                                        QList<Diagnostic>& diagnostics,
                                                        const SourceSpan& span)
 {
-    const QString registryRoot = absolutePathFrom(packageRoot, dependency.registry);
+    const auto registryRootValue = registryResolutionRoot(dependency.registry,
+                                                          packageRoot,
+                                                          projectRoot,
+                                                          diagnostics,
+                                                          span);
+    if (!registryRootValue.has_value())
+        return std::nullopt;
+    const QString registryRoot = *registryRootValue;
     const QString packageDir = QDir(registryRoot).absoluteFilePath(dependency.name);
     const QFileInfo packageInfo(packageDir);
     if (!packageInfo.isDir()) {
@@ -1390,6 +1462,13 @@ QString packageRegistryCacheDir(const QString& rootDir)
     return QDir(QFileInfo(rootDir).absoluteFilePath()).absoluteFilePath(QString::fromLatin1(kPackageCacheDirName)
                                                                        + QStringLiteral("/")
                                                                        + QString::fromLatin1(kPackageCachePackagesDir));
+}
+
+QString packageRegistryMirrorCacheDir(const QString& rootDir)
+{
+    return QDir(QFileInfo(rootDir).absoluteFilePath()).absoluteFilePath(QString::fromLatin1(kPackageCacheDirName)
+                                                                       + QStringLiteral("/")
+                                                                       + QString::fromLatin1(kPackageCacheRegistriesDir));
 }
 
 bool isPackageDirectory(const QString& path)
@@ -2149,23 +2228,33 @@ PackageDependencyChangeResult addRegistryPackageDependency(const QString& dir,
         return result;
     }
 
-    QFileInfo registryInfo(registryDir);
-    if (!registryInfo.isAbsolute())
-        registryInfo = QFileInfo(QDir::current().absoluteFilePath(registryDir));
-    const QString registryRoot = canonicalOrAbsoluteFilePath(registryInfo);
-    if (!QFileInfo(registryRoot).isDir()) {
-        SourceSpan span;
-        span.file = registryRoot;
-        addPackageError(result.diagnostics,
-                        QStringLiteral("registry directory '%1' does not exist").arg(registryDir),
-                        span);
-        return result;
-    }
-
     PackageDependency dependency;
     dependency.name = name;
     dependency.kind = QStringLiteral("registry");
-    dependency.registry = QDir(result.rootDir).relativeFilePath(registryRoot);
+    if (registryDir.contains(QStringLiteral("://"))) {
+        const auto registryRoot = registryResolutionRoot(registryDir,
+                                                         result.rootDir,
+                                                         result.rootDir,
+                                                         result.diagnostics,
+                                                         SourceSpan{result.manifestFile});
+        if (!registryRoot.has_value())
+            return result;
+        dependency.registry = registryDir;
+    } else {
+        QFileInfo registryInfo(registryDir);
+        if (!registryInfo.isAbsolute())
+            registryInfo = QFileInfo(QDir::current().absoluteFilePath(registryDir));
+        const QString registryRoot = canonicalOrAbsoluteFilePath(registryInfo);
+        if (!QFileInfo(registryRoot).isDir()) {
+            SourceSpan span;
+            span.file = registryRoot;
+            addPackageError(result.diagnostics,
+                            QStringLiteral("registry directory '%1' does not exist").arg(registryDir),
+                            span);
+            return result;
+        }
+        dependency.registry = QDir(result.rootDir).relativeFilePath(registryRoot);
+    }
     dependency.version = requirement;
     result.dependency = dependency;
 

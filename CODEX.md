@@ -22,7 +22,7 @@
 
 不要默认修改 Abel 编译器/解释器源码。
 不要把用户项目扩成大型框架。
-不要幻想 Abel 已经有远程 registry、完整 semver solver、网络 download cache、JIT、成熟模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、本地 registry 目录依赖、SemVer version requirement 第一片、同名包多解析冲突诊断、lockfile、package graph consumption、根项目 `src/**/*.abel` 多文件合并、依赖包非 entry `src/**/*.abel` 库源码合并、package-aware function/struct/backend resolution 第一片、`module/use` 可见性第一片、`export use` re-export 第一片、module-qualified 与 import-alias-qualified 函数/struct/backend lookup 第一片、跨包顶层 `export` enforcement 第一片、`.abel/cache/packages` 本地包缓存、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、`abel package publish` 本地 registry 发布第一片、`.abel-registry.json` 本地 registry 索引和 `abel package registry index/check/list` 第一片、add/remove/update/build 做成早期闭环。
+不要幻想 Abel 已经有 HTTP/network 远程 registry、完整 semver solver、成熟网络 download cache、JIT、成熟模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、本地 registry 目录依赖、`file://` registry URI 镜像缓存第一片、SemVer version requirement 第一片、同名包多解析冲突诊断、lockfile、package graph consumption、根项目 `src/**/*.abel` 多文件合并、依赖包非 entry `src/**/*.abel` 库源码合并、package-aware function/struct/backend resolution 第一片、`module/use` 可见性第一片、`export use` re-export 第一片、module-qualified 与 import-alias-qualified 函数/struct/backend lookup 第一片、跨包顶层 `export` enforcement 第一片、`.abel/cache/packages` 本地包缓存、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、`abel package publish` 本地 registry 发布第一片、`.abel-registry.json` 本地 registry 索引和 `abel package registry index/check/list` 第一片、add/remove/update/build 做成早期闭环。
 
 当前 Abel 的正确定位：
 
@@ -37,11 +37,12 @@ C/C++ 值模型
 + builtin any_type / any_is / any_is_* inspection helpers; typed extraction still uses cast<T>(any)
 + backend block 调 Qt/C++ plugin
 + abel.package.json 项目入口骨架
-+ 本地 path dependency / 本地 registry dependency + SemVer version requirement + abel.lock.json
++ 本地 path dependency / 本地 registry dependency / file:// registry mirror-cache + SemVer version requirement + abel.lock.json
 + package graph 消费依赖 backendArtifacts
 + abel package publish 到本地 registry，并维护 .abel-registry.json
 + abel package registry index/check/list
 + .abel/cache/packages 项目级 registry package 缓存
++ .abel/cache/registries 项目级 file:// registry 镜像缓存
 + backendArtifacts[].build 的 CMake 自动构建第一片
 + .abel/cache/backend 项目级 backend artifact 缓存与 .abel-cache.json sidecar
 + abel add/remove/update/build
@@ -206,8 +207,8 @@ $ABEL_BIN run .
 - `fn int main()` 的返回值会成为进程退出码；
 - 普通成功建议 `return 0;`；
 - 如果要观察计算结果，优先用 `println(...)` 输出，不要只依赖退出码；
-- 当前项目入口、本地 path dependency、本地 registry dependency、SemVer version requirement、lockfile、`.abel/cache/packages`、本地 registry `.abel-registry.json` 索引、backend artifact 项目缓存、sidecar 失效检测与 CMake backend artifact 自动构建只是早期包管理闭环；不要假设已有成熟远程 registry、完整 semver solver、网络下载缓存、完整 ABI/版本化缓存失效或完整 public/private 模块系统。
-- 如果本地 registry 存在 `.abel-registry.json`，resolver 会校验并消费该索引；索引 stale/malformed 时不要绕过，先运行 `abel package registry index <registry-dir>` 重建。没有索引的旧本地 registry 才会退回目录扫描。
+- 当前项目入口、本地 path dependency、本地 registry dependency、`file://` registry mirror-cache、SemVer version requirement、lockfile、`.abel/cache/packages`、`.abel/cache/registries`、本地 registry `.abel-registry.json` 索引、backend artifact 项目缓存、sidecar 失效检测与 CMake backend artifact 自动构建只是早期包管理闭环；不要假设已有成熟 HTTP/network 远程 registry、完整 semver solver、成熟网络下载缓存、完整 ABI/版本化缓存失效或完整 public/private 模块系统。
+- 如果本地 registry 或 `file://` 镜像 registry 存在 `.abel-registry.json`，resolver 会校验并消费该索引；索引 stale/malformed 时不要绕过，先运行 `abel package registry index <registry-dir>` 重建源 registry。没有索引的旧本地 registry 才会退回目录扫描。`file://` registry URI 会先镜像到 `.abel/cache/registries/<sanitized-uri>`，再复制选中的包版本到 `.abel/cache/packages/<name>/<version>`。
 - package 目录输入会合并根项目 `src/**/*.abel`，entry 文件最后加载；依赖包会合并非 entry `src/**/*.abel` 库源码，依赖包 entry 默认排除以避免 `main` 冲突。跨包访问依赖包顶层 `fn/struct/backend` 要求目标带 `export`；同包跨模块访问要求显式 `use`；`export use some.module;` 会把被导入模块作为 facade 的 re-export 暴露给使用当前模块的人；`module.path::symbol` 与 `use module.path as Alias; Alias::symbol` 可用于函数、struct 类型/构造和 backend 调用解歧，但不会绕过 `use` / `export`。
 - 同名普通函数按当前 package 上下文解析；依赖包内部 private helper 不应污染根项目，根项目同名 helper 也不应破坏依赖包内部调用。
 - resolver 会拒绝同一个 package name 被解析到不同 version/source/resolvedPath；如果用户遇到 dependency conflict，不要绕过 lockfile，应调整版本要求或依赖拓扑。
@@ -778,7 +779,7 @@ add_library(abelcore SHARED IMPORTED GLOBAL)
 ```text
 不承诺跨 Qt 版本 ABI。
 不承诺跨编译器 ABI。
-只包含本地 registry publish/cache 第一片，不包含远程 registry、完整 solver 或网络 download cache。
+包含本地 registry publish/cache 与 `file://` registry mirror-cache 第一片，不包含 HTTP/network registry、完整 solver 或成熟网络 download cache。
 backend binder 覆盖常用 Abel 标量/vector，但不是任意 C++ 类型宇宙。
 ```
 

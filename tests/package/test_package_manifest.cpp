@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <QUrl>
 #include <QtTest/QtTest>
 
 class AbelPackageManifestTests final : public QObject {
@@ -407,6 +408,53 @@ private slots:
         QCOMPARE(fromExistingLock.dependencies.front().rootDir, cachedRoot);
     }
 
+    void resolvesFileRegistryUriThroughMirrorCache()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        writePackage(root, QStringLiteral("registry/dep/1.0.0"), QStringLiteral("dep"), QStringLiteral("1.0.0"));
+        writePackage(root, QStringLiteral("registry/dep/1.2.0"), QStringLiteral("dep"), QStringLiteral("1.2.0"));
+        writePackage(root, QStringLiteral("app"), QStringLiteral("app"), QStringLiteral("0.1.0"));
+
+        const QString registryRoot = root.absoluteFilePath(QStringLiteral("registry"));
+        auto indexed = abel::writeLocalPackageRegistryIndex(registryRoot);
+        for (const auto& d : indexed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(indexed.diagnostics.isEmpty());
+
+        const QString registryUri = QUrl::fromLocalFile(registryRoot).toString();
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "registry", "registry": "%1", "version": "^1.0.0"}
+                      ]
+                  })").arg(registryUri));
+
+        const QString appRoot = root.absoluteFilePath(QStringLiteral("app"));
+        auto graph = abel::updatePackageGraph(appRoot);
+        for (const auto& d : graph.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(graph.diagnostics.isEmpty());
+        QCOMPARE(graph.entries.size(), 1);
+        QCOMPARE(graph.entries.front().source, registryUri);
+        QCOMPARE(graph.entries.front().version, QStringLiteral("1.2.0"));
+
+        const QString mirrorRoot = abel::packageRegistryMirrorCacheDir(appRoot);
+        QVERIFY(QFileInfo(mirrorRoot).isDir());
+        QVERIFY(QFileInfo(QDir(mirrorRoot).absoluteFilePath(QStringLiteral("file___"))).exists()
+                || !QDir(mirrorRoot).entryList(QDir::Dirs | QDir::NoDotAndDotDot).isEmpty());
+
+        const QString cachedRoot = QDir(appRoot).absoluteFilePath(QStringLiteral(".abel/cache/packages/dep/1.2.0"));
+        QCOMPARE(graph.entries.front().resolvedPath, cachedRoot);
+        QCOMPARE(graph.dependencies.size(), 1);
+        QCOMPARE(graph.dependencies.front().rootDir, cachedRoot);
+    }
+
     void rejectsUnsatisfiedRegistryDependencyVersion()
     {
         QTemporaryDir dir;
@@ -484,6 +532,48 @@ private slots:
         QCOMPARE(lockedDep.value(QStringLiteral("versionRequirement")).toString(), QStringLiteral("^1.0.0"));
         QCOMPARE(lockedDep.value(QStringLiteral("kind")).toString(), QStringLiteral("registry"));
         QCOMPARE(lockedDep.value(QStringLiteral("source")).toString(), QStringLiteral("../registry"));
+        QVERIFY(lockedDep.value(QStringLiteral("resolvedPath")).toString().contains(QStringLiteral(".abel/cache/packages/dep/1.1.0")));
+    }
+
+    void addsFileRegistryUriDependencyAndUpdatesLockfile()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        writePackage(root, QStringLiteral("registry/dep/1.0.0"), QStringLiteral("dep"), QStringLiteral("1.0.0"));
+        writePackage(root, QStringLiteral("registry/dep/1.1.0"), QStringLiteral("dep"), QStringLiteral("1.1.0"));
+        writePackage(root, QStringLiteral("app"), QStringLiteral("app"), QStringLiteral("0.1.0"));
+
+        const QString appRoot = root.absoluteFilePath(QStringLiteral("app"));
+        const QString registryUri = QUrl::fromLocalFile(root.absoluteFilePath(QStringLiteral("registry"))).toString();
+        auto changed = abel::addRegistryPackageDependency(appRoot,
+                                                          QStringLiteral("dep"),
+                                                          QStringLiteral("^1.0.0"),
+                                                          registryUri);
+        for (const auto& d : changed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(changed.diagnostics.isEmpty());
+        QVERIFY(changed.changed);
+        QCOMPARE(changed.dependency.kind, QStringLiteral("registry"));
+        QCOMPARE(changed.dependency.registry, registryUri);
+        QCOMPARE(changed.lockedPackages, 1);
+
+        QFile manifestFile(QDir(appRoot).absoluteFilePath(abel::packageManifestFileName()));
+        QVERIFY(manifestFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QJsonDocument manifestDoc = QJsonDocument::fromJson(manifestFile.readAll());
+        const QJsonObject dep = manifestDoc.object()
+                                    .value(QStringLiteral("dependencies")).toArray()
+                                    .at(0).toObject();
+        QCOMPARE(dep.value(QStringLiteral("registry")).toString(), registryUri);
+
+        QFile lockFile(changed.lockFile);
+        QVERIFY(lockFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QJsonDocument lockDoc = QJsonDocument::fromJson(lockFile.readAll());
+        const QJsonObject lockedDep = lockDoc.object()
+                                      .value(QStringLiteral("packages")).toArray()
+                                      .at(0).toObject();
+        QCOMPARE(lockedDep.value(QStringLiteral("source")).toString(), registryUri);
         QVERIFY(lockedDep.value(QStringLiteral("resolvedPath")).toString().contains(QStringLiteral(".abel/cache/packages/dep/1.1.0")));
     }
 
