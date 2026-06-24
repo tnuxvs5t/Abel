@@ -215,7 +215,7 @@ QJsonObject backendArtifactCacheMetadata(const PackageResolvedResource& resource
                                          const QFileInfo& sourceInfo)
 {
     QJsonObject object;
-    object.insert(QStringLiteral("formatVersion"), 1);
+    object.insert(QStringLiteral("formatVersion"), 2);
     object.insert(QStringLiteral("packageName"), resource.packageName);
     object.insert(QStringLiteral("backendId"), resource.node.backendId);
     object.insert(QStringLiteral("sourcePath"), canonicalOrAbsoluteFilePath(sourceInfo));
@@ -225,6 +225,11 @@ QJsonObject backendArtifactCacheMetadata(const PackageResolvedResource& resource
     object.insert(QStringLiteral("iid"), resource.node.iid);
     object.insert(QStringLiteral("qtVersion"), resource.node.qtVersion);
     object.insert(QStringLiteral("kit"), resource.node.kit);
+    object.insert(QStringLiteral("platform"), resource.node.platform);
+    object.insert(QStringLiteral("compiler"), resource.node.compiler);
+    object.insert(QStringLiteral("compilerVersion"), resource.node.compilerVersion);
+    object.insert(QStringLiteral("cxxStandard"), resource.node.cxxStandard);
+    object.insert(QStringLiteral("abelAbi"), resource.node.abelAbi);
     object.insert(QStringLiteral("symbols"), symbolsToJson(resource.node.symbols));
     object.insert(QStringLiteral("declaredPath"), resource.node.path);
     object.insert(QStringLiteral("sourcePathInput"), sourcePath);
@@ -276,7 +281,7 @@ bool backendArtifactCacheMetadataMatches(const QString& metadataPath,
         return false;
 
     const QJsonObject object = doc.object();
-    return object.value(QStringLiteral("formatVersion")).toInt() == 1
+    return object.value(QStringLiteral("formatVersion")).toInt() == 2
         && object.value(QStringLiteral("packageName")).toString() == resource.packageName
         && object.value(QStringLiteral("backendId")).toString() == resource.node.backendId
         && object.value(QStringLiteral("sourcePath")).toString() == canonicalOrAbsoluteFilePath(sourceInfo)
@@ -286,6 +291,11 @@ bool backendArtifactCacheMetadataMatches(const QString& metadataPath,
         && object.value(QStringLiteral("iid")).toString() == resource.node.iid
         && object.value(QStringLiteral("qtVersion")).toString() == resource.node.qtVersion
         && object.value(QStringLiteral("kit")).toString() == resource.node.kit
+        && object.value(QStringLiteral("platform")).toString() == resource.node.platform
+        && object.value(QStringLiteral("compiler")).toString() == resource.node.compiler
+        && object.value(QStringLiteral("compilerVersion")).toString() == resource.node.compilerVersion
+        && object.value(QStringLiteral("cxxStandard")).toString() == resource.node.cxxStandard
+        && object.value(QStringLiteral("abelAbi")).toString() == resource.node.abelAbi
         && symbolsMatchJson(object.value(QStringLiteral("symbols")), resource.node.symbols)
         && object.value(QStringLiteral("declaredPath")).toString() == resource.node.path
         && object.value(QStringLiteral("sourcePathInput")).toString() == sourcePath;
@@ -983,6 +993,11 @@ ResourceNode parseBackendArtifact(const QJsonObject& object,
     node.iid = optionalString(object, QStringLiteral("iid"), QStringLiteral(IAbelBackend_iid));
     node.qtVersion = optionalString(object, QStringLiteral("qtVersion"), currentAbelQtVersion());
     node.kit = optionalString(object, QStringLiteral("kit"), currentAbelQtKit());
+    node.platform = optionalString(object, QStringLiteral("platform"), currentAbelPlatform());
+    node.compiler = optionalString(object, QStringLiteral("compiler"), currentAbelCompiler());
+    node.compilerVersion = optionalString(object, QStringLiteral("compilerVersion"), currentAbelCompilerVersion());
+    node.cxxStandard = optionalString(object, QStringLiteral("cxxStandard"), currentAbelCxxStandard());
+    node.abelAbi = optionalString(object, QStringLiteral("abelAbi"), currentAbelAbi());
     node.symbols = parseSymbols(object, node.backendId, diagnostics, span);
     node.state = ResourceNodeState::Unloaded;
     if (build)

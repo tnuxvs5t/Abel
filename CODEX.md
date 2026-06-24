@@ -953,6 +953,11 @@ resource JSON：
   "backendId": "MathSystem",
   "qtVersion": "6.11.1",
   "kit": "gcc_64",
+  "platform": "linux-x86_64",
+  "compiler": "gcc",
+  "compilerVersion": "14.2.0",
+  "cxxStandard": "202302",
+  "abelAbi": "abelcore-0",
   "symbols": [
     "MathSystem.fast_add",
     "MathSystem.sort"
@@ -962,7 +967,7 @@ resource JSON：
 }
 ```
 
-`qtVersion` / `kit` 是加载期兼容门禁。`$ABEL_BIN resources check` 只验证 JSON 形状和字段归属，不加载 `.so`，也不按当前机器拒绝外来 Qt version / kit；`$ABEL_BIN run --resource ...` 和 package 自动加载才会在 `QPluginLoader` 前拒绝与当前 Abel runtime 不一致的 Qt version / kit。
+`qtVersion` / `kit` / `platform` / `compiler` / `compilerVersion` / `cxxStandard` / `abelAbi` 是加载期兼容门禁。`$ABEL_BIN resources check` 只验证 JSON 形状和字段归属，不加载 `.so`，也不按当前机器拒绝外来兼容字符串；`$ABEL_BIN run --resource ...` 和 package 自动加载才会在 `QPluginLoader` 前拒绝与当前 Abel runtime 不一致的 plugin。
 
 三处名字必须咬合：
 
@@ -1032,7 +1037,7 @@ $ABEL_BIN run .
 .abel/cache/backend/<package>/<backendId>/<plugin-file>
 ```
 
-之后 `$ABEL_BIN run .` 会检查缓存旁边的 `<plugin>.abel-cache.json` sidecar。只有缓存 `.so` 存在，且 sidecar 仍匹配源 artifact 的路径、大小、mtime、ResourceNode 字段与 symbols，才优先加载缓存；缓存不存在、sidecar 缺失或失效时，回退到 manifest 里的源 artifact path。重新运行 `$ABEL_BIN build .` 会刷新缓存和 sidecar。若 `backendArtifacts` 未显式写 `qtVersion` / `kit`，Abel 会用当前 runtime 的 Qt version / kit 生成内部 ResourceNode；加载期仍会拒绝声明值和当前 runtime 不一致的资源。
+之后 `$ABEL_BIN run .` 会检查缓存旁边的 `<plugin>.abel-cache.json` sidecar。只有缓存 `.so` 存在，且 sidecar 仍匹配源 artifact 的路径、大小、mtime、ResourceNode 字段、platform/compiler/C++/Abel ABI 兼容字段与 symbols，才优先加载缓存；缓存不存在、sidecar 缺失或失效时，回退到 manifest 里的源 artifact path。重新运行 `$ABEL_BIN build .` 会刷新缓存和 sidecar。若 `backendArtifacts` 未显式写 `qtVersion` / `kit` / `platform` / `compiler` / `compilerVersion` / `cxxStandard` / `abelAbi`，Abel 会用当前 runtime 自动生成内部 ResourceNode；加载期仍会拒绝声明值和当前 runtime 不一致的资源。
 
 `backendArtifacts[].build` 最小形状：
 
@@ -1072,7 +1077,7 @@ backend 排错顺序：
 3. $ABEL_BIN build . 是否成功配置/构建 backend CMake。
 4. $ABEL_BIN build . 是否成功写入 .abel/cache/backend/... 和对应 .abel-cache.json。
 5. resource JSON path 或 backendArtifacts path 是否指向构建后的真实 .so。
-6. qtVersion / kit 是否和当前 Abel runtime 一致；resources check 不会替你发现这个加载期错误。
+6. qtVersion / kit / platform / compiler / compilerVersion / cxxStandard / abelAbi 是否和当前 Abel runtime 一致；resources check 不会替你发现这个加载期错误。
 7. iid 是否是 org.abel.IAbelBackend/1.0。
 8. backendId 是否是 MathSystem。
 9. Abel 声明、C++ bind、JSON symbols 是否一致。

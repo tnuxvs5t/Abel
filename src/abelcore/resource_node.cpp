@@ -7,11 +7,16 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
+#include <QSysInfo>
 #include <QPluginLoader>
 #include <QtGlobal>
 
 #ifndef ABEL_QT_KIT_NAME
 #define ABEL_QT_KIT_NAME "unknown"
+#endif
+
+#ifndef ABEL_ABI_TAG
+#define ABEL_ABI_TAG "abelcore-0"
 #endif
 
 namespace abel {
@@ -101,6 +106,47 @@ QString currentAbelQtKit()
     return QString::fromLatin1(ABEL_QT_KIT_NAME);
 }
 
+QString currentAbelPlatform()
+{
+    return QSysInfo::kernelType() + QStringLiteral("-") + QSysInfo::currentCpuArchitecture();
+}
+
+QString currentAbelCompiler()
+{
+#if defined(__clang__)
+    return QStringLiteral("clang");
+#elif defined(__GNUC__)
+    return QStringLiteral("gcc");
+#elif defined(_MSC_VER)
+    return QStringLiteral("msvc");
+#else
+    return QStringLiteral("unknown");
+#endif
+}
+
+QString currentAbelCompilerVersion()
+{
+#if defined(__clang__)
+    return QStringLiteral("%1.%2.%3").arg(__clang_major__).arg(__clang_minor__).arg(__clang_patchlevel__);
+#elif defined(__GNUC__)
+    return QStringLiteral("%1.%2.%3").arg(__GNUC__).arg(__GNUC_MINOR__).arg(__GNUC_PATCHLEVEL__);
+#elif defined(_MSC_VER)
+    return QString::number(_MSC_VER);
+#else
+    return QStringLiteral("unknown");
+#endif
+}
+
+QString currentAbelCxxStandard()
+{
+    return QString::number(__cplusplus);
+}
+
+QString currentAbelAbi()
+{
+    return QString::fromLatin1(ABEL_ABI_TAG);
+}
+
 ResourceNodeParseResult resourceNodeFromJson(const QJsonObject& object, const SourceSpan& span)
 {
     ResourceNodeParseResult result;
@@ -111,6 +157,11 @@ ResourceNodeParseResult resourceNodeFromJson(const QJsonObject& object, const So
     result.node.backendId = requiredString(object, QStringLiteral("backendId"), result.diagnostics, span);
     result.node.qtVersion = requiredString(object, QStringLiteral("qtVersion"), result.diagnostics, span);
     result.node.kit = requiredString(object, QStringLiteral("kit"), result.diagnostics, span);
+    result.node.platform = requiredString(object, QStringLiteral("platform"), result.diagnostics, span);
+    result.node.compiler = requiredString(object, QStringLiteral("compiler"), result.diagnostics, span);
+    result.node.compilerVersion = requiredString(object, QStringLiteral("compilerVersion"), result.diagnostics, span);
+    result.node.cxxStandard = requiredString(object, QStringLiteral("cxxStandard"), result.diagnostics, span);
+    result.node.abelAbi = requiredString(object, QStringLiteral("abelAbi"), result.diagnostics, span);
 
     if (result.node.kind != QStringLiteral("qt_plugin"))
         addError(result.diagnostics, QStringLiteral("resource node kind must be 'qt_plugin'"), span);
@@ -210,6 +261,41 @@ ResourceNodeLoadResult loadBackendResourceNode(const ResourceNode& node,
         addLoadError(result.diagnostics,
                      QStringLiteral("resource node Qt kit '%1' does not match Abel Qt kit '%2'")
                          .arg(node.kit, currentAbelQtKit()));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+    if (node.platform != currentAbelPlatform()) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("resource node platform '%1' does not match Abel platform '%2'")
+                         .arg(node.platform, currentAbelPlatform()));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+    if (node.compiler != currentAbelCompiler()) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("resource node compiler '%1' does not match Abel compiler '%2'")
+                         .arg(node.compiler, currentAbelCompiler()));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+    if (node.compilerVersion != currentAbelCompilerVersion()) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("resource node compiler version '%1' does not match Abel compiler version '%2'")
+                         .arg(node.compilerVersion, currentAbelCompilerVersion()));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+    if (node.cxxStandard != currentAbelCxxStandard()) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("resource node C++ standard '%1' does not match Abel C++ standard '%2'")
+                         .arg(node.cxxStandard, currentAbelCxxStandard()));
+        result.node.lastError = result.diagnostics.back().message;
+        return result;
+    }
+    if (node.abelAbi != currentAbelAbi()) {
+        addLoadError(result.diagnostics,
+                     QStringLiteral("resource node Abel ABI '%1' does not match Abel ABI '%2'")
+                         .arg(node.abelAbi, currentAbelAbi()));
         result.node.lastError = result.diagnostics.back().message;
         return result;
     }

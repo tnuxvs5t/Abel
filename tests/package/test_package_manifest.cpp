@@ -68,6 +68,13 @@ private slots:
         QCOMPARE(parsed.package.backendArtifacts.front().symbols.size(), 2);
         QCOMPARE(parsed.package.backendArtifacts.front().symbols[0], QStringLiteral("MathSystem.fast_add"));
         QCOMPARE(parsed.package.backendArtifacts.front().symbols[1], QStringLiteral("MathSystem.sort"));
+        QCOMPARE(parsed.package.backendArtifacts.front().qtVersion, abel::currentAbelQtVersion());
+        QCOMPARE(parsed.package.backendArtifacts.front().kit, abel::currentAbelQtKit());
+        QCOMPARE(parsed.package.backendArtifacts.front().platform, abel::currentAbelPlatform());
+        QCOMPARE(parsed.package.backendArtifacts.front().compiler, abel::currentAbelCompiler());
+        QCOMPARE(parsed.package.backendArtifacts.front().compilerVersion, abel::currentAbelCompilerVersion());
+        QCOMPARE(parsed.package.backendArtifacts.front().cxxStandard, abel::currentAbelCxxStandard());
+        QCOMPARE(parsed.package.backendArtifacts.front().abelAbi, abel::currentAbelAbi());
     }
 
     void packageSourceFilesIncludeSrcTreeWithEntryLast()
@@ -979,6 +986,20 @@ private slots:
         QVERIFY(copied.open(QIODevice::ReadOnly | QIODevice::Text));
         QCOMPARE(QString::fromUtf8(copied.readAll()), QStringLiteral("dep-binary"));
 
+        QFile metadata(cache.resources.front().metadataPath);
+        QVERIFY(metadata.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QJsonDocument metadataDoc = QJsonDocument::fromJson(metadata.readAll());
+        QVERIFY(metadataDoc.isObject());
+        const QJsonObject metadataObject = metadataDoc.object();
+        QCOMPARE(metadataObject.value(QStringLiteral("formatVersion")).toInt(), 2);
+        QCOMPARE(metadataObject.value(QStringLiteral("qtVersion")).toString(), abel::currentAbelQtVersion());
+        QCOMPARE(metadataObject.value(QStringLiteral("kit")).toString(), abel::currentAbelQtKit());
+        QCOMPARE(metadataObject.value(QStringLiteral("platform")).toString(), abel::currentAbelPlatform());
+        QCOMPARE(metadataObject.value(QStringLiteral("compiler")).toString(), abel::currentAbelCompiler());
+        QCOMPARE(metadataObject.value(QStringLiteral("compilerVersion")).toString(), abel::currentAbelCompilerVersion());
+        QCOMPARE(metadataObject.value(QStringLiteral("cxxStandard")).toString(), abel::currentAbelCxxStandard());
+        QCOMPARE(metadataObject.value(QStringLiteral("abelAbi")).toString(), abel::currentAbelAbi());
+
         const QList<abel::PackageResolvedResource> runResources = abel::cachedPackageBackendArtifacts(graph);
         QCOMPARE(runResources.size(), 1);
         QCOMPARE(runResources.front().packageRoot, appRoot);
@@ -1051,6 +1072,76 @@ private slots:
         QCOMPARE(runResources.size(), 1);
         QCOMPARE(runResources.front().packageRoot, depRoot);
         QCOMPARE(runResources.front().node.path, QStringLiteral("plugins/libdep_backend.so"));
+    }
+
+    void backendCacheFallsBackWhenCompatibilityMetadataIsStale()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src")));
+        QVERIFY(root.mkpath(QStringLiteral("dep/plugins")));
+        QVERIFY(root.mkpath(QStringLiteral("app/src")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/plugins/libdep_backend.so")),
+                  QStringLiteral("dep-binary"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "0.2.0",
+                      "entry": "src/main.abel",
+                      "backendArtifacts": [
+                          {
+                              "backendId": "DepSystem",
+                              "path": "plugins/libdep_backend.so",
+                              "symbols": ["ping"]
+                          }
+                      ]
+                  })"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "path", "path": "../dep"}
+                      ]
+                  })"));
+
+        const QString appRoot = root.absoluteFilePath(QStringLiteral("app"));
+        const QString depRoot = root.absoluteFilePath(QStringLiteral("dep"));
+        auto graph = abel::updatePackageGraph(appRoot);
+        QVERIFY(graph.diagnostics.isEmpty());
+
+        auto cache = abel::updatePackageBackendCache(graph);
+        for (const auto& d : cache.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(cache.diagnostics.isEmpty());
+        QCOMPARE(cache.resources.size(), 1);
+
+        const QString cachedPath = cache.resources.front().cachedPath;
+        const QString metadataPath = cache.resources.front().metadataPath;
+        QFile metadata(metadataPath);
+        QVERIFY(metadata.open(QIODevice::ReadOnly | QIODevice::Text));
+        QJsonDocument doc = QJsonDocument::fromJson(metadata.readAll());
+        metadata.close();
+        QVERIFY(doc.isObject());
+        QJsonObject object = doc.object();
+        object.insert(QStringLiteral("compilerVersion"), QStringLiteral("foreign"));
+        metadata.setFileName(metadataPath);
+        QVERIFY(metadata.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate));
+        const QByteArray bytes = QJsonDocument(object).toJson(QJsonDocument::Indented);
+        QCOMPARE(metadata.write(bytes), static_cast<qint64>(bytes.size()));
+
+        QList<abel::PackageResolvedResource> runResources = abel::cachedPackageBackendArtifacts(graph);
+        QCOMPARE(runResources.size(), 1);
+        QCOMPARE(runResources.front().packageRoot, depRoot);
+        QCOMPARE(runResources.front().node.path, QStringLiteral("plugins/libdep_backend.so"));
+        QVERIFY(QFileInfo(cachedPath).isFile());
     }
 
     void backendCacheBuildsCmakeArtifactsBeforeCopy()

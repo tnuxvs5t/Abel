@@ -6,6 +6,11 @@
   "backendId": "MathSystem",
   "qtVersion": "6.11.1",
   "kit": "gcc_64",
+  "platform": "linux-x86_64",
+  "compiler": "gcc",
+  "compilerVersion": "14.2.0",
+  "cxxStandard": "202302",
+  "abelAbi": "abelcore-0",
   "symbols": [
     "MathSystem.fast_add",
     "MathSystem.sort",

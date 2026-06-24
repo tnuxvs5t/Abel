@@ -27,6 +27,11 @@ struct ResourceNode {
     QString backendId;
     QString qtVersion;
     QString kit;
+    QString platform;
+    QString compiler;
+    QString compilerVersion;
+    QString cxxStandard;
+    QString abelAbi;
     QStringList symbols;
     ResourceNodeState state = ResourceNodeState::Unloaded;
     QString lastError;
@@ -36,6 +41,11 @@ QString resourceNodeStateName(ResourceNodeState state);
 ResourceNodeState resourceNodeStateFromName(const QString& name, bool* ok = nullptr);
 QString currentAbelQtVersion();
 QString currentAbelQtKit();
+QString currentAbelPlatform();
+QString currentAbelCompiler();
+QString currentAbelCompilerVersion();
+QString currentAbelCxxStandard();
+QString currentAbelAbi();
 
 struct ResourceNodeParseResult {
     ResourceNode node;

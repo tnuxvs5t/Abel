@@ -851,6 +851,11 @@ public:
   "backendId": "MathSystem",
   "qtVersion": "6.11.1",
   "kit": "gcc_64",
+  "platform": "linux-x86_64",
+  "compiler": "gcc",
+  "compilerVersion": "14.2.0",
+  "cxxStandard": "202302",
+  "abelAbi": "abelcore-0",
   "symbols": [
     "MathSystem.fast_add",
     "MathSystem.sort"
@@ -1235,7 +1240,7 @@ build/backend/plugins/libmath_backend.so
 }
 ```
 
-`qtVersion` 和 `kit` 是加载期兼容门禁：`resources check` 不会按当前机器拒绝外来版本/kit，它只检查 JSON 形状；真正 `run --resource` 或 package 自动加载时，Abel 会在 `QPluginLoader` 前拒绝和当前 Abel runtime Qt version / kit 不一致的资源。
+`qtVersion`、`kit`、`platform`、`compiler`、`compilerVersion`、`cxxStandard` 和 `abelAbi` 是加载期兼容门禁：`resources check` 不会按当前机器拒绝外来版本/kit/平台/编译器/ABI 字符串，它只检查 JSON 形状；真正 `run --resource` 或 package 自动加载时，Abel 会在 `QPluginLoader` 前拒绝和当前 Abel runtime 不一致的资源。
 
 注意：如果 `path` 写相对路径，例如：
 
@@ -1258,13 +1263,13 @@ build/backend/plugins/libmath_backend.so
 
 #### 第六步：检查 resource 和运行
 
-`resources check` 只检查 JSON 结构和字段，不会真的加载 `.so`，也不会因为 `qtVersion` / `kit` 和当前 runtime 不一致而失败：
+`resources check` 只检查 JSON 结构和字段，不会真的加载 `.so`，也不会因为 `qtVersion` / `kit` / `platform` / `compiler` / `compilerVersion` / `cxxStandard` / `abelAbi` 和当前 runtime 不一致而失败：
 
 ```bash
 $ABEL_BIN resources check resources/math_backend.json
 ```
 
-真正加载 plugin 的命令是；这一步才会检查 Qt version / kit、IID、backendId、symbols 和签名：
+真正加载 plugin 的命令是；这一步才会检查 Qt version / kit / platform / compiler / C++ standard / Abel ABI、IID、backendId、symbols 和签名：
 
 ```bash
 $ABEL_BIN run --resource resources/math_backend.json src/main.abel
@@ -1608,9 +1613,9 @@ abel update/build 会把实际解析到的包版本和 versionRequirement 写入
 .abel/cache/backend/<package>/<backendId>/<plugin-file>
 ```
 
-它还不是完整 native/backend artifact 生态；目前自动构建只支持 CMake build spec，没有 ABI hash、semver 或远程 registry 级缓存失效策略。当前缓存策略是：`abel build` 每次先构建需要构建的 backend，再覆盖复制到项目缓存，并在同目录写入 `<plugin>.abel-cache.json` 元数据 sidecar。若 `backendArtifacts` 未显式写 `qtVersion` / `kit`，Abel 会用当前 runtime 的 Qt version / kit 生成内部 ResourceNode；加载时仍会拒绝声明值和当前 runtime 不一致的资源。
+它还不是完整 native/backend artifact 生态；目前自动构建只支持 CMake build spec，没有二进制内容 ABI hash、semver 或远程 registry 级缓存失效策略。当前缓存策略是：`abel build` 每次先构建需要构建的 backend，再覆盖复制到项目缓存，并在同目录写入 `<plugin>.abel-cache.json` 元数据 sidecar。若 `backendArtifacts` 未显式写 `qtVersion` / `kit` / `platform` / `compiler` / `compilerVersion` / `cxxStandard` / `abelAbi`，Abel 会用当前 runtime 生成内部 ResourceNode；加载时仍会拒绝声明值和当前 runtime 不一致的资源。
 
-`abel run <project-dir>` 会读取 package graph；如果依赖包在 `backendArtifacts` 声明了 Qt plugin，根项目只要通过 `abel add path` 依赖它，运行时也会自动加载这个依赖 backend。若已经运行过 `abel build`，`run` 只会在缓存 `.so` 存在且 sidecar 元数据仍匹配当前源 artifact 的路径、大小、mtime、ResourceNode 字段与 symbols 时，优先加载 `.abel/cache/backend/...` 下的缓存 artifact；若缓存不存在、元数据缺失或已经失效，则回退到依赖包声明的源 artifact 路径，直到重新运行 `abel build` 刷新缓存。lockfile 若已经过期，`abel check/run` 会提示先运行 `abel update` 或 `abel build`，避免悄悄使用旧依赖图。
+`abel run <project-dir>` 会读取 package graph；如果依赖包在 `backendArtifacts` 声明了 Qt plugin，根项目只要通过 `abel add path` 依赖它，运行时也会自动加载这个依赖 backend。若已经运行过 `abel build`，`run` 只会在缓存 `.so` 存在且 sidecar 元数据仍匹配当前源 artifact 的路径、大小、mtime、ResourceNode 字段、platform/compiler/C++/Abel ABI 兼容字段与 symbols 时，优先加载 `.abel/cache/backend/...` 下的缓存 artifact；若缓存不存在、元数据缺失或已经失效，则回退到依赖包声明的源 artifact 路径，直到重新运行 `abel build` 刷新缓存。lockfile 若已经过期，`abel check/run` 会提示先运行 `abel update` 或 `abel build`，避免悄悄使用旧依赖图。
 
 注意：这仍只是 v1 包管理引擎的早期闭环。path dependency 与本地 registry dependency 已有 SemVer requirement 检查、本地 package cache、以及同名包多解析冲突诊断，但远程 registry 下载、完整 solver 策略、网络 download cache、安装版 SDK 成熟化、ABI 校验与完整版本化缓存失效仍是后续 v1 工作。
 
@@ -1642,7 +1647,7 @@ abel update/build 会把实际解析到的包版本和 versionRequirement 写入
 }
 ```
 
-`path` 相对声明它的 package 根目录解析，并且应该指向 CMake 构建完成后的 `.so`。`build.source` 与 `build.buildDir` 也相对 package 根目录解析。`abel build` 会先构建，再把 `path` 指向的产物复制到根项目 `.abel/cache/backend/...`，并写 `<plugin>.abel-cache.json`；`abel run` 在 sidecar 匹配时优先加载缓存，否则回退源 artifact。缓存 metadata 会记录 ResourceNode 的 kind/iid/qtVersion/kit/symbols；加载期再做当前 runtime Qt version / kit 门禁。这仍是过渡形态；v1 complete 的目标是由包管理引擎生成和维护 backend artifact/resource 信息。
+`path` 相对声明它的 package 根目录解析，并且应该指向 CMake 构建完成后的 `.so`。`build.source` 与 `build.buildDir` 也相对 package 根目录解析。`abel build` 会先构建，再把 `path` 指向的产物复制到根项目 `.abel/cache/backend/...`，并写 `<plugin>.abel-cache.json`；`abel run` 在 sidecar 匹配时优先加载缓存，否则回退源 artifact。缓存 metadata 会记录 ResourceNode 的 kind/iid/qtVersion/kit/platform/compiler/compilerVersion/cxxStandard/abelAbi/symbols；加载期再做当前 runtime 兼容门禁。这仍是过渡形态；v1 complete 的目标是由包管理引擎生成和维护 backend artifact/resource 信息。
 
 示例 `src/main.abel`：
 

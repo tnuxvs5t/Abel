@@ -21,6 +21,11 @@ class AbelBackendResourceTests final : public QObject {
         node.backendId = QStringLiteral("MathSystem");
         node.qtVersion = abel::currentAbelQtVersion();
         node.kit = abel::currentAbelQtKit();
+        node.platform = abel::currentAbelPlatform();
+        node.compiler = abel::currentAbelCompiler();
+        node.compilerVersion = abel::currentAbelCompilerVersion();
+        node.cxxStandard = abel::currentAbelCxxStandard();
+        node.abelAbi = abel::currentAbelAbi();
         node.symbols = {
             QStringLiteral("MathSystem.fast_add"),
             QStringLiteral("MathSystem.sort"),
@@ -178,8 +183,13 @@ private slots:
             "path": "plugins/libmath_backend.so",
             "iid": "org.abel.IAbelBackend/1.0",
             "backendId": "MathSystem",
-            "qtVersion": "6.11.1",
-            "kit": "gcc_64",
+            "qtVersion": "%1",
+            "kit": "%2",
+            "platform": "%3",
+            "compiler": "%4",
+            "compilerVersion": "%5",
+            "cxxStandard": "%6",
+            "abelAbi": "%7",
             "symbols": [
                 "MathSystem.fast_add",
                 "MathSystem.sort",
@@ -194,7 +204,13 @@ private slots:
             ],
             "state": "unloaded",
             "lastError": ""
-        })");
+        })").arg(abel::currentAbelQtVersion(),
+                 abel::currentAbelQtKit(),
+                 abel::currentAbelPlatform(),
+                 abel::currentAbelCompiler(),
+                 abel::currentAbelCompilerVersion(),
+                 abel::currentAbelCxxStandard(),
+                 abel::currentAbelAbi());
         auto parsed = abel::resourceNodeFromJsonText(text, QStringLiteral("<test>"));
         for (const auto& d : parsed.diagnostics)
             qWarning() << d.code << d.message;
@@ -202,6 +218,11 @@ private slots:
         QCOMPARE(parsed.node.id, QStringLiteral("math.backend"));
         QCOMPARE(parsed.node.kind, QStringLiteral("qt_plugin"));
         QCOMPARE(parsed.node.backendId, QStringLiteral("MathSystem"));
+        QCOMPARE(parsed.node.platform, abel::currentAbelPlatform());
+        QCOMPARE(parsed.node.compiler, abel::currentAbelCompiler());
+        QCOMPARE(parsed.node.compilerVersion, abel::currentAbelCompilerVersion());
+        QCOMPARE(parsed.node.cxxStandard, abel::currentAbelCxxStandard());
+        QCOMPARE(parsed.node.abelAbi, abel::currentAbelAbi());
         QCOMPARE(parsed.node.symbols.size(), 10);
         QCOMPARE(abel::resourceNodeStateName(parsed.node.state), QStringLiteral("unloaded"));
     }
@@ -216,6 +237,11 @@ private slots:
             "backendId": "MathSystem",
             "qtVersion": "6.11.1",
             "kit": "gcc_64",
+            "platform": "linux-x86_64",
+            "compiler": "gcc",
+            "compilerVersion": "14.2.0",
+            "cxxStandard": "202302",
+            "abelAbi": "abelcore-0",
             "symbols": []
         })");
         auto parsed = abel::resourceNodeFromJsonText(text, QStringLiteral("<test>"));
@@ -232,13 +258,18 @@ private slots:
             "backendId": "MathSystem",
             "qtVersion": "6.11.1",
             "kit": "gcc_64",
+            "platform": "linux-x86_64",
+            "compiler": "gcc",
+            "compilerVersion": "14.2.0",
+            "cxxStandard": "202302",
+            "abelAbi": "abelcore-0",
             "symbols": ["Other.fast_add"]
         })");
         auto parsed = abel::resourceNodeFromJsonText(text, QStringLiteral("<test>"));
         QVERIFY(!parsed.diagnostics.isEmpty());
     }
 
-    void resourceJsonCheckDoesNotRejectForeignQtKit()
+    void resourceJsonCheckDoesNotRejectForeignCompatibilityStrings()
     {
         const QString text = QStringLiteral(R"({
             "id": "foreign.kit",
@@ -248,6 +279,11 @@ private slots:
             "backendId": "MathSystem",
             "qtVersion": "0.0.0",
             "kit": "foreign_kit",
+            "platform": "foreign-os-cpu",
+            "compiler": "foreign-compiler",
+            "compilerVersion": "0.0.0",
+            "cxxStandard": "0",
+            "abelAbi": "foreign-abi",
             "symbols": ["MathSystem.fast_add"]
         })");
         auto parsed = abel::resourceNodeFromJsonText(text, QStringLiteral("<test>"));
@@ -256,6 +292,11 @@ private slots:
         QVERIFY(parsed.diagnostics.isEmpty());
         QCOMPARE(parsed.node.qtVersion, QStringLiteral("0.0.0"));
         QCOMPARE(parsed.node.kit, QStringLiteral("foreign_kit"));
+        QCOMPARE(parsed.node.platform, QStringLiteral("foreign-os-cpu"));
+        QCOMPARE(parsed.node.compiler, QStringLiteral("foreign-compiler"));
+        QCOMPARE(parsed.node.compilerVersion, QStringLiteral("0.0.0"));
+        QCOMPARE(parsed.node.cxxStandard, QStringLiteral("0"));
+        QCOMPARE(parsed.node.abelAbi, QStringLiteral("foreign-abi"));
     }
 
     void resourceLoadRejectsQtVersionMismatch()
@@ -286,6 +327,39 @@ private slots:
         QCOMPARE(loaded.diagnostics.front().code, QStringLiteral("E0613"));
         QVERIFY(loaded.diagnostics.front().message.contains(QStringLiteral("Qt kit")));
         QVERIFY(!registry.hasBackend(QStringLiteral("MathSystem")));
+    }
+
+    void resourceLoadRejectsPlatformCompilerAndAbiMismatch()
+    {
+        auto checkMismatch = [&](auto mutate, const QString& needle) {
+            abel::ResourceNode node = mathResourceNode();
+            mutate(node);
+            abel::BackendRegistry registry;
+            auto loaded = abel::loadBackendResourceNode(node, registry, QCoreApplication::applicationDirPath());
+            QVERIFY(!loaded.ok());
+            QCOMPARE(loaded.node.state, abel::ResourceNodeState::Failed);
+            QCOMPARE(loaded.diagnostics.size(), 1);
+            QCOMPARE(loaded.diagnostics.front().code, QStringLiteral("E0613"));
+            QVERIFY2(loaded.diagnostics.front().message.contains(needle),
+                     qPrintable(loaded.diagnostics.front().message));
+            QVERIFY(!registry.hasBackend(QStringLiteral("MathSystem")));
+        };
+
+        checkMismatch([](abel::ResourceNode& node) {
+            node.platform = QStringLiteral("foreign-os-cpu");
+        }, QStringLiteral("platform"));
+        checkMismatch([](abel::ResourceNode& node) {
+            node.compiler = QStringLiteral("foreign-compiler");
+        }, QStringLiteral("compiler"));
+        checkMismatch([](abel::ResourceNode& node) {
+            node.compilerVersion = QStringLiteral("0.0.0");
+        }, QStringLiteral("compiler version"));
+        checkMismatch([](abel::ResourceNode& node) {
+            node.cxxStandard = QStringLiteral("0");
+        }, QStringLiteral("C++ standard"));
+        checkMismatch([](abel::ResourceNode& node) {
+            node.abelAbi = QStringLiteral("foreign-abi");
+        }, QStringLiteral("Abel ABI"));
     }
 
     void loadsMathBackendPluginAndCallsRegistry()
