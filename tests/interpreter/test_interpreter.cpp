@@ -1747,6 +1747,55 @@ private slots:
         QCOMPARE(result.exitCode, 138);
     }
 
+    void runsStructConstructorAndMethodOverloads()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int next(int& g) {
+                g = g + 1;
+                return g;
+            }
+
+            struct Box {
+                int x;
+
+                init(int v) {
+                    x = v;
+                }
+
+                init(str s) {
+                    x = s.len();
+                }
+
+                fn int get() {
+                    return x;
+                }
+
+                fn int get(int add) {
+                    return x + add;
+                }
+
+                fn int bump(int& y) {
+                    y = y + 1;
+                    return y;
+                }
+            }
+
+            fn int main() {
+                Box a = Box(5);
+                Box b = Box("abcd");
+                int g = 0;
+                Box c = Box(next(g));
+                int y = 10;
+                return a.get() + b.get(3) + a.bump(y) + y + c.get() + g;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 36);
+    }
+
     void runsUserBinaryOperators()
     {
         const QString src = QStringLiteral(R"(

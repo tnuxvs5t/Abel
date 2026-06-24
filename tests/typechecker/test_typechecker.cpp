@@ -259,6 +259,170 @@ private slots:
         QVERIFY(countMessagesContaining(ambiguous, QStringLiteral("function 'f' overload is ambiguous")) >= 1);
     }
 
+    void acceptsStructConstructorAndMethodOverloads()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                int x;
+
+                init(int v) {
+                    x = v;
+                }
+
+                init(str s) {
+                    x = s.len();
+                }
+
+                fn int get() {
+                    return x;
+                }
+
+                fn int get(int add) {
+                    return x + add;
+                }
+
+                fn int bump(int& y) {
+                    y = y + 1;
+                    return y;
+                }
+            }
+
+            fn int main() {
+                Box a = Box(5);
+                Box b = Box("abcd");
+                int y = 10;
+                return a.get() + b.get(3) + a.bump(y) + y;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsBadStructConstructorAndMethodOverloads()
+    {
+        auto duplicateConstructor = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+
+                init(int v) {
+                    x = v;
+                }
+
+                init(int other) {
+                    x = other;
+                }
+            }
+
+            fn int main() {
+                return 0;
+            }
+        )"));
+        QVERIFY(!duplicateConstructor.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(duplicateConstructor, QStringLiteral("duplicate constructor overload")) >= 1);
+
+        auto duplicateMethod = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+
+                fn int get(int v) {
+                    return v;
+                }
+
+                fn int get(int other) {
+                    return other;
+                }
+            }
+
+            fn int main() {
+                return 0;
+            }
+        )"));
+        QVERIFY(!duplicateMethod.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(duplicateMethod, QStringLiteral("duplicate method 'get' overload")) >= 1);
+
+        auto noMatchingConstructor = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+
+                init(int v) {
+                    x = v;
+                }
+            }
+
+            fn int main() {
+                Box b = Box("bad");
+                return b.x;
+            }
+        )"));
+        QVERIFY(!noMatchingConstructor.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(noMatchingConstructor, QStringLiteral("constructor parameter 'v'")) >= 1);
+
+        auto noMatchingMethod = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+
+                fn int get() {
+                    return x;
+                }
+
+                fn int get(int add) {
+                    return x + add;
+                }
+            }
+
+            fn int main() {
+                Box b = Box(1);
+                return b.get("bad");
+            }
+        )"));
+        QVERIFY(!noMatchingMethod.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(noMatchingMethod, QStringLiteral("no matching method 'get' overload")) >= 1);
+
+        auto ambiguousConstructor = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+
+                init(any a, int b) {
+                    x = 1;
+                }
+
+                init(int a, any b) {
+                    x = 2;
+                }
+            }
+
+            fn int main() {
+                Box b = Box(1, 2);
+                return b.x;
+            }
+        )"));
+        QVERIFY(!ambiguousConstructor.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(ambiguousConstructor, QStringLiteral("constructor 'Box' overload is ambiguous")) >= 1);
+
+        auto ambiguousMethod = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+
+                fn int choose(any a, int b) {
+                    return 1;
+                }
+
+                fn int choose(int a, any b) {
+                    return 2;
+                }
+            }
+
+            fn int main() {
+                Box b = Box(1);
+                return b.choose(1, 2);
+            }
+        )"));
+        QVERIFY(!ambiguousMethod.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(ambiguousMethod, QStringLiteral("method 'choose' overload is ambiguous")) >= 1);
+    }
+
     void rejectsConstReferenceMutationAndBadBinding()
     {
         auto mutate = checkSource(QStringLiteral(R"(

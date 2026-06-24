@@ -46,8 +46,8 @@ private:
     struct StructInfo {
         const StructDeclNode* decl = nullptr;
         QHash<QString, FieldInfo> fields;
-        QHash<QString, const FunctionDeclNode*> methods;
-        const ConstructorDeclNode* constructor = nullptr;
+        QHash<QString, QList<const FunctionDeclNode*>> methods;
+        QList<const ConstructorDeclNode*> constructors;
     };
 
     struct BackendInfo {
@@ -83,6 +83,7 @@ private:
     void collectTypeAliases(const ProgramNode& program);
     void collectFunctions(const ProgramNode& program);
     bool sameFunctionSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs);
+    bool sameConstructorSignature(const StructDeclNode& owner, const ConstructorDeclNode& lhs, const ConstructorDeclNode& rhs);
     void collectBackends(const ProgramNode& program);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
     QList<const FunctionDeclNode*> resolveFunctionCandidates(const QString& name, const SourceSpan& span, bool diagnose = true);
@@ -169,6 +170,11 @@ private:
                                        const std::vector<ExprType>& args,
                                        const std::vector<SourceSpan>& argSpans,
                                        const SourceSpan& span);
+    ExprType checkMethodOverloadCall(const QString& displayName,
+                                     const QList<const FunctionDeclNode*>& candidates,
+                                     const ExprType& receiver,
+                                     const std::vector<std::unique_ptr<ExprNode>>& args,
+                                     const SourceSpan& span);
     ExprType checkFunctionValueCallShape(const AbelType& functionType,
                                          const ExprType& firstArg,
                                          const std::vector<std::unique_ptr<ExprNode>>& restArgs,

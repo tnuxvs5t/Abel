@@ -28,8 +28,8 @@ public:
 private:
     struct StructRuntimeInfo {
         const StructDeclNode* decl = nullptr;
-        const ConstructorDeclNode* constructor = nullptr;
-        QHash<QString, const FunctionDeclNode*> methods;
+        QList<const ConstructorDeclNode*> constructors;
+        QHash<QString, QList<const FunctionDeclNode*>> methods;
     };
 
     struct BackendRuntimeInfo {
@@ -75,6 +75,7 @@ private:
     bool collectTypeAliases(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool sameFunctionSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs);
+    bool sameConstructorSignature(const StructDeclNode& owner, const ConstructorDeclNode& lhs, const ConstructorDeclNode& rhs);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
     const FunctionDeclNode* findRootFunctionInFile(const QString& name, const QString& file) const;
     QList<const FunctionDeclNode*> resolveFunctionCandidates(const QString& name) const;
@@ -122,12 +123,24 @@ private:
                                             const ExprNode& firstArg,
                                             const std::vector<std::unique_ptr<ExprNode>>& restArgs,
                                             const SourceSpan& span);
+    ExecResult callStructFunctionPrepared(const FunctionDeclNode& fn,
+                                          AbelLocation* self,
+                                          const std::vector<PreparedCallArg>& args,
+                                          const SourceSpan& span);
+    ExecResult callStructFunctionOverloadExpr(const QString& displayName,
+                                              const QList<const FunctionDeclNode*>& candidates,
+                                              AbelLocation* self,
+                                              const std::vector<std::unique_ptr<ExprNode>>& args,
+                                              const SourceSpan& span);
+    const ConstructorDeclNode* selectConstructorOverload(const QString& displayName,
+                                                        const StructRuntimeInfo& info,
+                                                        const std::vector<PreparedCallArg>& args,
+                                                        const SourceSpan& span);
     AbelValue callFunctionValue(const AbelValue& fnValue, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue callFunctionValuePipe(const AbelValue& fnValue,
                                     const ExprNode& firstArg,
                                     const std::vector<std::unique_ptr<ExprNode>>& restArgs,
                                     const SourceSpan& span);
-    ExecResult callStructFunction(const FunctionDeclNode& fn, AbelLocation* self, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExecResult execBlock(const BlockStmtNode& block);
     ExecResult execStmt(const StmtNode& stmt);
     ExecResult execVarDecl(const VarDeclStmtNode& stmt);
@@ -162,6 +175,11 @@ private:
     AbelValue evalLambda(const LambdaExprNode& expr);
     AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     AbelValue evalStructConstructor(const QString& name, const StructRuntimeInfo& info, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    AbelValue evalStructConstructorPrepared(const QString& name,
+                                            const StructRuntimeInfo& info,
+                                            const ConstructorDeclNode* ctor,
+                                            const std::vector<PreparedCallArg>& args,
+                                            const SourceSpan& span);
     AbelValue evalStructMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue evalAssignment(const AssignExprNode& expr);
     AbelValue defaultConstructValue(const AbelType& type, const SourceSpan& span);
