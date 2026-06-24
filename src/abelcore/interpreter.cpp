@@ -515,8 +515,27 @@ bool Interpreter::collectFunctions(const ProgramNode& program, AbelRuntimeContex
             bool duplicateInModule = false;
             for (const FunctionDeclNode* other : existing) {
                 if (sameDeclNamespace(*other, *fn)) {
+                    if (fn->name == other->name) {
+                        if (sameFunctionSignature(*other, *fn)) {
+                            if (fn->isOperator) {
+                                ctx.error(QStringLiteral("E0506"),
+                                          QStringLiteral("duplicate operator '%1' overload with the same signature in package '%2' module '%3'")
+                                              .arg(fn->operatorSymbol, fn->packageName, fn->moduleName),
+                                          fn->span);
+                            } else {
+                                ctx.error(QStringLiteral("E0506"),
+                                          QStringLiteral("duplicate function '%1' overload with the same signature in package '%2' module '%3'")
+                                              .arg(fn->name, fn->packageName, fn->moduleName),
+                                          fn->span);
+                            }
+                            ok = false;
+                            duplicateInModule = true;
+                            break;
+                        }
+                        continue;
+                    }
                     if (fn->isOperator && other->isOperator && fn->operatorSymbol == other->operatorSymbol) {
-                        if (sameOperatorSignature(*other, *fn)) {
+                        if (sameFunctionSignature(*other, *fn)) {
                             ctx.error(QStringLiteral("E0506"),
                                       QStringLiteral("duplicate operator '%1' overload with the same signature in package '%2' module '%3'")
                                           .arg(fn->operatorSymbol, fn->packageName, fn->moduleName),
@@ -543,13 +562,15 @@ bool Interpreter::collectFunctions(const ProgramNode& program, AbelRuntimeContex
     return ok;
 }
 
-bool Interpreter::sameOperatorSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs)
+bool Interpreter::sameFunctionSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs)
 {
-    if (!lhs.isOperator || !rhs.isOperator || lhs.operatorSymbol != rhs.operatorSymbol)
+    if (lhs.name != rhs.name)
         return false;
     if (lhs.params.size() != rhs.params.size())
         return false;
     for (size_t i = 0; i < lhs.params.size(); ++i) {
+        if (lhs.params[i]->variadic != rhs.params[i]->variadic)
+            return false;
         const AbelType lhsType = typeFromAstForDecl(*lhs.params[i]->type, lhs);
         const AbelType rhsType = typeFromAstForDecl(*rhs.params[i]->type, rhs);
         if (lhsType != rhsType)
@@ -630,6 +651,11 @@ const FunctionDeclNode* Interpreter::findRootFunction(const QString& name) const
     const auto candidates = m_functions.value(name);
     for (auto it = candidates.crbegin(); it != candidates.crend(); ++it) {
         const FunctionDeclNode* fn = *it;
+        if (!fn->fromDependency && fn->params.empty())
+            return fn;
+    }
+    for (auto it = candidates.crbegin(); it != candidates.crend(); ++it) {
+        const FunctionDeclNode* fn = *it;
         if (!fn->fromDependency)
             return fn;
     }
@@ -639,6 +665,11 @@ const FunctionDeclNode* Interpreter::findRootFunction(const QString& name) const
 const FunctionDeclNode* Interpreter::findRootFunctionInFile(const QString& name, const QString& file) const
 {
     const auto candidates = m_functions.value(name);
+    for (auto it = candidates.crbegin(); it != candidates.crend(); ++it) {
+        const FunctionDeclNode* fn = *it;
+        if (!fn->fromDependency && fn->span.file == file && fn->params.empty())
+            return fn;
+    }
     for (auto it = candidates.crbegin(); it != candidates.crend(); ++it) {
         const FunctionDeclNode* fn = *it;
         if (!fn->fromDependency && fn->span.file == file)
@@ -662,6 +693,20 @@ QList<const FunctionDeclNode*> Interpreter::resolveFunctionCandidates(const QStr
     }
     if (!current.isEmpty())
         return current;
+    return visible;
+}
+
+QList<const FunctionDeclNode*> Interpreter::resolveFunctionCandidatesInModule(const QString& moduleName, const QString& name) const
+{
+    const QString resolvedModuleName = resolveModuleName(moduleName);
+    const auto candidates = m_functions.value(name);
+    if (candidates.isEmpty())
+        return {};
+    QList<const FunctionDeclNode*> visible;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (fn->moduleName == resolvedModuleName && isDeclVisible(*fn, fn->exported))
+            visible.push_back(fn);
+    }
     return visible;
 }
 
@@ -1415,6 +1460,310 @@ ExecResult Interpreter::callFunctionPipeExpr(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeVoid());
     error(QStringLiteral("E0543"), QStringLiteral("function '%1' ended without return").arg(fn.name), fn.span);
     return ExecResult::returned(AbelValue::makeUnknown());
+}
+
+std::vector<Interpreter::PreparedCallArg> Interpreter::prepareFunctionArgs(const std::vector<std::unique_ptr<ExprNode>>& args)
+{
+    std::vector<PreparedCallArg> prepared;
+    prepared.reserve(args.size());
+    for (const auto& arg : args) {
+        PreparedCallArg out;
+        out.span = arg->span;
+        if (auto* field = dynamic_cast<const FieldAccessExprNode*>(arg.get()); field && !field->pointer) {
+            const QString enumName = staticAccessName(*field->base);
+            const bool shadowedByVariable = dynamic_cast<const NameExprNode*>(field->base.get()) && m_ctx->lookupVariable(enumName);
+            if (!enumName.isEmpty() && !shadowedByVariable) {
+                if (const EnumRuntimeInfo* info = resolveEnum(enumName); info && info->values.contains(field->field)) {
+                    out.value = evalExpr(*arg);
+                    prepared.push_back(std::move(out));
+                    continue;
+                }
+            }
+        }
+        if (exprCanHaveRuntimeLocation(*arg)) {
+            if (AbelLocation* loc = evalLocation(*arg)) {
+                out.location = loc;
+                out.isReadOnly = loc->isReadOnly;
+                out.value = loc->read();
+            } else {
+                out.value = AbelValue::makeUnknown();
+            }
+        } else {
+            out.value = evalExpr(*arg);
+        }
+        prepared.push_back(std::move(out));
+    }
+    return prepared;
+}
+
+std::vector<Interpreter::PreparedCallArg> Interpreter::prepareFunctionPipeArgs(
+    const ExprNode& firstArg,
+    const std::vector<std::unique_ptr<ExprNode>>& restArgs)
+{
+    std::vector<PreparedCallArg> prepared;
+    prepared.reserve(restArgs.size() + 1);
+    auto prepareOne = [&](const ExprNode& arg) {
+        PreparedCallArg out;
+        out.span = arg.span;
+        if (auto* field = dynamic_cast<const FieldAccessExprNode*>(&arg); field && !field->pointer) {
+            const QString enumName = staticAccessName(*field->base);
+            const bool shadowedByVariable = dynamic_cast<const NameExprNode*>(field->base.get()) && m_ctx->lookupVariable(enumName);
+            if (!enumName.isEmpty() && !shadowedByVariable) {
+                if (const EnumRuntimeInfo* info = resolveEnum(enumName); info && info->values.contains(field->field)) {
+                    out.value = evalExpr(arg);
+                    prepared.push_back(std::move(out));
+                    return;
+                }
+            }
+        }
+        if (exprCanHaveRuntimeLocation(arg)) {
+            if (AbelLocation* loc = evalLocation(arg)) {
+                out.location = loc;
+                out.isReadOnly = loc->isReadOnly;
+                out.value = loc->read();
+            } else {
+                out.value = AbelValue::makeUnknown();
+            }
+        } else {
+            out.value = evalExpr(arg);
+        }
+        prepared.push_back(std::move(out));
+    };
+    prepareOne(firstArg);
+    for (const auto& arg : restArgs)
+        prepareOne(*arg);
+    return prepared;
+}
+
+std::optional<int> Interpreter::scorePreparedArgument(const AbelType& paramType, const PreparedCallArg& arg) const
+{
+    if (arg.value.type().kind == TypeKind::Unknown)
+        return 0;
+    if (paramType.isReference()) {
+        if (!arg.location)
+            return std::nullopt;
+        const bool isConstRef = paramType.pointee && paramType.pointee->isConst;
+        if (!isConstRef && arg.isReadOnly)
+            return std::nullopt;
+        if (!canBindReferenceValue(paramType, arg.value.type()))
+            return std::nullopt;
+        AbelType referred = *paramType.pointee;
+        referred.isConst = false;
+        return referred == arg.value.type() ? 1 : 2;
+    }
+    if (!canAssignValue(paramType, arg.value.type()))
+        return std::nullopt;
+    return paramType == arg.value.type() ? 0 : 1;
+}
+
+const FunctionDeclNode* Interpreter::selectFunctionOverload(const QString& displayName,
+                                                            const QList<const FunctionDeclNode*>& candidates,
+                                                            const std::vector<PreparedCallArg>& args,
+                                                            const SourceSpan& span)
+{
+    const FunctionDeclNode* onlyOrdinary = nullptr;
+    int ordinaryCount = 0;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (fn && !fn->isOperator) {
+            onlyOrdinary = fn;
+            ++ordinaryCount;
+        }
+    }
+    if (ordinaryCount == 1)
+        return onlyOrdinary;
+
+    QList<const FunctionDeclNode*> matches;
+    bool sawOrdinary = false;
+    int bestScore = 1'000'000;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (!fn || fn->isOperator)
+            continue;
+        sawOrdinary = true;
+        const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
+        const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
+        if ((!variadic && args.size() != fn->params.size()) || (variadic && args.size() < fixedCount))
+            continue;
+
+        int score = variadic ? 4 : 0;
+        bool ok = true;
+        for (size_t i = 0; i < fixedCount; ++i) {
+            const AbelType paramType = typeFromAstForDecl(*fn->params[i]->type, *fn);
+            const auto argScore = scorePreparedArgument(paramType, args[i]);
+            if (!argScore) {
+                ok = false;
+                break;
+            }
+            score += *argScore;
+        }
+        if (!ok)
+            continue;
+
+        if (variadic) {
+            const AbelType variadicType = typeFromAstForDecl(*fn->params.back()->type, *fn);
+            if (variadicType.kind != TypeKind::Any)
+                continue;
+            score += static_cast<int>(args.size() - fixedCount) * 4;
+        }
+
+        if (score < bestScore) {
+            bestScore = score;
+            matches.clear();
+            matches.push_back(fn);
+        } else if (score == bestScore) {
+            matches.push_back(fn);
+        }
+    }
+
+    if (!sawOrdinary) {
+        error(QStringLiteral("E0525"), QStringLiteral("function '%1' has no ordinary overloads").arg(displayName), span);
+        return nullptr;
+    }
+    if (matches.isEmpty()) {
+        error(QStringLiteral("E0525"),
+              QStringLiteral("no matching function '%1' overload for %2 argument(s)")
+                  .arg(displayName)
+                  .arg(args.size()),
+              span);
+        return nullptr;
+    }
+    if (matches.size() > 1) {
+        error(QStringLiteral("E0525"), QStringLiteral("function '%1' overload is ambiguous").arg(displayName), span);
+        return nullptr;
+    }
+    return matches.front();
+}
+
+ExecResult Interpreter::callFunctionPrepared(const FunctionDeclNode& fn,
+                                             const std::vector<PreparedCallArg>& args,
+                                             const SourceSpan& span)
+{
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, fn);
+    if (fn.debt || !fn.body) {
+        error(QStringLiteral("E0539"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
+    const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
+    if ((!variadic && args.size() != fn.params.size()) || (variadic && args.size() < fixedCount)) {
+        error(QStringLiteral("E0540"),
+              QStringLiteral("function '%1' expects %2 argument(s), got %3")
+                  .arg(fn.name)
+                  .arg(variadic ? QStringLiteral("at least %1").arg(fixedCount) : QString::number(fn.params.size()))
+                  .arg(args.size()),
+              span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+
+    struct BoundArg {
+        AbelValue value;
+        AbelLocation* location = nullptr;
+        bool byReference = false;
+        bool isConst = false;
+    };
+    std::vector<BoundArg> bound(fixedCount);
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& p = *fn.params[i];
+        const AbelType target = typeFromAstInCurrentPackage(*p.type);
+        bound[i].isConst = isReadOnlyBinding(target, p.type->isConst);
+        if (target.isReference()) {
+            if (!args[i].location) {
+                error(QStringLiteral("E0541"), QStringLiteral("parameter '%1' requires lvalue").arg(p.name), args[i].span);
+                continue;
+            }
+            if (!bound[i].isConst && args[i].isReadOnly) {
+                error(QStringLiteral("E0541"),
+                      QStringLiteral("non-const parameter '%1' cannot bind to const lvalue").arg(p.name),
+                      args[i].span);
+                continue;
+            }
+            if (!canBindReferenceValue(target, args[i].value.type())) {
+                error(QStringLiteral("E0541"),
+                      QStringLiteral("cannot bind parameter '%1' of type %2 to %3 lvalue")
+                          .arg(p.name, target.displayName(), args[i].value.type().displayName()),
+                      args[i].span);
+                continue;
+            }
+            bound[i].location = args[i].location;
+            bound[i].byReference = true;
+        } else {
+            bound[i].value = convertOrError(args[i].value, target, args[i].span);
+        }
+    }
+
+    std::vector<AbelValue> packed;
+    if (variadic) {
+        const ParameterNode& p = *fn.params.back();
+        if (typeFromAstInCurrentPackage(*p.type).kind != TypeKind::Any) {
+            error(QStringLiteral("E0560"), QStringLiteral("only any... variadic parameters are supported"), p.span);
+        } else {
+            packed.reserve(args.size() - fixedCount);
+            for (size_t i = fixedCount; i < args.size(); ++i)
+                packed.push_back(AbelValue::makeAny(args[i].value));
+        }
+    }
+    if (m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
+
+    RuntimeFrameGuard frame(*m_ctx, true, functionFrameSymbol(fn), span);
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& p = *fn.params[i];
+        if (bound[i].byReference)
+            m_ctx->defineVariable(p.name, bound[i].location, bound[i].isConst, true, p.span);
+        else
+            m_ctx->defineValueVariable(p.name, bound[i].value, bound[i].isConst, p.span);
+    }
+    if (variadic) {
+        const ParameterNode& p = *fn.params.back();
+        m_ctx->defineValueVariable(p.name, AbelValue::makeVector(makeType(TypeKind::Any), std::move(packed)), false, p.span);
+    }
+    if (m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
+
+    ExecResult flow = execBlock(*fn.body);
+    if (m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
+
+    const AbelType returnType = typeFromAstInCurrentPackage(*fn.returnType);
+    if (flow.kind == FlowKind::Return)
+        return ExecResult::returned(convertOrError(flow.value, returnType, flow.span), flow.span);
+    if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
+        error(QStringLiteral("E0542"), QStringLiteral("break/continue cannot leave function '%1'").arg(fn.name), fn.span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
+    if (returnType.kind == TypeKind::Void)
+        return ExecResult::returned(AbelValue::makeVoid());
+    error(QStringLiteral("E0543"), QStringLiteral("function '%1' ended without return").arg(fn.name), fn.span);
+    return ExecResult::returned(AbelValue::makeUnknown());
+}
+
+ExecResult Interpreter::callFunctionOverloadExpr(const QString& displayName,
+                                                 const QList<const FunctionDeclNode*>& candidates,
+                                                 const std::vector<std::unique_ptr<ExprNode>>& args,
+                                                 const SourceSpan& span)
+{
+    std::vector<PreparedCallArg> prepared = prepareFunctionArgs(args);
+    if (m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
+    const FunctionDeclNode* fn = selectFunctionOverload(displayName, candidates, prepared, span);
+    if (!fn)
+        return ExecResult::returned(AbelValue::makeUnknown());
+    return callFunctionPrepared(*fn, prepared, span);
+}
+
+ExecResult Interpreter::callFunctionOverloadPipeExpr(const QString& displayName,
+                                                     const QList<const FunctionDeclNode*>& candidates,
+                                                     const ExprNode& firstArg,
+                                                     const std::vector<std::unique_ptr<ExprNode>>& restArgs,
+                                                     const SourceSpan& span)
+{
+    std::vector<PreparedCallArg> prepared = prepareFunctionPipeArgs(firstArg, restArgs);
+    if (m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
+    const FunctionDeclNode* fn = selectFunctionOverload(displayName, candidates, prepared, span);
+    if (!fn)
+        return ExecResult::returned(AbelValue::makeUnknown());
+    return callFunctionPrepared(*fn, prepared, span);
 }
 
 AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
@@ -2346,8 +2695,11 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
         return AbelValue::makeUnknown();
     }
 
-    if (const FunctionDeclNode* fn = resolveFunction(targetName))
-        return callFunctionPipeExpr(*fn, *expr.lhs, args, expr.span).value;
+    if (m_functions.contains(targetName)) {
+        const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(targetName);
+        if (!candidates.isEmpty())
+            return callFunctionOverloadPipeExpr(targetName, candidates, *expr.lhs, args, expr.span).value;
+    }
 
     if (m_builtins.hasFunction(targetName)) {
         BuiltinFunctionCall call{*m_ctx, targetName, {}, {}, expr.span};
@@ -2436,25 +2788,29 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         error(QStringLiteral("E0586"), QStringLiteral("variable '%1' is not a function value").arg(name->name), expr.span);
         return AbelValue::makeUnknown();
     }
-    const FunctionDeclNode* fn = resolveFunction(name->name);
-    if (!fn) {
-        if (const StructRuntimeInfo* info = resolveStruct(name->name))
-            return evalStructConstructor(name->name, *info, expr.args, expr.span);
-        if (m_builtins.hasFunction(name->name)) {
-            BuiltinFunctionCall call{*m_ctx, name->name, {}, {}, expr.span};
-            attachStringifier(call);
-            call.args.reserve(expr.args.size());
-            call.argSpans.reserve(expr.args.size());
-            for (const auto& arg : expr.args) {
-                call.args.push_back(evalExpr(*arg));
-                call.argSpans.push_back(arg->span);
-            }
-            return m_builtins.callFunction(std::move(call));
-        }
-        error(QStringLiteral("E0525"), QStringLiteral("unknown function '%1'").arg(name->name), expr.span);
-        return AbelValue::makeUnknown();
+    if (const StructRuntimeInfo* info = resolveStruct(name->name))
+        return evalStructConstructor(name->name, *info, expr.args, expr.span);
+
+    if (m_functions.contains(name->name)) {
+        const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name->name);
+        if (!candidates.isEmpty())
+            return callFunctionOverloadExpr(name->name, candidates, expr.args, expr.span).value;
     }
-    return callFunctionExpr(*fn, expr.args, expr.span).value;
+
+    if (m_builtins.hasFunction(name->name)) {
+        BuiltinFunctionCall call{*m_ctx, name->name, {}, {}, expr.span};
+        attachStringifier(call);
+        call.args.reserve(expr.args.size());
+        call.argSpans.reserve(expr.args.size());
+        for (const auto& arg : expr.args) {
+            call.args.push_back(evalExpr(*arg));
+            call.argSpans.push_back(arg->span);
+        }
+        return m_builtins.callFunction(std::move(call));
+    }
+
+    error(QStringLiteral("E0525"), QStringLiteral("unknown function '%1'").arg(name->name), expr.span);
+    return AbelValue::makeUnknown();
 }
 
 AbelValue Interpreter::evalStaticCall(const StaticAccessExprNode& callee,
@@ -2608,12 +2964,12 @@ AbelValue Interpreter::evalQualifiedFunctionCall(const QString& moduleName,
                                                  const std::vector<std::unique_ptr<ExprNode>>& args,
                                                  const SourceSpan& span)
 {
-    const FunctionDeclNode* fn = resolveFunctionInModule(moduleName, name);
-    if (!fn) {
+    const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidatesInModule(moduleName, name);
+    if (candidates.isEmpty()) {
         error(QStringLiteral("E0525"), QStringLiteral("unknown function '%1::%2'").arg(moduleName, name), span);
         return AbelValue::makeUnknown();
     }
-    return callFunctionExpr(*fn, args, span).value;
+    return callFunctionOverloadExpr(moduleName + QStringLiteral("::") + name, candidates, args, span).value;
 }
 
 AbelValue Interpreter::evalQualifiedStructConstructor(const QString& moduleName,

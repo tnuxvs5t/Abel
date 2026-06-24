@@ -1704,6 +1704,49 @@ private slots:
         QCOMPARE(result.exitCode, 1);
     }
 
+    void runsOrdinaryFunctionOverloads()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int pick(int x) {
+                return x + 10;
+            }
+
+            fn int pick(str s) {
+                return s.len();
+            }
+
+            fn int pick(double x) {
+                return cast<int>(x) + 100;
+            }
+
+            fn int bump(int& x) {
+                x = x + 1;
+                return x;
+            }
+
+            fn int twice(int x) {
+                return x * 2;
+            }
+
+            fn str twice(str s) {
+                return s + s;
+            }
+
+            fn int main() {
+                int x = 5;
+                int direct = pick(1) + pick("abc") + pick(2.5);
+                int refResult = bump(x);
+                int piped = (3 |> twice) + ("ab" |> twice).len();
+                return direct + refResult + x + piped;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 138);
+    }
+
     void runsUserBinaryOperators()
     {
         const QString src = QStringLiteral(R"(

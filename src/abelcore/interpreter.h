@@ -42,6 +42,13 @@ private:
         QHash<QString, int> values;
     };
 
+    struct PreparedCallArg {
+        AbelValue value = AbelValue::makeUnknown();
+        AbelLocation* location = nullptr;
+        bool isReadOnly = false;
+        SourceSpan span;
+    };
+
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
     QString m_currentPackage;
     QString m_currentModule;
@@ -67,11 +74,12 @@ private:
     bool collectEnums(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectTypeAliases(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx);
-    bool sameOperatorSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs);
+    bool sameFunctionSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
     const FunctionDeclNode* findRootFunctionInFile(const QString& name, const QString& file) const;
     QList<const FunctionDeclNode*> resolveFunctionCandidates(const QString& name) const;
     const FunctionDeclNode* resolveFunction(const QString& name) const;
+    QList<const FunctionDeclNode*> resolveFunctionCandidatesInModule(const QString& moduleName, const QString& name) const;
     const FunctionDeclNode* resolveFunctionInModule(const QString& moduleName, const QString& name) const;
     const StructRuntimeInfo* resolveStruct(const QString& name) const;
     const StructRuntimeInfo* resolveStructInModule(const QString& moduleName, const QString& name) const;
@@ -94,6 +102,26 @@ private:
                                     const ExprNode& firstArg,
                                     const std::vector<std::unique_ptr<ExprNode>>& restArgs,
                                     const SourceSpan& span);
+    std::vector<PreparedCallArg> prepareFunctionArgs(const std::vector<std::unique_ptr<ExprNode>>& args);
+    std::vector<PreparedCallArg> prepareFunctionPipeArgs(const ExprNode& firstArg,
+                                                         const std::vector<std::unique_ptr<ExprNode>>& restArgs);
+    std::optional<int> scorePreparedArgument(const AbelType& paramType, const PreparedCallArg& arg) const;
+    const FunctionDeclNode* selectFunctionOverload(const QString& displayName,
+                                                   const QList<const FunctionDeclNode*>& candidates,
+                                                   const std::vector<PreparedCallArg>& args,
+                                                   const SourceSpan& span);
+    ExecResult callFunctionPrepared(const FunctionDeclNode& fn,
+                                    const std::vector<PreparedCallArg>& args,
+                                    const SourceSpan& span);
+    ExecResult callFunctionOverloadExpr(const QString& displayName,
+                                        const QList<const FunctionDeclNode*>& candidates,
+                                        const std::vector<std::unique_ptr<ExprNode>>& args,
+                                        const SourceSpan& span);
+    ExecResult callFunctionOverloadPipeExpr(const QString& displayName,
+                                            const QList<const FunctionDeclNode*>& candidates,
+                                            const ExprNode& firstArg,
+                                            const std::vector<std::unique_ptr<ExprNode>>& restArgs,
+                                            const SourceSpan& span);
     AbelValue callFunctionValue(const AbelValue& fnValue, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue callFunctionValuePipe(const AbelValue& fnValue,
                                     const ExprNode& firstArg,

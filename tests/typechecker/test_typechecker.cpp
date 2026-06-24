@@ -178,6 +178,87 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsOrdinaryFunctionOverloads()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int pick(int x) {
+                return x + 10;
+            }
+
+            fn int pick(str s) {
+                return s.len();
+            }
+
+            fn int pick(double x) {
+                return cast<int>(x) + 100;
+            }
+
+            fn int bump(int& x) {
+                x = x + 1;
+                return x;
+            }
+
+            fn int main() {
+                int x = 5;
+                return pick(1) + pick("abc") + pick(2.5) + bump(x);
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsBadOrdinaryFunctionOverloads()
+    {
+        auto duplicateSignature = checkSource(QStringLiteral(R"(
+            fn int f(int x) {
+                return x;
+            }
+
+            fn int f(int y) {
+                return y;
+            }
+
+            fn int main() {
+                return 0;
+            }
+        )"));
+        QVERIFY(!duplicateSignature.diagnostics.isEmpty());
+
+        auto noMatch = checkSource(QStringLiteral(R"(
+            fn int f(int x) {
+                return x;
+            }
+
+            fn int f(double x) {
+                return cast<int>(x);
+            }
+
+            fn int main() {
+                return f("bad");
+            }
+        )"));
+        QVERIFY(!noMatch.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(noMatch, QStringLiteral("no matching function 'f' overload")) >= 1);
+
+        auto ambiguous = checkSource(QStringLiteral(R"(
+            fn int f(any a, int b) {
+                return 1;
+            }
+
+            fn int f(int a, any b) {
+                return 2;
+            }
+
+            fn int main() {
+                return f(1, 2);
+            }
+        )"));
+        QVERIFY(!ambiguous.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(ambiguous, QStringLiteral("function 'f' overload is ambiguous")) >= 1);
+    }
+
     void rejectsConstReferenceMutationAndBadBinding()
     {
         auto mutate = checkSource(QStringLiteral(R"(

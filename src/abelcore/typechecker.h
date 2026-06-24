@@ -82,11 +82,15 @@ private:
     void collectEnums(const ProgramNode& program);
     void collectTypeAliases(const ProgramNode& program);
     void collectFunctions(const ProgramNode& program);
-    bool sameOperatorSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs);
+    bool sameFunctionSignature(const FunctionDeclNode& lhs, const FunctionDeclNode& rhs);
     void collectBackends(const ProgramNode& program);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
     QList<const FunctionDeclNode*> resolveFunctionCandidates(const QString& name, const SourceSpan& span, bool diagnose = true);
     const FunctionDeclNode* resolveFunction(const QString& name, const SourceSpan& span, bool diagnose = true);
+    QList<const FunctionDeclNode*> resolveFunctionCandidatesInModule(const QString& moduleName,
+                                                                     const QString& name,
+                                                                     const SourceSpan& span,
+                                                                     bool diagnose = true);
     const FunctionDeclNode* resolveFunctionInModule(const QString& moduleName,
                                                     const QString& name,
                                                     const SourceSpan& span,
@@ -160,6 +164,11 @@ private:
                                     const ExprType& firstArg,
                                     const std::vector<std::unique_ptr<ExprNode>>& restArgs,
                                     const SourceSpan& span);
+    ExprType checkFunctionOverloadCall(const QString& displayName,
+                                       const QList<const FunctionDeclNode*>& candidates,
+                                       const std::vector<ExprType>& args,
+                                       const std::vector<SourceSpan>& argSpans,
+                                       const SourceSpan& span);
     ExprType checkFunctionValueCallShape(const AbelType& functionType,
                                          const ExprType& firstArg,
                                          const std::vector<std::unique_ptr<ExprNode>>& restArgs,
