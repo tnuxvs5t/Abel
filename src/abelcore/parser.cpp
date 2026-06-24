@@ -278,8 +278,14 @@ std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt
     fn->exported = exported;
     fn->debt = debt;
     fn->returnType = parseType();
-    const Token name = consume(TokenKind::Identifier, QStringLiteral("expected function name"));
-    fn->name = name.text;
+    if (match(TokenKind::KwOperator)) {
+        fn->isOperator = true;
+        fn->operatorSymbol = parseOperatorSymbol();
+        fn->name = QStringLiteral("operator ") + fn->operatorSymbol;
+    } else {
+        const Token name = consume(TokenKind::Identifier, QStringLiteral("expected function name"));
+        fn->name = name.text;
+    }
     consume(TokenKind::LParen, QStringLiteral("expected '('"));
     if (!check(TokenKind::RParen)) {
         do {
@@ -308,6 +314,35 @@ std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt
         fn->span = mergeSpans(startSpan, fn->body->span);
     }
     return fn;
+}
+
+QString Parser::parseOperatorSymbol()
+{
+    const Token token = peek();
+    switch (token.kind) {
+    case TokenKind::Plus:
+    case TokenKind::Minus:
+    case TokenKind::Star:
+    case TokenKind::Slash:
+    case TokenKind::Percent:
+    case TokenKind::ModMod:
+    case TokenKind::Power:
+    case TokenKind::MinOp:
+    case TokenKind::MaxOp:
+    case TokenKind::EqualEqual:
+    case TokenKind::BangEqual:
+    case TokenKind::Less:
+    case TokenKind::LessEqual:
+    case TokenKind::Greater:
+    case TokenKind::GreaterEqual:
+        ++m_pos;
+        return token.text;
+    default:
+        errorAt(token, QStringLiteral("expected overloadable operator symbol"));
+        if (!atEnd())
+            ++m_pos;
+        return {};
+    }
 }
 
 std::unique_ptr<StructDeclNode> Parser::parseStruct(bool exported)

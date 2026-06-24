@@ -23,6 +23,28 @@ AbelType sourceLocationBuiltinType(const QString& name)
     return makeType(TypeKind::I32);
 }
 
+bool isBuiltinEqualityComparable(const AbelType& lhs, const AbelType& rhs)
+{
+    if (lhs.isNumeric() && rhs.isNumeric())
+        return true;
+    if ((lhs.isPointer() && rhs.kind == TypeKind::Nullptr)
+        || (lhs.kind == TypeKind::Nullptr && rhs.isPointer()))
+        return true;
+    if (lhs.kind != rhs.kind)
+        return false;
+    switch (lhs.kind) {
+    case TypeKind::Bool:
+    case TypeKind::Char:
+    case TypeKind::Str:
+    case TypeKind::Pointer:
+        return lhs == rhs;
+    case TypeKind::Nullptr:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool isUnknownType(const AbelType& type)
 {
     return type.kind == TypeKind::Unknown;
@@ -1381,6 +1403,15 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
     }
     m_currentReturnType = returnType;
 
+    if (fn.isOperator) {
+        if (fn.operatorSymbol.isEmpty())
+            error(fn.span, QStringLiteral("operator overload is missing an operator symbol"));
+        if (fn.debt)
+            error(fn.span, QStringLiteral("operator '%1' overload cannot be debt in this slice").arg(fn.operatorSymbol));
+        if (fn.params.size() != 2)
+            error(fn.span, QStringLiteral("operator '%1' overload must take exactly two parameters").arg(fn.operatorSymbol));
+    }
+
     pushScope();
     bool seenVariadic = false;
     for (size_t i = 0; i < fn.params.size(); ++i) {
@@ -1390,6 +1421,8 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
             error(param.span, QStringLiteral("unsupported parameter type '%1'").arg(param.type->displayName()));
             continue;
         }
+        if (fn.isOperator && param.variadic)
+            error(param.span, QStringLiteral("operator '%1' overload cannot be variadic").arg(fn.operatorSymbol));
         if (param.variadic) {
             if (seenVariadic)
                 error(param.span, QStringLiteral("only one variadic parameter is allowed"));
@@ -1400,6 +1433,11 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
                 error(param.span, QStringLiteral("only any... variadic parameters are supported"));
             defineVariable(param.name, makeVectorType(makeType(TypeKind::Any)), false, param.span);
         } else {
+            if (fn.isOperator && paramType.isReference() && !isConstReferenceType(paramType)) {
+                error(param.span,
+                      QStringLiteral("operator '%1' overload parameters cannot be mutable references in this slice")
+                          .arg(fn.operatorSymbol));
+            }
             defineVariable(param.name, paramType, isReadOnlyBinding(paramType, param.type->isConst), param.span);
         }
     }
@@ -1695,19 +1733,27 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
         return {makeType(TypeKind::Bool), ValueCategory::PRValue, false};
     }
     if (op == QStringLiteral("==") || op == QStringLiteral("!=")) {
-        const bool ok = lhs.type == rhs.type
-            || (lhs.type.isNumeric() && rhs.type.isNumeric())
-            || (lhs.type.isPointer() && rhs.type.kind == TypeKind::Nullptr)
-            || (lhs.type.kind == TypeKind::Nullptr && rhs.type.isPointer());
-        if (!ok)
-            return errorExpr(expr.span, QStringLiteral("cannot compare %1 and %2").arg(lhs.type.displayName(), rhs.type.displayName()));
+        const bool ok = isBuiltinEqualityComparable(lhs.type, rhs.type);
+        if (!ok) {
+            return checkUserBinaryOperator(
+                op,
+                lhs,
+                rhs,
+                expr.span,
+                QStringLiteral("cannot compare %1 and %2").arg(lhs.type.displayName(), rhs.type.displayName()));
+        }
         return {makeType(TypeKind::Bool), ValueCategory::PRValue, false};
     }
     if (op == QStringLiteral("+") && lhs.type.kind == TypeKind::Str && rhs.type.kind == TypeKind::Str)
         return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
 
     if (!lhs.type.isNumeric() || !rhs.type.isNumeric())
-        return errorExpr(expr.span, QStringLiteral("operator '%1' requires numeric operands").arg(op));
+        return checkUserBinaryOperator(
+            op,
+            lhs,
+            rhs,
+            expr.span,
+            QStringLiteral("operator '%1' requires numeric operands").arg(op));
 
     if (op == QStringLiteral("<") || op == QStringLiteral("<=") || op == QStringLiteral(">") || op == QStringLiteral(">="))
         return {makeType(TypeKind::Bool), ValueCategory::PRValue, false};
@@ -1717,7 +1763,34 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
         return {numericBinaryResultType(lhs.type, rhs.type), ValueCategory::PRValue, false};
     }
 
-    return errorExpr(expr.span, QStringLiteral("unknown binary operator '%1'").arg(op));
+    return checkUserBinaryOperator(
+        op,
+        lhs,
+        rhs,
+        expr.span,
+        QStringLiteral("unknown binary operator '%1'").arg(op));
+}
+
+ExprType TypeChecker::checkUserBinaryOperator(const QString& op,
+                                              const ExprType& lhs,
+                                              const ExprType& rhs,
+                                              const SourceSpan& span,
+                                              const QString& fallbackMessage)
+{
+    const QString name = QStringLiteral("operator ") + op;
+    const FunctionDeclNode* fn = resolveFunction(name, span, false);
+    if (!fn)
+        return errorExpr(span, fallbackMessage);
+    if (!fn->isOperator || fn->operatorSymbol != op)
+        return errorExpr(span, QStringLiteral("function '%1' is not a valid operator overload").arg(name));
+    if (fn->params.size() != 2 || (!fn->params.empty() && fn->params.back()->variadic))
+        return errorExpr(fn->span, QStringLiteral("operator '%1' overload must take exactly two parameters").arg(op));
+
+    const AbelType lhsParam = typeFromAstForDecl(*fn->params[0]->type, *fn);
+    const AbelType rhsParam = typeFromAstForDecl(*fn->params[1]->type, *fn);
+    checkParameterArgument(lhsParam, lhs, span, QStringLiteral("operator left operand"));
+    checkParameterArgument(rhsParam, rhs, span, QStringLiteral("operator right operand"));
+    return callReturnExprType(typeFromAstForDecl(*fn->returnType, *fn));
 }
 
 ExprType TypeChecker::checkCast(const CastExprNode& expr)

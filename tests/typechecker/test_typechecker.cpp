@@ -1529,6 +1529,73 @@ private slots:
         auto result = checkSource(src);
         QVERIFY(!result.diagnostics.isEmpty());
     }
+
+    void acceptsUserBinaryOperators()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Point {
+                int x;
+                int y;
+            }
+
+            fn Point operator +(Point a, Point b) {
+                return Point(a.x + b.x, a.y + b.y);
+            }
+
+            fn bool operator ==(Point a, Point b) {
+                return a.x == b.x && a.y == b.y;
+            }
+
+            fn int main() {
+                Point a = Point(1, 2);
+                Point b = Point(3, 4);
+                Point c = a + b;
+                if (c == Point(4, 6)) {
+                    return c.x + c.y;
+                }
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsBadUserBinaryOperators()
+    {
+        auto wrongArity = checkSource(QStringLiteral(R"(
+            struct Point {
+                int x;
+            }
+
+            fn Point operator +(Point a) {
+                return a;
+            }
+
+            fn int main() {
+                return 0;
+            }
+        )"));
+        QVERIFY(!wrongArity.diagnostics.isEmpty());
+
+        auto badOperand = checkSource(QStringLiteral(R"(
+            struct Point {
+                int x;
+            }
+
+            fn Point operator +(Point a, Point b) {
+                return Point(a.x + b.x);
+            }
+
+            fn int main() {
+                Point a = Point(1);
+                Point c = a + 1;
+                return c.x;
+            }
+        )"));
+        QVERIFY(!badOperand.diagnostics.isEmpty());
+    }
 };
 
 QTEST_MAIN(AbelTypeCheckerTests)

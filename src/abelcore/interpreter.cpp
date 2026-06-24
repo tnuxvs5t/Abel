@@ -143,6 +143,28 @@ TypeKind numericBinaryResultKind(const AbelType& lhs, const AbelType& rhs)
     return integerTypeForWidth(width, unsignedResult);
 }
 
+bool isBuiltinEqualityComparable(const AbelType& lhs, const AbelType& rhs)
+{
+    if (lhs.isNumeric() && rhs.isNumeric())
+        return true;
+    if ((lhs.isPointer() && rhs.kind == TypeKind::Nullptr)
+        || (lhs.kind == TypeKind::Nullptr && rhs.isPointer()))
+        return true;
+    if (lhs.kind != rhs.kind)
+        return false;
+    switch (lhs.kind) {
+    case TypeKind::Bool:
+    case TypeKind::Char:
+    case TypeKind::Str:
+    case TypeKind::Pointer:
+        return lhs == rhs;
+    case TypeKind::Nullptr:
+        return true;
+    default:
+        return false;
+    }
+}
+
 class DeclContextGuard {
 public:
     DeclContextGuard(QString& currentPackage,
@@ -2010,7 +2032,9 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
     if (op == QStringLiteral("+") && lhs.type().kind == TypeKind::Str && rhs.type().kind == TypeKind::Str)
         return AbelValue::makeString(lhs.asString() + rhs.asString());
 
-    if ((op == QStringLiteral("==") || op == QStringLiteral("!=")) && lhs.type().kind == rhs.type().kind) {
+    if ((op == QStringLiteral("==") || op == QStringLiteral("!="))
+        && lhs.type().kind == rhs.type().kind
+        && isBuiltinEqualityComparable(lhs.type(), rhs.type())) {
         bool eq = false;
         switch (lhs.type().kind) {
         case TypeKind::Bool: eq = lhs.asBool() == rhs.asBool(); break;
@@ -2041,9 +2065,19 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
             const bool eq = ptr == nullptr;
             return AbelValue::makeBool(op == QStringLiteral("==") ? eq : !eq);
         }
+        if (!lhs.type().isNumeric() || !rhs.type().isNumeric()) {
+            if (auto overloaded = evalUserBinaryOperator(op, lhs, rhs, expr.span))
+                return *overloaded;
+            error(QStringLiteral("E0516"),
+                  QStringLiteral("cannot compare %1 and %2").arg(lhs.type().displayName(), rhs.type().displayName()),
+                  expr.span);
+            return AbelValue::makeUnknown();
+        }
     }
 
     if (!lhs.type().isNumeric() || !rhs.type().isNumeric()) {
+        if (auto overloaded = evalUserBinaryOperator(op, lhs, rhs, expr.span))
+            return *overloaded;
         error(QStringLiteral("E0516"), QStringLiteral("operator '%1' requires numeric operands").arg(op), expr.span);
         return AbelValue::makeUnknown();
     }
@@ -2150,6 +2184,30 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
 
     error(QStringLiteral("E0520"), QStringLiteral("operator '%1' is not implemented").arg(op), expr.span);
     return AbelValue::makeUnknown();
+}
+
+std::optional<AbelValue> Interpreter::evalUserBinaryOperator(const QString& op,
+                                                             const AbelValue& lhs,
+                                                             const AbelValue& rhs,
+                                                             const SourceSpan& span)
+{
+    const QString name = QStringLiteral("operator ") + op;
+    const FunctionDeclNode* fn = resolveFunction(name);
+    if (!fn)
+        return std::nullopt;
+    if (!fn->isOperator || fn->operatorSymbol != op) {
+        error(QStringLiteral("E0521"), QStringLiteral("function '%1' is not a valid operator overload").arg(name), fn->span);
+        return AbelValue::makeUnknown();
+    }
+    if (fn->params.size() != 2 || (!fn->params.empty() && fn->params.back()->variadic)) {
+        error(QStringLiteral("E0521"),
+              QStringLiteral("operator '%1' overload must take exactly two parameters").arg(op),
+              fn->span);
+        return AbelValue::makeUnknown();
+    }
+
+    RuntimeFrameGuard frame(*m_ctx, true, QStringLiteral("operator %1").arg(op), span);
+    return callFunction(*fn, {lhs, rhs}).value;
 }
 
 AbelValue Interpreter::evalCast(const CastExprNode& expr)

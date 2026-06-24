@@ -276,6 +276,7 @@ void Lexer::lexIdentifierOrKeyword(qsizetype startPos, int startLine, int startC
         {QStringLiteral("as"), TokenKind::KwAs},
         {QStringLiteral("public"), TokenKind::KwPublic},
         {QStringLiteral("private"), TokenKind::KwPrivate},
+        {QStringLiteral("operator"), TokenKind::KwOperator},
     };
     add(keywords.value(text, TokenKind::Identifier), text, startPos, startLine, startColumn);
 }

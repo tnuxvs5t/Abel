@@ -43,6 +43,7 @@ private:
     std::unique_ptr<UseDeclNode> parseUse(bool exported = false);
     QString parseQualifiedName(const QString& what);
     std::unique_ptr<FunctionDeclNode> parseFunction(bool exported, bool debt);
+    QString parseOperatorSymbol();
     std::unique_ptr<StructDeclNode> parseStruct(bool exported);
     std::unique_ptr<EnumDeclNode> parseEnum(bool exported);
     std::unique_ptr<TypeAliasDeclNode> parseTypeAlias(bool exported);

@@ -1703,6 +1703,40 @@ private slots:
         QVERIFY(stackHasSymbol(diagnostic, QStringLiteral("fn main")));
         QCOMPARE(result.exitCode, 1);
     }
+
+    void runsUserBinaryOperators()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Point {
+                int x;
+                int y;
+            }
+
+            fn Point operator +(Point a, Point b) {
+                return Point(a.x + b.x, a.y + b.y);
+            }
+
+            fn bool operator ==(Point a, Point b) {
+                return a.x == b.x && a.y == b.y;
+            }
+
+            fn int main() {
+                Point a = Point(1, 2);
+                Point b = Point(3, 4);
+                Point c = a + b;
+                Point d = c + Point(1, 2);
+                if (d == Point(5, 8)) {
+                    return d.x + d.y;
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 13);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

@@ -352,6 +352,41 @@ private slots:
         QVERIFY(parsed.diagnostics.isEmpty());
         QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
     }
+
+    void parsesUserBinaryOperatorDeclaration()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Point {
+                int x;
+                int y;
+            }
+
+            fn Point operator +(Point a, Point b) {
+                return Point(a.x + b.x, a.y + b.y);
+            }
+
+            fn int main() {
+                return 0;
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(3));
+
+        auto* fn = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[1].get());
+        QVERIFY(fn != nullptr);
+        QVERIFY(fn->isOperator);
+        QCOMPARE(fn->operatorSymbol, QStringLiteral("+"));
+        QCOMPARE(fn->name, QStringLiteral("operator +"));
+        QCOMPARE(fn->params.size(), static_cast<size_t>(2));
+    }
 };
 
 QTEST_MAIN(AbelParserTests)

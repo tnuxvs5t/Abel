@@ -106,6 +106,10 @@ private:
     AbelValue evalExpr(const ExprNode& expr);
     AbelLocation* evalLocation(const ExprNode& expr);
     AbelValue evalBinary(const BinaryExprNode& expr);
+    std::optional<AbelValue> evalUserBinaryOperator(const QString& op,
+                                                    const AbelValue& lhs,
+                                                    const AbelValue& rhs,
+                                                    const SourceSpan& span);
     AbelValue evalUnary(const UnaryExprNode& expr);
     AbelValue evalCast(const CastExprNode& expr);
     AbelValue evalPipe(const BinaryExprNode& expr);

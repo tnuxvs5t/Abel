@@ -34,6 +34,7 @@ enum class TokenKind {
     KwVector, KwFunc, KwAny, KwNew, KwDelete, KwCast, KwThis,
     KwEnum, KwType,
     KwExport, KwModule, KwUse, KwAs, KwPublic, KwPrivate,
+    KwOperator,
 };
 
 struct Token {

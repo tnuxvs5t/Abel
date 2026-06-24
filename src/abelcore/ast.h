@@ -185,6 +185,8 @@ struct FunctionDeclNode final : DeclNode {
     bool debt = false;
     bool isConstMethod = false;
     bool isPrivate = false;
+    bool isOperator = false;
+    QString operatorSymbol;
     std::unique_ptr<TypeNode> returnType;
     QString name;
     std::vector<std::unique_ptr<ParameterNode>> params;
