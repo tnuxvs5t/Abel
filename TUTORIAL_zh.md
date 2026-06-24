@@ -1205,7 +1205,7 @@ my_abel_project/
     pass.abel
 ```
 
-每个 `tests/**/*.abel` 文件都是一个独立测试入口。`abel test .` 会把依赖包库源码、根项目 `src/**/*.abel` 非 entry 源码和当前测试文件合并，先执行同一套 `abel check`，再运行测试 `main`。退出码为 `0` 表示该测试通过；非 0 或诊断错误表示失败。
+每个 `tests/**/*.abel` 文件都是一个独立测试入口。`abel test .` 会把依赖包库源码、根项目 `src/**/*.abel` 非 entry 源码和当前测试文件合并，先执行同一套 `abel check`，再运行测试 `main`。若测试文件声明 `fn void setup()` / `fn void teardown()`，测试运行器会在 `main` 前后自动调用；即使 `main` 返回非 0 或产生运行期诊断，`teardown` 仍会执行。退出码为 `0` 表示该测试通过；非 0 或诊断错误表示失败。
 
 测试入口支持两个基础工程化选项：
 
@@ -1228,6 +1228,23 @@ fn int main() {
     test_eq(M::helper(), 41, "helper");
     test_assert(M::helper() > 0, "positive");
     return 0;
+}
+```
+
+带 fixture 的测试：
+
+```abel
+fn void setup() {
+    debug_assert(true, "prepare resource");
+}
+
+fn int main() {
+    test_assert(true, "case body");
+    return 0;
+}
+
+fn void teardown() {
+    debug_assert(true, "cleanup resource");
 }
 ```
 

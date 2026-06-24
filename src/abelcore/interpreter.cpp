@@ -249,9 +249,8 @@ InterpreterResult Interpreter::run(const ProgramNode& program)
     return run(program, nullptr);
 }
 
-InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* backendRegistry)
+void Interpreter::beginRun(AbelRuntimeContext& ctx, BackendRegistry* backendRegistry)
 {
-    AbelRuntimeContext ctx;
     m_ctx = &ctx;
     m_functions.clear();
     m_structs.clear();
@@ -266,41 +265,73 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
     m_currentImportAliases.clear();
     m_backendRegistry = BackendRegistry();
     m_activeBackendRegistry = backendRegistry ? backendRegistry : &m_backendRegistry;
+}
 
-    InterpreterResult result;
+void Interpreter::endRun()
+{
+    m_ctx = nullptr;
+    m_activeBackendRegistry = nullptr;
+}
+
+bool Interpreter::collectProgram(const ProgramNode& program, AbelRuntimeContext& ctx, InterpreterResult& result)
+{
     if (!collectEnums(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
-        m_ctx = nullptr;
-        m_activeBackendRegistry = nullptr;
-        return result;
+        return false;
     }
     if (!collectTypeAliases(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
-        m_ctx = nullptr;
-        m_activeBackendRegistry = nullptr;
-        return result;
+        return false;
     }
     if (!collectStructs(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
-        m_ctx = nullptr;
-        m_activeBackendRegistry = nullptr;
-        return result;
+        return false;
     }
     if (!collectFunctions(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
-        m_ctx = nullptr;
-        m_activeBackendRegistry = nullptr;
-        return result;
+        return false;
     }
     if (!collectBackends(program, ctx)) {
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
-        m_ctx = nullptr;
-        m_activeBackendRegistry = nullptr;
+        return false;
+    }
+    return true;
+}
+
+bool Interpreter::validateTestFixture(const FunctionDeclNode* fn, const QString& name, AbelRuntimeContext& ctx)
+{
+    if (!fn)
+        return true;
+    bool ok = true;
+    const AbelType returnType = typeFromAstForDecl(*fn->returnType, *fn);
+    if (returnType.kind != TypeKind::Void || !fn->params.empty()) {
+        ctx.error(QStringLiteral("E0506"),
+                  QStringLiteral("test fixture '%1' must be declared as fn void %1()").arg(name),
+                  fn->span);
+        ok = false;
+    }
+    if (fn->debt || !fn->body) {
+        ctx.error(QStringLiteral("E0507"),
+                  QStringLiteral("test fixture '%1' must have an Abel body").arg(name),
+                  fn->span);
+        ok = false;
+    }
+    return ok;
+}
+
+InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* backendRegistry)
+{
+    AbelRuntimeContext ctx;
+    beginRun(ctx, backendRegistry);
+
+    InterpreterResult result;
+    if (!collectProgram(program, ctx, result)) {
+        endRun();
         return result;
     }
 
@@ -309,8 +340,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
         ctx.error(QStringLiteral("E0504"), QStringLiteral("missing fn int main() or fn void main()"), program.span);
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
-        m_ctx = nullptr;
-        m_activeBackendRegistry = nullptr;
+        endRun();
         return result;
     }
 
@@ -319,8 +349,7 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
         ctx.error(QStringLiteral("E0505"), QStringLiteral("main must return int or void"), main->span);
         result.exitCode = 1;
         result.diagnostics = ctx.takeDiagnostics();
-        m_ctx = nullptr;
-        m_activeBackendRegistry = nullptr;
+        endRun();
         return result;
     }
 
@@ -334,8 +363,91 @@ InterpreterResult Interpreter::run(const ProgramNode& program, BackendRegistry* 
     } else {
         result.exitCode = static_cast<int>(flow.value.asInt());
     }
-    m_ctx = nullptr;
-    m_activeBackendRegistry = nullptr;
+    endRun();
+    return result;
+}
+
+InterpreterResult Interpreter::runTest(const ProgramNode& program)
+{
+    return runTest(program, nullptr);
+}
+
+InterpreterResult Interpreter::runTest(const ProgramNode& program, BackendRegistry* backendRegistry)
+{
+    AbelRuntimeContext ctx;
+    beginRun(ctx, backendRegistry);
+
+    InterpreterResult result;
+    if (!collectProgram(program, ctx, result)) {
+        endRun();
+        return result;
+    }
+
+    const FunctionDeclNode* main = findRootFunction(QStringLiteral("main"));
+    if (!main) {
+        ctx.error(QStringLiteral("E0504"), QStringLiteral("missing fn int main() or fn void main()"), program.span);
+        result.exitCode = 1;
+        result.diagnostics = ctx.takeDiagnostics();
+        endRun();
+        return result;
+    }
+
+    const AbelType mainType = typeFromAstForDecl(*main->returnType, *main);
+    if (mainType.kind != TypeKind::I32 && mainType.kind != TypeKind::Void) {
+        ctx.error(QStringLiteral("E0505"), QStringLiteral("main must return int or void"), main->span);
+    }
+    if (!main->params.empty()) {
+        ctx.error(QStringLiteral("E0505"), QStringLiteral("main must not take parameters"), main->span);
+    }
+
+    const FunctionDeclNode* setup = findRootFunctionInFile(QStringLiteral("setup"), main->span.file);
+    const FunctionDeclNode* teardown = findRootFunctionInFile(QStringLiteral("teardown"), main->span.file);
+    validateTestFixture(setup, QStringLiteral("setup"), ctx);
+    validateTestFixture(teardown, QStringLiteral("teardown"), ctx);
+    if (ctx.hasError()) {
+        result.exitCode = 1;
+        result.diagnostics = ctx.takeDiagnostics();
+        endRun();
+        return result;
+    }
+
+    QList<Diagnostic> diagnostics;
+    ExecResult mainFlow = ExecResult::returned(AbelValue::makeVoid());
+    bool mainAttempted = false;
+    bool setupFailed = false;
+    if (setup) {
+        callFunction(*setup, {});
+        const QList<Diagnostic> setupDiagnostics = ctx.takeDiagnostics();
+        setupFailed = !setupDiagnostics.isEmpty();
+        diagnostics.append(setupDiagnostics);
+    }
+
+    if (!setupFailed) {
+        mainAttempted = true;
+        mainFlow = callFunction(*main, {});
+        diagnostics.append(ctx.takeDiagnostics());
+    }
+
+    if (teardown) {
+        callFunction(*teardown, {});
+        diagnostics.append(ctx.takeDiagnostics());
+    }
+    diagnostics.append(ctx.takeDiagnostics());
+
+    result.returnValue = mainFlow.value;
+    result.diagnostics = diagnostics;
+    if (!mainAttempted) {
+        result.exitCode = 1;
+    } else if (mainType.kind == TypeKind::I32 && mainFlow.value.type().isInteger()) {
+        result.exitCode = static_cast<int>(mainFlow.value.asInt());
+    } else if (mainType.kind == TypeKind::Void) {
+        result.exitCode = 0;
+    } else {
+        result.exitCode = 1;
+    }
+    if (!result.diagnostics.isEmpty() && result.exitCode == 0)
+        result.exitCode = 1;
+    endRun();
     return result;
 }
 
@@ -470,6 +582,17 @@ const FunctionDeclNode* Interpreter::findRootFunction(const QString& name) const
     for (auto it = candidates.crbegin(); it != candidates.crend(); ++it) {
         const FunctionDeclNode* fn = *it;
         if (!fn->fromDependency)
+            return fn;
+    }
+    return nullptr;
+}
+
+const FunctionDeclNode* Interpreter::findRootFunctionInFile(const QString& name, const QString& file) const
+{
+    const auto candidates = m_functions.value(name);
+    for (auto it = candidates.crbegin(); it != candidates.crend(); ++it) {
+        const FunctionDeclNode* fn = *it;
+        if (!fn->fromDependency && fn->span.file == file)
             return fn;
     }
     return nullptr;

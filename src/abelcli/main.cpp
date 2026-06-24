@@ -636,7 +636,8 @@ static LoadedCliResources loadCliResources(const QList<abel::PackageResolvedReso
 static CliProgramRun runSourceFiles(const QList<abel::PackageSourceFile>& sourceFiles,
                                     const QList<abel::PackageResolvedResource>& packageResources,
                                     const QStringList& resourceFiles,
-                                    const QString& explicitResourceBaseDir)
+                                    const QString& explicitResourceBaseDir,
+                                    bool testFixtureMode = false)
 {
     CliProgramRun out;
     auto parsed = parseSourceFiles(sourceFiles);
@@ -650,9 +651,13 @@ static CliProgramRun runSourceFiles(const QList<abel::PackageSourceFile>& source
         return out;
 
     abel::Interpreter interpreter;
-    auto result = !loadedResources.hasResources
-        ? interpreter.run(*parsed.program)
-        : interpreter.run(*parsed.program, &loadedResources.registry);
+    auto result = testFixtureMode
+        ? (!loadedResources.hasResources
+              ? interpreter.runTest(*parsed.program)
+              : interpreter.runTest(*parsed.program, &loadedResources.registry))
+        : (!loadedResources.hasResources
+              ? interpreter.run(*parsed.program)
+              : interpreter.run(*parsed.program, &loadedResources.registry));
     out.exitCode = result.exitCode;
     out.diagnostics.append(result.diagnostics);
     return out;
@@ -1057,12 +1062,13 @@ int main(int argc, char** argv)
             const CliProgramRun run = runSourceFiles(sourceFiles,
                                                      packageResources,
                                                      resourceFiles,
-                                                     QCoreApplication::applicationDirPath());
+                                                     QCoreApplication::applicationDirPath(),
+                                                     true);
             if (!run.diagnostics.isEmpty() || run.exitCode != 0) {
                 out << (expectFailure ? "xfail" : "FAILED") << Qt::endl;
                 for (const auto& d : run.diagnostics)
                     printDiagnostic(d);
-                if (run.diagnostics.isEmpty())
+                if (run.exitCode != 0)
                     err << "test " << display << " failed with exit code " << run.exitCode << Qt::endl;
                 QJsonArray diagnostics;
                 for (const auto& d : run.diagnostics)

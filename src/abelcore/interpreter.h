@@ -22,6 +22,8 @@ class Interpreter {
 public:
     InterpreterResult run(const ProgramNode& program);
     InterpreterResult run(const ProgramNode& program, BackendRegistry* backendRegistry);
+    InterpreterResult runTest(const ProgramNode& program);
+    InterpreterResult runTest(const ProgramNode& program, BackendRegistry* backendRegistry);
 
 private:
     struct StructRuntimeInfo {
@@ -56,12 +58,17 @@ private:
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
     AbelRuntimeContext* m_ctx = nullptr;
 
+    void beginRun(AbelRuntimeContext& ctx, BackendRegistry* backendRegistry);
+    void endRun();
+    bool collectProgram(const ProgramNode& program, AbelRuntimeContext& ctx, InterpreterResult& result);
+    bool validateTestFixture(const FunctionDeclNode* fn, const QString& name, AbelRuntimeContext& ctx);
     bool collectFunctions(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectStructs(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectEnums(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectTypeAliases(const ProgramNode& program, AbelRuntimeContext& ctx);
     bool collectBackends(const ProgramNode& program, AbelRuntimeContext& ctx);
     const FunctionDeclNode* findRootFunction(const QString& name) const;
+    const FunctionDeclNode* findRootFunctionInFile(const QString& name, const QString& file) const;
     const FunctionDeclNode* resolveFunction(const QString& name) const;
     const FunctionDeclNode* resolveFunctionInModule(const QString& moduleName, const QString& name) const;
     const StructRuntimeInfo* resolveStruct(const QString& name) const;

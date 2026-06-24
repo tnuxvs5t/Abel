@@ -79,7 +79,12 @@ public:
     void error(const QString& code, const QString& message, const SourceSpan& span);
     bool hasError() const { return !m_diagnostics.isEmpty(); }
     const QList<Diagnostic>& diagnostics() const { return m_diagnostics; }
-    QList<Diagnostic> takeDiagnostics() { return m_diagnostics; }
+    QList<Diagnostic> takeDiagnostics()
+    {
+        QList<Diagnostic> out = m_diagnostics;
+        m_diagnostics.clear();
+        return out;
+    }
 
 private:
     QList<RuntimeFrame> m_frames;

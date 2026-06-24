@@ -1175,3 +1175,161 @@ string(FIND "${assertion_test_command_stderr}" "test_eq failed" assertion_test_c
 if(assertion_test_command_message_pos EQUAL -1)
     message(FATAL_ERROR "abel test did not print assertion diagnostic message:\n${assertion_test_command_stdout}\n${assertion_test_command_stderr}")
 endif()
+
+set(fixture_test_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-test-fixtures")
+file(REMOVE_RECURSE "${fixture_test_project_dir}")
+file(MAKE_DIRECTORY "${fixture_test_project_dir}/src")
+file(MAKE_DIRECTORY "${fixture_test_project_dir}/tests")
+
+file(WRITE "${fixture_test_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-test-fixtures",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${fixture_test_project_dir}/src/main.abel" [=[
+fn int main() {
+    return 0;
+}
+]=])
+
+file(WRITE "${fixture_test_project_dir}/src/library_setup.abel" [=[
+module cli.fixture.library;
+
+fn void setup() {
+    debug_assert(false, "library setup must not run as a test fixture");
+}
+
+fn int helper() {
+    return 1;
+}
+]=])
+
+file(WRITE "${fixture_test_project_dir}/tests/pass_without_fixture.abel" [=[
+use cli.fixture.library;
+
+fn int main() {
+    test_eq(helper(), 1, "helper");
+    return 0;
+}
+]=])
+
+file(WRITE "${fixture_test_project_dir}/tests/setup_fail.abel" [=[
+fn void setup() {
+    debug_assert(false, "setup ran");
+}
+
+fn int main() {
+    return 0;
+}
+]=])
+
+file(WRITE "${fixture_test_project_dir}/tests/teardown_fail.abel" [=[
+fn int main() {
+    return 0;
+}
+
+fn void teardown() {
+    debug_assert(false, "teardown ran");
+}
+]=])
+
+file(WRITE "${fixture_test_project_dir}/tests/main_fail_teardown_fail.abel" [=[
+fn int main() {
+    return 7;
+}
+
+fn void teardown() {
+    debug_assert(false, "teardown after main");
+}
+]=])
+
+file(WRITE "${fixture_test_project_dir}/tests/bad_setup_signature.abel" [=[
+fn int setup() {
+    return 0;
+}
+
+fn int main() {
+    return 0;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test --filter setup_fail "${fixture_test_project_dir}"
+    RESULT_VARIABLE fixture_setup_result
+    OUTPUT_VARIABLE fixture_setup_stdout
+    ERROR_VARIABLE fixture_setup_stderr
+)
+if(fixture_setup_result EQUAL 0)
+    message(FATAL_ERROR "abel test unexpectedly accepted setup failure:\n${fixture_setup_stdout}\n${fixture_setup_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test --filter pass_without_fixture "${fixture_test_project_dir}"
+    RESULT_VARIABLE fixture_scope_result
+    OUTPUT_VARIABLE fixture_scope_stdout
+    ERROR_VARIABLE fixture_scope_stderr
+)
+if(NOT fixture_scope_result EQUAL 0)
+    message(FATAL_ERROR "abel test used library setup as fixture:\n${fixture_scope_stdout}\n${fixture_scope_stderr}")
+endif()
+string(FIND "${fixture_scope_stdout}" "test tests/pass_without_fixture.abel ... ok" fixture_scope_ok_pos)
+if(fixture_scope_ok_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not report scoped fixture passing test:\n${fixture_scope_stdout}\n${fixture_scope_stderr}")
+endif()
+string(FIND "${fixture_setup_stdout}" "test tests/setup_fail.abel ... FAILED" fixture_setup_failed_pos)
+if(fixture_setup_failed_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not report setup failure:\n${fixture_setup_stdout}\n${fixture_setup_stderr}")
+endif()
+string(FIND "${fixture_setup_stderr}" "setup ran" fixture_setup_message_pos)
+if(fixture_setup_message_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not execute setup fixture:\n${fixture_setup_stdout}\n${fixture_setup_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test --filter teardown_fail "${fixture_test_project_dir}"
+    RESULT_VARIABLE fixture_teardown_result
+    OUTPUT_VARIABLE fixture_teardown_stdout
+    ERROR_VARIABLE fixture_teardown_stderr
+)
+if(fixture_teardown_result EQUAL 0)
+    message(FATAL_ERROR "abel test unexpectedly accepted teardown failure:\n${fixture_teardown_stdout}\n${fixture_teardown_stderr}")
+endif()
+string(FIND "${fixture_teardown_stderr}" "teardown ran" fixture_teardown_message_pos)
+if(fixture_teardown_message_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not execute teardown fixture:\n${fixture_teardown_stdout}\n${fixture_teardown_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test --filter main_fail_teardown_fail "${fixture_test_project_dir}"
+    RESULT_VARIABLE fixture_main_teardown_result
+    OUTPUT_VARIABLE fixture_main_teardown_stdout
+    ERROR_VARIABLE fixture_main_teardown_stderr
+)
+if(fixture_main_teardown_result EQUAL 0)
+    message(FATAL_ERROR "abel test unexpectedly accepted failing main plus teardown failure:\n${fixture_main_teardown_stdout}\n${fixture_main_teardown_stderr}")
+endif()
+string(FIND "${fixture_main_teardown_stderr}" "teardown after main" fixture_main_teardown_message_pos)
+if(fixture_main_teardown_message_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not run teardown after main failure:\n${fixture_main_teardown_stdout}\n${fixture_main_teardown_stderr}")
+endif()
+string(FIND "${fixture_main_teardown_stderr}" "failed with exit code 7" fixture_main_teardown_exit_pos)
+if(fixture_main_teardown_exit_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not preserve main failure exit code with teardown diagnostic:\n${fixture_main_teardown_stdout}\n${fixture_main_teardown_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test --filter bad_setup_signature "${fixture_test_project_dir}"
+    RESULT_VARIABLE fixture_bad_signature_result
+    OUTPUT_VARIABLE fixture_bad_signature_stdout
+    ERROR_VARIABLE fixture_bad_signature_stderr
+)
+if(fixture_bad_signature_result EQUAL 0)
+    message(FATAL_ERROR "abel test unexpectedly accepted bad setup signature:\n${fixture_bad_signature_stdout}\n${fixture_bad_signature_stderr}")
+endif()
+string(FIND "${fixture_bad_signature_stderr}" "test fixture 'setup' must be declared as fn void setup()" fixture_bad_signature_pos)
+if(fixture_bad_signature_pos EQUAL -1)
+    message(FATAL_ERROR "abel test did not diagnose bad setup signature:\n${fixture_bad_signature_stdout}\n${fixture_bad_signature_stderr}")
+endif()
