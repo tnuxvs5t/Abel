@@ -480,6 +480,58 @@ private slots:
         QVERIFY(lockedDep.value(QStringLiteral("resolvedPath")).toString().contains(QStringLiteral(".abel/cache/packages/dep/1.1.0")));
     }
 
+    void publishesPackageToLocalRegistryAndRejectsDuplicateWithoutOverwrite()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        QVERIFY(root.mkpath(QStringLiteral("dep/src/lib")));
+        QVERIFY(root.mkpath(QStringLiteral("dep/.abel")));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/main.abel")),
+                  QStringLiteral("fn int main() { return 0; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/lib/value.abel")),
+                  QStringLiteral("export fn int dep_value() { return 42; }"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/.abel/ignored.txt")),
+                  QStringLiteral("cache must not be published"));
+        writeText(root.absoluteFilePath(QStringLiteral("dep/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "dep",
+                      "version": "1.2.0",
+                      "entry": "src/main.abel"
+                  })"));
+
+        const QString depRoot = root.absoluteFilePath(QStringLiteral("dep"));
+        const QString registryRoot = root.absoluteFilePath(QStringLiteral("registry"));
+        auto published = abel::publishPackageToLocalRegistry(depRoot, registryRoot);
+        for (const auto& d : published.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(published.diagnostics.isEmpty());
+        QVERIFY(!published.overwritten);
+        QCOMPARE(published.package.name, QStringLiteral("dep"));
+        QCOMPARE(published.package.version, QStringLiteral("1.2.0"));
+        QCOMPARE(published.targetDir, QDir(registryRoot).absoluteFilePath(QStringLiteral("dep/1.2.0")));
+        QVERIFY(QFileInfo(QDir(published.targetDir).absoluteFilePath(QStringLiteral("abel.package.json"))).isFile());
+        QVERIFY(QFileInfo(QDir(published.targetDir).absoluteFilePath(QStringLiteral("src/lib/value.abel"))).isFile());
+        QVERIFY(!QFileInfo(QDir(published.targetDir).absoluteFilePath(QStringLiteral(".abel/ignored.txt"))).exists());
+
+        auto duplicate = abel::publishPackageToLocalRegistry(depRoot, registryRoot);
+        QVERIFY(!duplicate.diagnostics.isEmpty());
+        bool sawDuplicate = false;
+        for (const auto& d : duplicate.diagnostics)
+            sawDuplicate = sawDuplicate || d.message.contains(QStringLiteral("already exists"));
+        QVERIFY(sawDuplicate);
+
+        writeText(root.absoluteFilePath(QStringLiteral("dep/src/lib/extra.abel")),
+                  QStringLiteral("export fn int extra_value() { return 7; }"));
+        auto overwritten = abel::publishPackageToLocalRegistry(depRoot, registryRoot, true);
+        for (const auto& d : overwritten.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(overwritten.diagnostics.isEmpty());
+        QVERIFY(overwritten.overwritten);
+        QVERIFY(QFileInfo(QDir(overwritten.targetDir).absoluteFilePath(QStringLiteral("src/lib/extra.abel"))).isFile());
+    }
+
     void rejectsSharedPathDependencyVersionConflict()
     {
         QTemporaryDir dir;

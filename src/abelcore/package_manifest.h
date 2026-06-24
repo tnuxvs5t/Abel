@@ -95,6 +95,16 @@ struct PackageDependencyChangeResult {
     bool ok() const { return diagnostics.isEmpty(); }
 };
 
+struct PackagePublishResult {
+    PackageManifest package;
+    QString registryRoot;
+    QString targetDir;
+    bool overwritten = false;
+    QList<Diagnostic> diagnostics;
+
+    bool ok() const { return diagnostics.isEmpty(); }
+};
+
 struct PackageResolvedResource {
     QString packageName;
     QString packageRoot;
@@ -162,6 +172,9 @@ PackageDependencyChangeResult addRegistryPackageDependency(const QString& dir,
                                                           const QString& versionRequirement,
                                                           const QString& registryDir);
 PackageDependencyChangeResult removePackageDependency(const QString& dir, const QString& dependencyName);
+PackagePublishResult publishPackageToLocalRegistry(const QString& dir,
+                                                   const QString& registryDir,
+                                                   bool overwrite = false);
 PackageManifestParseResult packageManifestFromJson(const QJsonObject& object,
                                                    const QString& rootDir = {},
                                                    const SourceSpan& span = {});

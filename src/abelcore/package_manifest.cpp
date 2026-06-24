@@ -708,11 +708,11 @@ bool copyDirectoryRecursively(const QString& sourceDir, const QString& targetDir
     if (sourceRoot == targetRoot)
         return true;
     if (QFileInfo::exists(targetDir) && !QDir(targetDir).removeRecursively()) {
-        addPackageError(diagnostics, QStringLiteral("cannot refresh cached package directory '%1'").arg(targetDir), span);
+        addPackageError(diagnostics, QStringLiteral("cannot refresh package directory '%1'").arg(targetDir), span);
         return false;
     }
     if (!QDir().mkpath(targetDir)) {
-        addPackageError(diagnostics, QStringLiteral("cannot create cached package directory '%1'").arg(targetDir), span);
+        addPackageError(diagnostics, QStringLiteral("cannot create package directory '%1'").arg(targetDir), span);
         return false;
     }
 
@@ -728,23 +728,23 @@ bool copyDirectoryRecursively(const QString& sourceDir, const QString& targetDir
         const QString target = QDir(targetDir).absoluteFilePath(relative);
         if (info.isDir()) {
             if (!QDir().mkpath(target)) {
-                addPackageError(diagnostics, QStringLiteral("cannot create cached package subdirectory '%1'").arg(target), span);
+                addPackageError(diagnostics, QStringLiteral("cannot create package subdirectory '%1'").arg(target), span);
                 return false;
             }
             continue;
         }
         if (info.isFile()) {
             if (!QDir().mkpath(QFileInfo(target).dir().absolutePath())) {
-                addPackageError(diagnostics, QStringLiteral("cannot create cached package file directory '%1'").arg(QFileInfo(target).dir().absolutePath()), span);
+                addPackageError(diagnostics, QStringLiteral("cannot create package file directory '%1'").arg(QFileInfo(target).dir().absolutePath()), span);
                 return false;
             }
             if (QFileInfo::exists(target) && !QFile::remove(target)) {
-                addPackageError(diagnostics, QStringLiteral("cannot replace cached package file '%1'").arg(target), span);
+                addPackageError(diagnostics, QStringLiteral("cannot replace package file '%1'").arg(target), span);
                 return false;
             }
             if (!QFile::copy(info.absoluteFilePath(), target)) {
                 addPackageError(diagnostics,
-                                QStringLiteral("cannot copy registry package file '%1' to cache '%2'")
+                                QStringLiteral("cannot copy package file '%1' to '%2'")
                                     .arg(info.absoluteFilePath(), target),
                                 span);
                 return false;
@@ -1896,6 +1896,101 @@ PackageDependencyChangeResult removePackageDependency(const QString& dir, const 
 
     const auto lock = updatePackageLock(result.rootDir);
     copyLockResultIntoChange(result, lock);
+    return result;
+}
+
+PackagePublishResult publishPackageToLocalRegistry(const QString& dir,
+                                                   const QString& registryDir,
+                                                   bool overwrite)
+{
+    PackagePublishResult result;
+    auto parsed = packageManifestFromDirectory(dir);
+    result.diagnostics.append(parsed.diagnostics);
+    if (!parsed.ok())
+        return result;
+    result.package = parsed.package;
+
+    SourceSpan span;
+    span.file = parsed.package.filePath;
+    if (parsed.package.name.contains(QLatin1Char('/'))
+        || parsed.package.name.contains(QLatin1Char('\\'))
+        || parsed.package.name == QStringLiteral(".")
+        || parsed.package.name == QStringLiteral("..")) {
+        addPackageError(result.diagnostics,
+                        QStringLiteral("package name '%1' cannot be used as a local registry path segment")
+                            .arg(parsed.package.name),
+                        span);
+        return result;
+    }
+
+    const QString registryInput = registryDir.trimmed().isEmpty() ? QStringLiteral(".") : registryDir;
+    QFileInfo registryInfo(registryInput);
+    if (!registryInfo.isAbsolute())
+        registryInfo = QFileInfo(QDir::current().absoluteFilePath(registryInput));
+    result.registryRoot = registryInfo.exists()
+        ? canonicalOrAbsoluteFilePath(registryInfo)
+        : registryInfo.absoluteFilePath();
+    if (registryInfo.exists() && !registryInfo.isDir()) {
+        SourceSpan registrySpan;
+        registrySpan.file = result.registryRoot;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("registry path '%1' is not a directory").arg(registryDir),
+                        registrySpan);
+        return result;
+    }
+    if (!QDir().mkpath(result.registryRoot)) {
+        SourceSpan registrySpan;
+        registrySpan.file = result.registryRoot;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("cannot create registry directory '%1'").arg(result.registryRoot),
+                        registrySpan);
+        return result;
+    }
+
+    const QString packageDir = QDir(result.registryRoot).absoluteFilePath(parsed.package.name);
+    result.targetDir = QDir(packageDir).absoluteFilePath(parsed.package.version);
+    const QFileInfo targetInfo(result.targetDir);
+    const QString sourceRoot = canonicalOrAbsoluteFilePath(QFileInfo(parsed.package.rootDir));
+    const QString targetRoot = targetInfo.exists() ? canonicalOrAbsoluteFilePath(targetInfo) : targetInfo.absoluteFilePath();
+    if (targetRoot == sourceRoot || targetRoot.startsWith(sourceRoot + QLatin1Char('/'))) {
+        addPackageError(result.diagnostics,
+                        QStringLiteral("cannot publish package into itself: target '%1' is inside source '%2'")
+                            .arg(targetRoot, sourceRoot),
+                        span);
+        return result;
+    }
+
+    result.overwritten = QFileInfo::exists(result.targetDir);
+    if (result.overwritten && !overwrite) {
+        SourceSpan targetSpan;
+        targetSpan.file = result.targetDir;
+        addPackageError(result.diagnostics,
+                        QStringLiteral("package '%1' version '%2' already exists in registry; use --overwrite to replace it")
+                            .arg(parsed.package.name, parsed.package.version),
+                        targetSpan);
+        return result;
+    }
+
+    if (!copyDirectoryRecursively(parsed.package.rootDir, result.targetDir, result.diagnostics, span))
+        return result;
+
+    auto published = packageManifestFromDirectory(result.targetDir);
+    result.diagnostics.append(published.diagnostics);
+    if (!published.ok())
+        return result;
+    if (published.package.name != parsed.package.name || published.package.version != parsed.package.version) {
+        SourceSpan targetSpan;
+        targetSpan.file = QDir(result.targetDir).absoluteFilePath(packageManifestFileName());
+        addPackageError(result.diagnostics,
+                        QStringLiteral("published package identity mismatch: expected %1 %2, got %3 %4")
+                            .arg(parsed.package.name,
+                                 parsed.package.version,
+                                 published.package.name,
+                                 published.package.version),
+                        targetSpan);
+        return result;
+    }
+    result.package = published.package;
     return result;
 }
 

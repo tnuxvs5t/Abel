@@ -739,12 +739,15 @@ int main(int argc, char** argv)
     QCommandLineOption testExpectFailOption(QStringLiteral("expect-fail"),
                                             QStringLiteral("Treat matching test file relative paths as expected failures; unexpected pass fails the run."),
                                             QStringLiteral("substring"));
+    QCommandLineOption packageOverwriteOption(QStringLiteral("overwrite"),
+                                              QStringLiteral("Allow `abel package publish` to replace an existing local registry package version."));
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
     parser.addOption(testFilterOption);
     parser.addOption(testExpectFailOption);
     parser.addOption(testReportJsonOption);
     parser.addOption(testReportJunitOption);
+    parser.addOption(packageOverwriteOption);
     parser.addPositionalArgument(QStringLiteral("command"),
                                  QStringLiteral("Command: init | add | remove | update | build | test | check | run | package | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
@@ -919,17 +922,38 @@ int main(int argc, char** argv)
     }
 
     if (command == QStringLiteral("package")) {
-        if (args.size() != 3 || args[1] != QStringLiteral("check")) {
-            err << "E0007: package expects: abel package check <project-dir>" << Qt::endl;
+        if (args.size() == 3 && args[1] == QStringLiteral("check")) {
+            auto package = abel::packageManifestFromDirectory(args[2]);
+            for (const auto& d : package.diagnostics)
+                printDiagnostic(d);
+            if (!package.diagnostics.isEmpty())
+                return 1;
+            out << "ok" << Qt::endl;
+            return 0;
+        }
+        if (args.size() == 4 && args[1] == QStringLiteral("publish")) {
+            auto published = abel::publishPackageToLocalRegistry(args[2],
+                                                                 args[3],
+                                                                 parser.isSet(packageOverwriteOption));
+            for (const auto& d : published.diagnostics)
+                printDiagnostic(d);
+            if (!published.ok())
+                return 1;
+            out << (published.overwritten ? "published overwrite " : "published ")
+                << published.package.name
+                << " "
+                << published.package.version
+                << Qt::endl;
+            out << "registry " << published.registryRoot << Qt::endl;
+            out << "target " << published.targetDir << Qt::endl;
+            return 0;
+        }
+        {
+            err << "E0007: package expects: abel package check <project-dir> "
+                   "or abel package publish [--overwrite] <project-dir> <registry-dir>"
+                << Qt::endl;
             return 2;
         }
-        auto package = abel::packageManifestFromDirectory(args[2]);
-        for (const auto& d : package.diagnostics)
-            printDiagnostic(d);
-        if (!package.diagnostics.isEmpty())
-            return 1;
-        out << "ok" << Qt::endl;
-        return 0;
     }
 
     if (command == QStringLiteral("resources")) {

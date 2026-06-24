@@ -1,0 +1,125 @@
+set(publish_project_root "@CMAKE_BINARY_DIR@/cli-package-publish")
+file(REMOVE_RECURSE "${publish_project_root}")
+file(MAKE_DIRECTORY "${publish_project_root}/dep/src/lib")
+file(MAKE_DIRECTORY "${publish_project_root}/app/src")
+
+file(WRITE "${publish_project_root}/dep/abel.package.json" [=[
+{
+  "name": "dep",
+  "version": "1.2.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${publish_project_root}/dep/src/main.abel" [=[
+fn int main() {
+    return 0;
+}
+]=])
+
+file(WRITE "${publish_project_root}/dep/src/lib/value.abel" [=[
+module dep.lib;
+
+export fn int dep_value() {
+    return 42;
+}
+]=])
+
+file(MAKE_DIRECTORY "${publish_project_root}/dep/.abel")
+file(WRITE "${publish_project_root}/dep/.abel/ignored.txt" "cache must not publish")
+
+set(registry_dir "${publish_project_root}/registry")
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" package publish "${publish_project_root}/dep" "${registry_dir}"
+    RESULT_VARIABLE publish_result
+    OUTPUT_VARIABLE publish_stdout
+    ERROR_VARIABLE publish_stderr
+)
+if(NOT publish_result EQUAL 0)
+    message(FATAL_ERROR "abel package publish unexpectedly failed:\n${publish_stdout}\n${publish_stderr}")
+endif()
+string(FIND "${publish_stdout}" "published dep 1.2.0" publish_message_pos)
+if(publish_message_pos EQUAL -1)
+    message(FATAL_ERROR "abel package publish did not print package identity:\n${publish_stdout}\n${publish_stderr}")
+endif()
+if(NOT EXISTS "${registry_dir}/dep/1.2.0/abel.package.json")
+    message(FATAL_ERROR "abel package publish did not write registry manifest")
+endif()
+if(NOT EXISTS "${registry_dir}/dep/1.2.0/src/lib/value.abel")
+    message(FATAL_ERROR "abel package publish did not copy package source")
+endif()
+if(EXISTS "${registry_dir}/dep/1.2.0/.abel/ignored.txt")
+    message(FATAL_ERROR "abel package publish copied package .abel cache")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" package publish "${publish_project_root}/dep" "${registry_dir}"
+    RESULT_VARIABLE duplicate_publish_result
+    OUTPUT_VARIABLE duplicate_publish_stdout
+    ERROR_VARIABLE duplicate_publish_stderr
+)
+if(duplicate_publish_result EQUAL 0)
+    message(FATAL_ERROR "abel package publish unexpectedly overwrote existing version:\n${duplicate_publish_stdout}\n${duplicate_publish_stderr}")
+endif()
+string(FIND "${duplicate_publish_stderr}" "already exists" duplicate_publish_message_pos)
+if(duplicate_publish_message_pos EQUAL -1)
+    message(FATAL_ERROR "abel package publish duplicate did not diagnose existing version:\n${duplicate_publish_stdout}\n${duplicate_publish_stderr}")
+endif()
+
+file(WRITE "${publish_project_root}/dep/src/lib/value.abel" [=[
+module dep.lib;
+
+export fn int dep_value() {
+    return 43;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" package publish --overwrite "${publish_project_root}/dep" "${registry_dir}"
+    RESULT_VARIABLE overwrite_publish_result
+    OUTPUT_VARIABLE overwrite_publish_stdout
+    ERROR_VARIABLE overwrite_publish_stderr
+)
+if(NOT overwrite_publish_result EQUAL 0)
+    message(FATAL_ERROR "abel package publish --overwrite unexpectedly failed:\n${overwrite_publish_stdout}\n${overwrite_publish_stderr}")
+endif()
+string(FIND "${overwrite_publish_stdout}" "published overwrite dep 1.2.0" overwrite_publish_message_pos)
+if(overwrite_publish_message_pos EQUAL -1)
+    message(FATAL_ERROR "abel package publish --overwrite did not report overwrite:\n${overwrite_publish_stdout}\n${overwrite_publish_stderr}")
+endif()
+
+file(WRITE "${publish_project_root}/app/abel.package.json" [=[
+{
+  "name": "app",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${publish_project_root}/app/src/main.abel" [=[
+use dep.lib;
+
+fn int main() {
+    return dep_value();
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" add registry dep "^1.0.0" "${registry_dir}" "${publish_project_root}/app"
+    RESULT_VARIABLE add_registry_result
+    OUTPUT_VARIABLE add_registry_stdout
+    ERROR_VARIABLE add_registry_stderr
+)
+if(NOT add_registry_result EQUAL 0)
+    message(FATAL_ERROR "abel add registry could not consume published package:\n${add_registry_stdout}\n${add_registry_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${publish_project_root}/app"
+    RESULT_VARIABLE run_result
+    OUTPUT_VARIABLE run_stdout
+    ERROR_VARIABLE run_stderr
+)
+if(NOT run_result EQUAL 43)
+    message(FATAL_ERROR "abel run did not consume overwritten published package, exit=${run_result}:\n${run_stdout}\n${run_stderr}")
+endif()

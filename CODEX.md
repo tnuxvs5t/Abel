@@ -22,7 +22,7 @@
 
 不要默认修改 Abel 编译器/解释器源码。
 不要把用户项目扩成大型框架。
-不要幻想 Abel 已经有远程 registry、完整 semver solver、网络 download cache、JIT、成熟模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、本地 registry 目录依赖、SemVer version requirement 第一片、同名包多解析冲突诊断、lockfile、package graph consumption、根项目 `src/**/*.abel` 多文件合并、依赖包非 entry `src/**/*.abel` 库源码合并、package-aware function/struct/backend resolution 第一片、`module/use` 可见性第一片、`export use` re-export 第一片、module-qualified 与 import-alias-qualified 函数/struct/backend lookup 第一片、跨包顶层 `export` enforcement 第一片、`.abel/cache/packages` 本地包缓存、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、add/remove/update/build 做成早期闭环。
+不要幻想 Abel 已经有远程 registry、完整 semver solver、网络 download cache、JIT、成熟模块构建系统或成熟 IDE。当前只把项目入口、本地 path 依赖、本地 registry 目录依赖、SemVer version requirement 第一片、同名包多解析冲突诊断、lockfile、package graph consumption、根项目 `src/**/*.abel` 多文件合并、依赖包非 entry `src/**/*.abel` 库源码合并、package-aware function/struct/backend resolution 第一片、`module/use` 可见性第一片、`export use` re-export 第一片、module-qualified 与 import-alias-qualified 函数/struct/backend lookup 第一片、跨包顶层 `export` enforcement 第一片、`.abel/cache/packages` 本地包缓存、backend artifact 项目缓存、cache sidecar 失效检测、CMake backend artifact 自动构建第一片、`abel package publish` 本地 registry 发布第一片、add/remove/update/build 做成早期闭环。
 
 当前 Abel 的正确定位：
 
@@ -36,6 +36,7 @@ C/C++ 值模型
 + abel.package.json 项目入口骨架
 + 本地 path dependency / 本地 registry dependency + SemVer version requirement + abel.lock.json
 + package graph 消费依赖 backendArtifacts
++ abel package publish 到本地 registry
 + .abel/cache/packages 项目级 registry package 缓存
 + backendArtifacts[].build 的 CMake 自动构建第一片
 + .abel/cache/backend 项目级 backend artifact 缓存与 .abel-cache.json sidecar
@@ -731,7 +732,7 @@ add_library(abelcore SHARED IMPORTED GLOBAL)
 ```text
 不承诺跨 Qt 版本 ABI。
 不承诺跨编译器 ABI。
-只包含本地 registry/package cache 第一片，不包含远程 registry、完整 solver 或网络 download cache。
+只包含本地 registry publish/cache 第一片，不包含远程 registry、完整 solver 或网络 download cache。
 backend binder 覆盖常用 Abel 标量/vector，但不是任意 C++ 类型宇宙。
 ```
 

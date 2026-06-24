@@ -1165,7 +1165,7 @@ my_abel_project/
       math.abel
 ```
 
-当前 v1 包管理已经支持项目级入口、本地 path 依赖、以及本地 registry 目录依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel add/remove/update` 可以操作依赖并生成 `abel.lock.json`，path/registry dependency 已支持 SemVer 版本要求检查，并会拒绝同一个包名在依赖图中解析到不同版本或不同来源；registry dependency 会把选中的版本复制到 `.abel/cache/packages`，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run/test <project-dir>` 会读取 package graph。
+当前 v1 包管理已经支持项目级入口、本地 path 依赖、以及本地 registry 目录依赖第一闭环：`abel init [project-dir]` 可以生成最小工程，`abel.package.json` 描述包名、版本、入口文件，`abel package publish <project-dir> <registry-dir>` 可以把包发布到本地 registry 的 `<name>/<version>` 目录，`abel add/remove/update` 可以操作依赖并生成 `abel.lock.json`，path/registry dependency 已支持 SemVer 版本要求检查，并会拒绝同一个包名在依赖图中解析到不同版本或不同来源；registry dependency 会把选中的版本复制到 `.abel/cache/packages`，`abel build` 会执行项目级预构建检查、按 `backendArtifacts[].build` 自动构建 CMake backend plugin，并把 backend artifact 复制进根项目缓存，`abel check/run/test <project-dir>` 会读取 package graph。
 
 当前项目源码加载规则是 v1 多文件第一片：如果输入是 package 目录，`abel check/run/build` 会读取根项目 `src/**/*.abel`，读取依赖包的非 entry `src/**/*.abel` 作为库源码，并把根项目 manifest `entry` 文件放到最后合并为一个 Program。依赖包 entry 默认排除，避免依赖包自己的 `main` 污染根项目。每个文件保留自己的 SourceSpan，所以诊断仍能指向真实文件/行/列。`module xxx;` 与 `use yyy;` 现在参与可见性：同包跨模块访问必须显式 `use`，跨包访问依赖包顶层 `fn/struct/backend` 还要求目标声明带 `export`。`export use some.module;` 可以把当前模块写成 facade：使用 facade 模块时，会同时获得被 re-export 模块的可见符号。函数、struct、backend 解析会优先使用当前 package/module 上下文；`module.path::symbol` 与 `use module.path as Alias; Alias::symbol` 可用于限定函数、限定 struct 类型/构造和限定 backend 调用解歧。模块内完整 private/public 与完整模块系统仍未完成。
 
@@ -1328,6 +1328,7 @@ $ABEL remove some_dep .
 本地 registry 依赖操作：
 
 ```bash
+$ABEL package publish ../dep ../registry
 $ABEL add registry dep '^1.0.0' ../registry .
 $ABEL update .
 ```
@@ -1343,6 +1344,18 @@ registry/
     1.2.0/
       abel.package.json
       src/main.abel
+```
+
+`abel package publish ../dep ../registry` 会读取 `../dep/abel.package.json`，把包复制到：
+
+```text
+../registry/dep/<dep-version>
+```
+
+发布时会跳过包目录里的 `.abel` 缓存，避免把本地 lock/cache/backend 构建产物当成 registry 内容。若同名版本已经存在，默认拒绝覆盖；明确需要替换时使用：
+
+```bash
+$ABEL package publish --overwrite ../dep ../registry
 ```
 
 `abel add registry dep '^1.0.0' ../registry .` 会写入：

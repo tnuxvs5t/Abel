@@ -273,6 +273,16 @@ add_test(NAME abel_cli_scan_tests
     COMMAND ${CMAKE_COMMAND} -P "${CMAKE_BINARY_DIR}/cli_scan.cmake"
 )
 
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_package_publish.cmake.in"
+    "${CMAKE_BINARY_DIR}/cli_package_publish.cmake"
+    @ONLY
+)
+
+add_test(NAME abel_cli_package_publish_tests
+    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_BINARY_DIR}/cli_package_publish.cmake"
+)
+
 set(ABEL_SDK_TEST_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/sdk-test-install")
 set(ABEL_SDK_TEST_BUILD_DIR "${CMAKE_BINARY_DIR}/sdk-backend-fixture")
 
