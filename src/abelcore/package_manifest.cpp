@@ -872,24 +872,41 @@ std::optional<RegistryCandidate> findRegistryCandidate(const PackageDependency& 
     }
 
     std::optional<RegistryCandidate> best;
-    const auto versionDirs = QDir(packageDir).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-    for (const QFileInfo& versionDir : versionDirs) {
-        if (!isPackageDirectory(versionDir.absoluteFilePath()))
-            continue;
-        auto parsed = packageManifestFromDirectory(versionDir.absoluteFilePath());
+    auto considerPackageRoot = [&](const QString& sourceRoot) {
+        if (!isPackageDirectory(sourceRoot))
+            return;
+        auto parsed = packageManifestFromDirectory(sourceRoot);
         diagnostics.append(parsed.diagnostics);
         if (!parsed.ok())
-            continue;
+            return;
         if (parsed.package.name != dependency.name)
-            continue;
+            return;
         QString versionError;
         if (!versionSatisfiesRequirement(parsed.package.version, dependency.version, &versionError))
-            continue;
+            return;
         SemVer semver;
         if (!parseSemVerCore(parsed.package.version, semver))
-            continue;
+            return;
         if (!best.has_value() || compareSemVer(semver, best->version) > 0) {
-            best = RegistryCandidate{parsed.package, versionDir.absoluteFilePath(), semver};
+            best = RegistryCandidate{parsed.package, sourceRoot, semver};
+        }
+    };
+
+    const QString indexFile = QDir(registryRoot).absoluteFilePath(packageLocalRegistryIndexFileName());
+    if (QFileInfo(indexFile).isFile()) {
+        auto index = checkLocalPackageRegistryIndex(registryRoot);
+        diagnostics.append(index.diagnostics);
+        if (!index.ok())
+            return std::nullopt;
+        for (const PackageRegistryEntry& entry : index.entries) {
+            if (entry.name != dependency.name)
+                continue;
+            considerPackageRoot(absolutePathFrom(registryRoot, entry.path));
+        }
+    } else {
+        const auto versionDirs = QDir(packageDir).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QFileInfo& versionDir : versionDirs) {
+            considerPackageRoot(versionDir.absoluteFilePath());
         }
     }
 

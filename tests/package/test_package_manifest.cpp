@@ -592,6 +592,48 @@ private slots:
         QVERIFY(sawMismatch);
     }
 
+    void registryResolverConsumesIndexAndRejectsStaleIndex()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QDir root(dir.path());
+        writePackage(root, QStringLiteral("registry/dep/1.0.0"), QStringLiteral("dep"), QStringLiteral("1.0.0"));
+        writePackage(root, QStringLiteral("registry/dep/1.2.0"), QStringLiteral("dep"), QStringLiteral("1.2.0"));
+        writePackage(root, QStringLiteral("app"), QStringLiteral("app"), QStringLiteral("0.1.0"));
+        writeText(root.absoluteFilePath(QStringLiteral("app/abel.package.json")),
+                  QStringLiteral(R"({
+                      "name": "app",
+                      "version": "0.1.0",
+                      "entry": "src/main.abel",
+                      "dependencies": [
+                          {"name": "dep", "kind": "registry", "registry": "../registry", "version": "^1.0.0"}
+                      ]
+                  })"));
+
+        const QString registryRoot = root.absoluteFilePath(QStringLiteral("registry"));
+        auto indexed = abel::writeLocalPackageRegistryIndex(registryRoot);
+        for (const auto& d : indexed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(indexed.diagnostics.isEmpty());
+
+        const QString appRoot = root.absoluteFilePath(QStringLiteral("app"));
+        auto graph = abel::updatePackageGraph(appRoot);
+        for (const auto& d : graph.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(graph.diagnostics.isEmpty());
+        QCOMPARE(graph.entries.size(), 1);
+        QCOMPARE(graph.entries.front().version, QStringLiteral("1.2.0"));
+
+        writePackage(root, QStringLiteral("registry/dep/1.3.0"), QStringLiteral("dep"), QStringLiteral("1.3.0"));
+        auto stale = abel::resolvePackageLock(appRoot);
+        QVERIFY(!stale.diagnostics.isEmpty());
+        bool sawStale = false;
+        for (const auto& d : stale.diagnostics)
+            sawStale = sawStale || d.message.contains(QStringLiteral("stale"));
+        QVERIFY(sawStale);
+    }
+
     void rejectsSharedPathDependencyVersionConflict()
     {
         QTemporaryDir dir;

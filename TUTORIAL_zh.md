@@ -1379,6 +1379,8 @@ $ABEL package registry index ../registry
 $ABEL package registry check ../registry
 ```
 
+只要 `.abel-registry.json` 存在，`abel update/build/check/run` 解析 registry dependency 时会先校验并消费这个索引；索引缺包、损坏或落后于磁盘目录时会报 stale/malformed，而不是悄悄绕过索引重新扫目录。若 registry 还没有索引，当前为了兼容早期本地目录 registry，resolver 仍会退回目录扫描。
+
 列出 registry 中可见的包版本：
 
 ```bash

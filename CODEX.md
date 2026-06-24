@@ -204,6 +204,7 @@ $ABEL_BIN run .
 - 普通成功建议 `return 0;`；
 - 如果要观察计算结果，优先用 `println(...)` 输出，不要只依赖退出码；
 - 当前项目入口、本地 path dependency、本地 registry dependency、SemVer version requirement、lockfile、`.abel/cache/packages`、本地 registry `.abel-registry.json` 索引、backend artifact 项目缓存、sidecar 失效检测与 CMake backend artifact 自动构建只是早期包管理闭环；不要假设已有成熟远程 registry、完整 semver solver、网络下载缓存、完整 ABI/版本化缓存失效或完整 public/private 模块系统。
+- 如果本地 registry 存在 `.abel-registry.json`，resolver 会校验并消费该索引；索引 stale/malformed 时不要绕过，先运行 `abel package registry index <registry-dir>` 重建。没有索引的旧本地 registry 才会退回目录扫描。
 - package 目录输入会合并根项目 `src/**/*.abel`，entry 文件最后加载；依赖包会合并非 entry `src/**/*.abel` 库源码，依赖包 entry 默认排除以避免 `main` 冲突。跨包访问依赖包顶层 `fn/struct/backend` 要求目标带 `export`；同包跨模块访问要求显式 `use`；`export use some.module;` 会把被导入模块作为 facade 的 re-export 暴露给使用当前模块的人；`module.path::symbol` 与 `use module.path as Alias; Alias::symbol` 可用于函数、struct 类型/构造和 backend 调用解歧，但不会绕过 `use` / `export`。
 - 同名普通函数按当前 package 上下文解析；依赖包内部 private helper 不应污染根项目，根项目同名 helper 也不应破坏依赖包内部调用。
 - resolver 会拒绝同一个 package name 被解析到不同 version/source/resolvedPath；如果用户遇到 dependency conflict，不要绕过 lockfile，应调整版本要求或依赖拓扑。
