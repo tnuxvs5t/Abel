@@ -99,27 +99,55 @@ bool isFilePathBuiltinName(const QString& name)
 {
     return name == QStringLiteral("read_text")
         || name == QStringLiteral("write_text")
+        || name == QStringLiteral("append_text")
         || name == QStringLiteral("read_lines")
         || name == QStringLiteral("write_lines")
         || name == QStringLiteral("path_exists")
         || name == QStringLiteral("path_is_file")
         || name == QStringLiteral("path_is_dir")
-        || name == QStringLiteral("mkdirs");
+        || name == QStringLiteral("copy_file")
+        || name == QStringLiteral("move_path")
+        || name == QStringLiteral("remove_path")
+        || name == QStringLiteral("path_join")
+        || name == QStringLiteral("path_dirname")
+        || name == QStringLiteral("path_basename")
+        || name == QStringLiteral("path_ext")
+        || name == QStringLiteral("path_absolute")
+        || name == QStringLiteral("path_clean")
+        || name == QStringLiteral("mkdirs")
+        || name == QStringLiteral("current_dir")
+        || name == QStringLiteral("env_exists")
+        || name == QStringLiteral("env_get");
 }
 
 int filePathBuiltinArity(const QString& name)
 {
-    if (name == QStringLiteral("write_text") || name == QStringLiteral("write_lines"))
+    if (name == QStringLiteral("current_dir"))
+        return 0;
+    if (name == QStringLiteral("write_text")
+        || name == QStringLiteral("append_text")
+        || name == QStringLiteral("write_lines")
+        || name == QStringLiteral("copy_file")
+        || name == QStringLiteral("move_path")
+        || name == QStringLiteral("path_join")) {
         return 2;
+    }
     return 1;
 }
 
 std::optional<AbelType> filePathBuiltinArgType(const QString& name, qsizetype index)
 {
+    if (name == QStringLiteral("current_dir"))
+        return std::nullopt;
     if (index == 0)
         return makeType(TypeKind::Str);
-    if (index == 1 && name == QStringLiteral("write_text"))
+    if (index == 1 && (name == QStringLiteral("write_text")
+                       || name == QStringLiteral("append_text")
+                       || name == QStringLiteral("copy_file")
+                       || name == QStringLiteral("move_path")
+                       || name == QStringLiteral("path_join"))) {
         return makeType(TypeKind::Str);
+    }
     if (index == 1 && name == QStringLiteral("write_lines"))
         return makeVectorType(makeType(TypeKind::Str));
     return std::nullopt;
@@ -127,13 +155,23 @@ std::optional<AbelType> filePathBuiltinArgType(const QString& name, qsizetype in
 
 AbelType filePathBuiltinReturnType(const QString& name)
 {
-    if (name == QStringLiteral("read_text"))
+    if (name == QStringLiteral("read_text")
+        || name == QStringLiteral("path_join")
+        || name == QStringLiteral("path_dirname")
+        || name == QStringLiteral("path_basename")
+        || name == QStringLiteral("path_ext")
+        || name == QStringLiteral("path_absolute")
+        || name == QStringLiteral("path_clean")
+        || name == QStringLiteral("current_dir")
+        || name == QStringLiteral("env_get")) {
         return makeType(TypeKind::Str);
+    }
     if (name == QStringLiteral("read_lines"))
         return makeVectorType(makeType(TypeKind::Str));
     if (name == QStringLiteral("path_exists")
         || name == QStringLiteral("path_is_file")
-        || name == QStringLiteral("path_is_dir")) {
+        || name == QStringLiteral("path_is_dir")
+        || name == QStringLiteral("env_exists")) {
         return makeType(TypeKind::Bool);
     }
     return makeType(TypeKind::Void);

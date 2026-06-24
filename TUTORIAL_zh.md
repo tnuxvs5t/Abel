@@ -616,23 +616,36 @@ fn int main() {
 
 ### 13.2 文件与路径
 
-文件/路径 builtin 是 v1 std.io/std.path 的第一片：
+	文件/路径/环境 builtin 是 v1 std.io/std.path/std.env 的早期闭环：
 
 ```abel
 fn int main() {
     str dir = "/tmp/abel-demo";
     str file = build_string(dir, "/note.txt");
 
-    mkdirs(dir);
-    write_text(file, "alpha\nbeta");
-    str text = read_text(file);
+	    mkdirs(dir);
+	    write_text(file, "alpha\nbeta");
+	    append_text(file, "\ngamma");
+	    str text = read_text(file);
 
-    vector<str> lines = {"hakurei", "kappa"};
-    write_lines(file, lines);
-    vector<str> back = read_lines(file);
+	    vector<str> lines = {"hakurei", "kappa"};
+	    write_lines(file, lines);
+	    vector<str> back = read_lines(file);
 
-    if (path_exists(file) && path_is_file(file) && path_is_dir(dir)) {
-        return text.len() + back.len();
+	    str copy = path_join(dir, "copy.txt");
+	    copy_file(file, copy);
+	    copy |> move_path(path_join(dir, "moved.txt"));
+
+	    str parent = path_dirname(file);
+	    str base = path_basename(file);
+	    str ext = path_ext(file);
+	    str abs = path_absolute(file);
+	    str clean = path_clean(build_string(dir, "/../abel-demo/note.txt"));
+	    str cwd = current_dir();
+	    bool hasPath = env_exists("PATH");
+
+	    if (path_exists(file) && path_is_file(file) && path_is_dir(dir)) {
+	        return text.len() + back.len();
     }
     return 0;
 }
@@ -652,17 +665,30 @@ fn int main() {
 签名：
 
 ```text
-read_text(str path) -> str
-write_text(str path, str content) -> void
-read_lines(str path) -> vector<str>
-write_lines(str path, vector<str> lines) -> void
-path_exists(str path) -> bool
-path_is_file(str path) -> bool
-path_is_dir(str path) -> bool
-mkdirs(str path) -> void
-```
+	read_text(str path) -> str
+	write_text(str path, str content) -> void
+	append_text(str path, str content) -> void
+	read_lines(str path) -> vector<str>
+	write_lines(str path, vector<str> lines) -> void
+	path_exists(str path) -> bool
+	path_is_file(str path) -> bool
+	path_is_dir(str path) -> bool
+	copy_file(str src, str dst) -> void
+	move_path(str src, str dst) -> void
+	remove_path(str path) -> void
+	path_join(str base, str child) -> str
+	path_dirname(str path) -> str
+	path_basename(str path) -> str
+	path_ext(str path) -> str
+	path_absolute(str path) -> str
+	path_clean(str path) -> str
+	mkdirs(str path) -> void
+	current_dir() -> str
+	env_exists(str name) -> bool
+	env_get(str name) -> str
+	```
 
-这些 API 不把 Abel 变成安全沙箱：路径权限、覆盖写入、符号链接、并发写入等仍按宿主系统/Qt 行为处理。失败时产生运行期诊断；类型和参数个数错误应由 `abel check` 拦住。
+	这些 API 不把 Abel 变成安全沙箱：路径权限、覆盖写入、删除目录树、符号链接、并发写入等仍按宿主系统/Qt 行为处理。失败时产生运行期诊断；类型和参数个数错误应由 `abel check` 拦住。
 
 ### 13.3 调试与测试
 

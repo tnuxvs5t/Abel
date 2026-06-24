@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcessEnvironment>
 #include <QStringList>
 #include <QTextStream>
 
@@ -483,6 +484,10 @@ std::optional<std::vector<QString>> requireStringVectorArg(BuiltinFunctionCall& 
 AbelValue builtinFilePath(BuiltinFunctionCall& call)
 {
     const QString& name = call.name;
+
+    if (name == QStringLiteral("current_dir"))
+        return AbelValue::makeString(QDir::currentPath());
+
     auto path = requireStringArg(call, 0);
     if (!path.has_value())
         return AbelValue::makeUnknown();
@@ -513,6 +518,27 @@ AbelValue builtinFilePath(BuiltinFunctionCall& call)
         if (file.write(bytes) != bytes.size()) {
             call.ctx.error(QStringLiteral("E0443"),
                            QStringLiteral("write_text cannot write '%1': %2").arg(*path, file.errorString()),
+                           call.callSpan);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeVoid();
+    }
+
+    if (name == QStringLiteral("append_text")) {
+        auto content = requireStringArg(call, 1);
+        if (!content.has_value())
+            return AbelValue::makeUnknown();
+        QFile file(*path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) {
+            call.ctx.error(QStringLiteral("E0442"),
+                           QStringLiteral("append_text cannot open '%1': %2").arg(*path, file.errorString()),
+                           call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+            return AbelValue::makeUnknown();
+        }
+        const QByteArray bytes = content->toUtf8();
+        if (file.write(bytes) != bytes.size()) {
+            call.ctx.error(QStringLiteral("E0443"),
+                           QStringLiteral("append_text cannot write '%1': %2").arg(*path, file.errorString()),
                            call.callSpan);
             return AbelValue::makeUnknown();
         }
@@ -572,6 +598,65 @@ AbelValue builtinFilePath(BuiltinFunctionCall& call)
     if (name == QStringLiteral("path_is_dir"))
         return AbelValue::makeBool(QFileInfo(*path).isDir());
 
+    if (name == QStringLiteral("copy_file")) {
+        auto dst = requireStringArg(call, 1);
+        if (!dst.has_value())
+            return AbelValue::makeUnknown();
+        if (!QFile::copy(*path, *dst)) {
+            call.ctx.error(QStringLiteral("E0446"),
+                           QStringLiteral("copy_file cannot copy '%1' to '%2'").arg(*path, *dst),
+                           call.callSpan);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeVoid();
+    }
+
+    if (name == QStringLiteral("move_path")) {
+        auto dst = requireStringArg(call, 1);
+        if (!dst.has_value())
+            return AbelValue::makeUnknown();
+        if (!QFile::rename(*path, *dst)) {
+            call.ctx.error(QStringLiteral("E0447"),
+                           QStringLiteral("move_path cannot move '%1' to '%2'").arg(*path, *dst),
+                           call.callSpan);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeVoid();
+    }
+
+    if (name == QStringLiteral("remove_path")) {
+        QFileInfo info(*path);
+        bool ok = false;
+        if (info.isDir() && !info.isSymLink())
+            ok = QDir(*path).removeRecursively();
+        else
+            ok = QFile::remove(*path);
+        if (!ok) {
+            call.ctx.error(QStringLiteral("E0448"),
+                           QStringLiteral("remove_path cannot remove '%1'").arg(*path),
+                           call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeVoid();
+    }
+
+    if (name == QStringLiteral("path_join")) {
+        auto child = requireStringArg(call, 1);
+        if (!child.has_value())
+            return AbelValue::makeUnknown();
+        return AbelValue::makeString(QDir(*path).filePath(*child));
+    }
+    if (name == QStringLiteral("path_dirname"))
+        return AbelValue::makeString(QFileInfo(*path).path());
+    if (name == QStringLiteral("path_basename"))
+        return AbelValue::makeString(QFileInfo(*path).fileName());
+    if (name == QStringLiteral("path_ext"))
+        return AbelValue::makeString(QFileInfo(*path).suffix());
+    if (name == QStringLiteral("path_absolute"))
+        return AbelValue::makeString(QFileInfo(*path).absoluteFilePath());
+    if (name == QStringLiteral("path_clean"))
+        return AbelValue::makeString(QDir::cleanPath(*path));
+
     if (name == QStringLiteral("mkdirs")) {
         if (!QDir().mkpath(*path)) {
             call.ctx.error(QStringLiteral("E0444"),
@@ -580,6 +665,20 @@ AbelValue builtinFilePath(BuiltinFunctionCall& call)
             return AbelValue::makeUnknown();
         }
         return AbelValue::makeVoid();
+    }
+
+    if (name == QStringLiteral("env_exists"))
+        return AbelValue::makeBool(QProcessEnvironment::systemEnvironment().contains(*path));
+
+    if (name == QStringLiteral("env_get")) {
+        const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        if (!env.contains(*path)) {
+            call.ctx.error(QStringLiteral("E0449"),
+                           QStringLiteral("env_get cannot find environment variable '%1'").arg(*path),
+                           call.argSpans.empty() ? call.callSpan : call.argSpans[0]);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeString(env.value(*path));
     }
 
     call.ctx.error(QStringLiteral("E0445"), QStringLiteral("unknown file/path builtin '%1'").arg(name), call.callSpan);
@@ -1407,12 +1506,25 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("scan"), 0, -1, true, builtinScan, QStringLiteral("scan whitespace tokens into pointer targets")});
     registry.registerFunction({QStringLiteral("read_text"), 1, 1, false, builtinFilePath, QStringLiteral("read UTF-8 text file")});
     registry.registerFunction({QStringLiteral("write_text"), 2, 2, false, builtinFilePath, QStringLiteral("write UTF-8 text file")});
+    registry.registerFunction({QStringLiteral("append_text"), 2, 2, false, builtinFilePath, QStringLiteral("append UTF-8 text file")});
     registry.registerFunction({QStringLiteral("read_lines"), 1, 1, false, builtinFilePath, QStringLiteral("read UTF-8 text file as vector<str> lines")});
     registry.registerFunction({QStringLiteral("write_lines"), 2, 2, false, builtinFilePath, QStringLiteral("write vector<str> lines as UTF-8 text file")});
     registry.registerFunction({QStringLiteral("path_exists"), 1, 1, false, builtinFilePath, QStringLiteral("test path existence")});
     registry.registerFunction({QStringLiteral("path_is_file"), 1, 1, false, builtinFilePath, QStringLiteral("test regular file path")});
     registry.registerFunction({QStringLiteral("path_is_dir"), 1, 1, false, builtinFilePath, QStringLiteral("test directory path")});
+    registry.registerFunction({QStringLiteral("copy_file"), 2, 2, false, builtinFilePath, QStringLiteral("copy a file")});
+    registry.registerFunction({QStringLiteral("move_path"), 2, 2, false, builtinFilePath, QStringLiteral("move or rename a path")});
+    registry.registerFunction({QStringLiteral("remove_path"), 1, 1, false, builtinFilePath, QStringLiteral("remove a file or directory tree")});
+    registry.registerFunction({QStringLiteral("path_join"), 2, 2, false, builtinFilePath, QStringLiteral("join two path components")});
+    registry.registerFunction({QStringLiteral("path_dirname"), 1, 1, false, builtinFilePath, QStringLiteral("path directory name")});
+    registry.registerFunction({QStringLiteral("path_basename"), 1, 1, false, builtinFilePath, QStringLiteral("path base file name")});
+    registry.registerFunction({QStringLiteral("path_ext"), 1, 1, false, builtinFilePath, QStringLiteral("path suffix without dot")});
+    registry.registerFunction({QStringLiteral("path_absolute"), 1, 1, false, builtinFilePath, QStringLiteral("absolute path")});
+    registry.registerFunction({QStringLiteral("path_clean"), 1, 1, false, builtinFilePath, QStringLiteral("clean lexical path")});
     registry.registerFunction({QStringLiteral("mkdirs"), 1, 1, false, builtinFilePath, QStringLiteral("create directory tree")});
+    registry.registerFunction({QStringLiteral("current_dir"), 0, 0, false, builtinFilePath, QStringLiteral("current working directory")});
+    registry.registerFunction({QStringLiteral("env_exists"), 1, 1, false, builtinFilePath, QStringLiteral("test environment variable existence")});
+    registry.registerFunction({QStringLiteral("env_get"), 1, 1, false, builtinFilePath, QStringLiteral("read environment variable")});
     registry.registerFunction({QStringLiteral("str_to_chars"), 1, 1, false, builtinStrToChars, QStringLiteral("convert str to vector<char>")});
     registry.registerFunction({QStringLiteral("chars_to_str"), 1, 1, false, builtinCharsToStr, QStringLiteral("convert vector<char> to str")});
     registry.registerFunction({QStringLiteral("abs"), 1, 1, false, builtinMath, QStringLiteral("absolute value")});

@@ -810,15 +810,33 @@ private slots:
                 str file = "%2";
                 mkdirs(dir);
                 write_text(file, "alpha\nbeta");
+                append_text(file, "\ngamma");
                 str text = read_text(file);
                 vector<str> lines = {"hakurei", "kappa"};
                 write_lines(file, lines);
                 vector<str> read = read_lines(file);
+                str copy = path_join(dir, "copy.txt");
+                str moved = path_join(dir, "moved.txt");
+                copy_file(file, copy);
+                bool copied = path_is_file(copy);
+                copy |> move_path(moved);
+                bool movedOk = path_is_file(moved) && !path_exists(copy);
+                remove_path(moved);
+                bool removed = !path_exists(moved);
+                str parent = path_dirname(file);
+                str base = path_basename(file);
+                str ext = path_ext(file);
+                str abs = path_absolute(file);
+                str clean = path_clean(build_string(dir, "/../io/story.txt"));
+                str cwd = current_dir();
+                bool envOk = env_exists("PATH") && env_get("PATH").len() > 0;
                 bool ok = path_exists(file) && path_is_file(file) && path_is_dir(dir);
                 bool pipeOk = file |> path_exists;
                 file |> write_text("delta");
                 str final = read_text(file);
-                if (ok && pipeOk && final == "delta") {
+                bool pathOk = parent == dir && base == "story.txt" && ext == "txt"
+                    && abs.len() > 0 && clean.ends_with("io/story.txt") && cwd.len() > 0;
+                if (ok && pipeOk && copied && movedOk && removed && pathOk && envOk && final == "delta") {
                     return text.len() + read.len() + read[0].len() + read[1].len() + 2;
                 }
                 return 0;
@@ -828,7 +846,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 26);
+        QCOMPARE(result.exitCode, 32);
     }
 
     void fileBuiltinReportsRuntimeErrors()

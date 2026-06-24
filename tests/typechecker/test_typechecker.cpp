@@ -443,15 +443,30 @@ private slots:
                 str path = build_string(dir, "/note.txt");
                 mkdirs(dir);
                 write_text(path, "alpha");
+                append_text(path, "beta");
                 str text = read_text(path);
                 vector<str> lines = {"beta", "gamma"};
                 write_lines(path, lines);
                 vector<str> read = read_lines(path);
+                str copy = path_join(dir, "copy.txt");
+                str moved = path_join(dir, "moved.txt");
+                copy_file(path, copy);
+                copy |> move_path(moved);
+                remove_path(moved);
+                str parent = path_dirname(path);
+                str base = path_basename(path);
+                str ext = path_ext(path);
+                str abs = path_absolute(path);
+                str clean = path_clean(build_string(dir, "/../abel/note.txt"));
+                str cwd = current_dir();
+                bool hasPath = env_exists("PATH");
+                str pathEnv = env_get("PATH");
                 bool ok = path_exists(path) && path_is_file(path) && path_is_dir(dir);
                 bool pipeOk = path |> path_exists;
                 path |> write_text("delta");
                 if (ok && pipeOk) {
-                    return text.len() + read.len() + 2;
+                    return text.len() + read.len() + parent.len() + base.len() + ext.len()
+                        + abs.len() + clean.len() + cwd.len() + pathEnv.len() + 2;
                 }
                 return 0;
             }
@@ -469,6 +484,18 @@ private slots:
 
         auto badWriteContent = checkSource(QStringLiteral("fn int main() { write_text(\"x\", 1); return 0; }"));
         QVERIFY(!badWriteContent.diagnostics.isEmpty());
+
+        auto badAppendContent = checkSource(QStringLiteral("fn int main() { append_text(\"x\", 1); return 0; }"));
+        QVERIFY(!badAppendContent.diagnostics.isEmpty());
+
+        auto badCopyDst = checkSource(QStringLiteral("fn int main() { copy_file(\"x\", 1); return 0; }"));
+        QVERIFY(!badCopyDst.diagnostics.isEmpty());
+
+        auto badJoinChild = checkSource(QStringLiteral("fn int main() { str p = path_join(\"x\", 1); return p.len(); }"));
+        QVERIFY(!badJoinChild.diagnostics.isEmpty());
+
+        auto badCurrentDirArity = checkSource(QStringLiteral("fn int main() { str p = current_dir(\"x\"); return p.len(); }"));
+        QVERIFY(!badCurrentDirArity.diagnostics.isEmpty());
 
         auto badWriteLines = checkSource(QStringLiteral(R"(
             fn int main() {

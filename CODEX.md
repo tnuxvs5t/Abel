@@ -32,7 +32,7 @@ C/C++ 值模型
 + vector<T>
 + struct / lambda / any / any...
 + builtin print / println / build_string / scan
-+ builtin read_text / write_text / read_lines / write_lines / path_exists / path_is_file / path_is_dir / mkdirs
++ builtin read_text / write_text / append_text / read_lines / write_lines / path_exists / path_is_file / path_is_dir / copy_file / move_path / remove_path / path_join / path_dirname / path_basename / path_ext / path_absolute / path_clean / mkdirs / current_dir / env_exists / env_get
 + backend block 调 Qt/C++ plugin
 + abel.package.json 项目入口骨架
 + 本地 path dependency / 本地 registry dependency + SemVer version requirement + abel.lock.json
@@ -644,7 +644,7 @@ Abel CLI 路径
 适合 backend：
 
 ```text
-内建 read_text/write_text/read_lines/write_lines/path_* / mkdirs 覆盖不了的文件系统能力
+内建 read_text/write_text/append_text/read_lines/write_lines/path_* / copy_file/move_path/remove_path/mkdirs/current_dir/env_* 覆盖不了的文件系统能力
 复杂 Qt API
 高性能排序/图像/网络/数据库
 系统调用

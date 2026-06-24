@@ -1,5 +1,6 @@
 #include "abelcore/builtin_registry.h"
 
+#include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
 #include <QtTest/QtTest>
@@ -382,12 +383,25 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("scan")));
         QVERIFY(registry.hasFunction(QStringLiteral("read_text")));
         QVERIFY(registry.hasFunction(QStringLiteral("write_text")));
+        QVERIFY(registry.hasFunction(QStringLiteral("append_text")));
         QVERIFY(registry.hasFunction(QStringLiteral("read_lines")));
         QVERIFY(registry.hasFunction(QStringLiteral("write_lines")));
         QVERIFY(registry.hasFunction(QStringLiteral("path_exists")));
         QVERIFY(registry.hasFunction(QStringLiteral("path_is_file")));
         QVERIFY(registry.hasFunction(QStringLiteral("path_is_dir")));
+        QVERIFY(registry.hasFunction(QStringLiteral("copy_file")));
+        QVERIFY(registry.hasFunction(QStringLiteral("move_path")));
+        QVERIFY(registry.hasFunction(QStringLiteral("remove_path")));
+        QVERIFY(registry.hasFunction(QStringLiteral("path_join")));
+        QVERIFY(registry.hasFunction(QStringLiteral("path_dirname")));
+        QVERIFY(registry.hasFunction(QStringLiteral("path_basename")));
+        QVERIFY(registry.hasFunction(QStringLiteral("path_ext")));
+        QVERIFY(registry.hasFunction(QStringLiteral("path_absolute")));
+        QVERIFY(registry.hasFunction(QStringLiteral("path_clean")));
         QVERIFY(registry.hasFunction(QStringLiteral("mkdirs")));
+        QVERIFY(registry.hasFunction(QStringLiteral("current_dir")));
+        QVERIFY(registry.hasFunction(QStringLiteral("env_exists")));
+        QVERIFY(registry.hasFunction(QStringLiteral("env_get")));
         QVERIFY(registry.hasFunction(QStringLiteral("str_to_chars")));
         QVERIFY(registry.hasFunction(QStringLiteral("chars_to_str")));
         QVERIFY(registry.hasFunction(QStringLiteral("abs")));
@@ -479,9 +493,30 @@ private slots:
 
         QCOMPARE(call(QStringLiteral("read_text"), {abel::AbelValue::makeString(file)}).asString(),
                  QStringLiteral("alpha\nbeta"));
+        call(QStringLiteral("append_text"), {
+            abel::AbelValue::makeString(file),
+            abel::AbelValue::makeString(QStringLiteral("\ngamma")),
+        });
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QCOMPARE(call(QStringLiteral("read_text"), {abel::AbelValue::makeString(file)}).asString(),
+                 QStringLiteral("alpha\nbeta\ngamma"));
         QVERIFY(call(QStringLiteral("path_exists"), {abel::AbelValue::makeString(file)}).asBool());
         QVERIFY(call(QStringLiteral("path_is_file"), {abel::AbelValue::makeString(file)}).asBool());
         QVERIFY(call(QStringLiteral("path_is_dir"), {abel::AbelValue::makeString(dir)}).asBool());
+
+        const QString joined = call(QStringLiteral("path_join"), {
+            abel::AbelValue::makeString(dir),
+            abel::AbelValue::makeString(QStringLiteral("copy.txt")),
+        }).asString();
+        QCOMPARE(joined, QDir(dir).filePath(QStringLiteral("copy.txt")));
+        QCOMPARE(call(QStringLiteral("path_dirname"), {abel::AbelValue::makeString(file)}).asString(), dir);
+        QCOMPARE(call(QStringLiteral("path_basename"), {abel::AbelValue::makeString(file)}).asString(), QStringLiteral("story.txt"));
+        QCOMPARE(call(QStringLiteral("path_ext"), {abel::AbelValue::makeString(file)}).asString(), QStringLiteral("txt"));
+        QCOMPARE(call(QStringLiteral("path_clean"), {abel::AbelValue::makeString(dir + QStringLiteral("/../io/story.txt"))}).asString(),
+                 QDir::cleanPath(dir + QStringLiteral("/../io/story.txt")));
+        QVERIFY(!call(QStringLiteral("current_dir"), {}).asString().isEmpty());
+        QVERIFY(call(QStringLiteral("env_exists"), {abel::AbelValue::makeString(QStringLiteral("PATH"))}).asBool());
+        QVERIFY(!call(QStringLiteral("env_get"), {abel::AbelValue::makeString(QStringLiteral("PATH"))}).asString().isEmpty());
 
         auto lineVector = abel::AbelValue::makeVector(abel::makeType(abel::TypeKind::Str), {
             abel::AbelValue::makeString(QStringLiteral("hakurei")),
@@ -496,6 +531,19 @@ private slots:
         QCOMPARE(lines.asVector()->elements.size(), static_cast<size_t>(2));
         QCOMPARE(lines.asVector()->elements[0].asString(), QStringLiteral("hakurei"));
         QCOMPARE(lines.asVector()->elements[1].asString(), QStringLiteral("kappa"));
+
+        const QString copy = dir + QStringLiteral("/copy.txt");
+        const QString moved = dir + QStringLiteral("/moved.txt");
+        call(QStringLiteral("copy_file"), {abel::AbelValue::makeString(file), abel::AbelValue::makeString(copy)});
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QVERIFY(QFile::exists(copy));
+        call(QStringLiteral("move_path"), {abel::AbelValue::makeString(copy), abel::AbelValue::makeString(moved)});
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QVERIFY(!QFile::exists(copy));
+        QVERIFY(QFile::exists(moved));
+        call(QStringLiteral("remove_path"), {abel::AbelValue::makeString(moved)});
+        QVERIFY(ctx.diagnostics().isEmpty());
+        QVERIFY(!QFile::exists(moved));
     }
 
     void mathBuiltinsRunThroughRegistry()
