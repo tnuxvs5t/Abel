@@ -1025,6 +1025,109 @@ if(failing_junit_exit_pos EQUAL -1)
     message(FATAL_ERROR "abel test --report-junit did not record failing exit code:\n${failing_junit_text}")
 endif()
 
+set(xfail_test_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-test-command-xfail")
+file(REMOVE_RECURSE "${xfail_test_project_dir}")
+file(MAKE_DIRECTORY "${xfail_test_project_dir}/src")
+file(MAKE_DIRECTORY "${xfail_test_project_dir}/tests")
+
+file(WRITE "${xfail_test_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-test-command-xfail",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${xfail_test_project_dir}/src/main.abel" [=[
+fn int main() {
+    return 0;
+}
+]=])
+
+file(WRITE "${xfail_test_project_dir}/tests/known_fail.abel" [=[
+fn int main() {
+    return 5;
+}
+]=])
+
+file(WRITE "${xfail_test_project_dir}/tests/unexpected_pass.abel" [=[
+fn int main() {
+    return 0;
+}
+]=])
+
+set(xfail_report_json "${xfail_test_project_dir}/.abel/xfail-report.json")
+set(xfail_report_junit "${xfail_test_project_dir}/.abel/xfail-report.xml")
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test --expect-fail known_fail --report-json "${xfail_report_json}" --report-junit "${xfail_report_junit}" "${xfail_test_project_dir}"
+    RESULT_VARIABLE xfail_command_result
+    OUTPUT_VARIABLE xfail_command_stdout
+    ERROR_VARIABLE xfail_command_stderr
+)
+if(NOT xfail_command_result EQUAL 0)
+    message(FATAL_ERROR "abel test --expect-fail unexpectedly rejected known failure:\n${xfail_command_stdout}\n${xfail_command_stderr}")
+endif()
+string(FIND "${xfail_command_stdout}" "test tests/known_fail.abel ... xfail" xfail_stdout_pos)
+if(xfail_stdout_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail did not print xfail:\n${xfail_command_stdout}\n${xfail_command_stderr}")
+endif()
+string(FIND "${xfail_command_stdout}" "1 expected failure(s), 0 unexpected pass(es)" xfail_summary_pos)
+if(xfail_summary_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail did not print xfail summary:\n${xfail_command_stdout}\n${xfail_command_stderr}")
+endif()
+file(READ "${xfail_report_json}" xfail_report_text)
+string(FIND "${xfail_report_text}" "\"status\": \"xfail\"" xfail_report_status_pos)
+if(xfail_report_status_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail did not record xfail status:\n${xfail_report_text}")
+endif()
+string(FIND "${xfail_report_text}" "\"expectedFailures\": 1" xfail_report_count_pos)
+if(xfail_report_count_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail did not record expected failure count:\n${xfail_report_text}")
+endif()
+file(READ "${xfail_report_junit}" xfail_junit_text)
+string(FIND "${xfail_junit_text}" "skipped=\"1\"" xfail_junit_skipped_pos)
+if(xfail_junit_skipped_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail JUnit did not record skipped xfail:\n${xfail_junit_text}")
+endif()
+string(FIND "${xfail_junit_text}" "<skipped" xfail_junit_skipped_elem_pos)
+if(xfail_junit_skipped_elem_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail JUnit did not write skipped element:\n${xfail_junit_text}")
+endif()
+
+set(xpass_report_json "${xfail_test_project_dir}/.abel/xpass-report.json")
+set(xpass_report_junit "${xfail_test_project_dir}/.abel/xpass-report.xml")
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" test --filter unexpected_pass --expect-fail unexpected_pass --report-json "${xpass_report_json}" --report-junit "${xpass_report_junit}" "${xfail_test_project_dir}"
+    RESULT_VARIABLE xpass_command_result
+    OUTPUT_VARIABLE xpass_command_stdout
+    ERROR_VARIABLE xpass_command_stderr
+)
+if(xpass_command_result EQUAL 0)
+    message(FATAL_ERROR "abel test --expect-fail unexpectedly accepted xpass:\n${xpass_command_stdout}\n${xpass_command_stderr}")
+endif()
+string(FIND "${xpass_command_stdout}" "test tests/unexpected_pass.abel ... XPASS" xpass_stdout_pos)
+if(xpass_stdout_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail did not print XPASS:\n${xpass_command_stdout}\n${xpass_command_stderr}")
+endif()
+file(READ "${xpass_report_json}" xpass_report_text)
+string(FIND "${xpass_report_text}" "\"status\": \"xpass\"" xpass_report_status_pos)
+if(xpass_report_status_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail did not record xpass status:\n${xpass_report_text}")
+endif()
+string(FIND "${xpass_report_text}" "\"unexpectedPasses\": 1" xpass_report_count_pos)
+if(xpass_report_count_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail did not record unexpected pass count:\n${xpass_report_text}")
+endif()
+file(READ "${xpass_report_junit}" xpass_junit_text)
+string(FIND "${xpass_junit_text}" "failures=\"1\"" xpass_junit_failures_pos)
+if(xpass_junit_failures_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail JUnit did not record xpass failure:\n${xpass_junit_text}")
+endif()
+string(FIND "${xpass_junit_text}" "type=\"xpass\"" xpass_junit_type_pos)
+if(xpass_junit_type_pos EQUAL -1)
+    message(FATAL_ERROR "abel test --expect-fail JUnit did not record xpass type:\n${xpass_junit_text}")
+endif()
+
 set(assertion_test_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-test-command-assertion")
 file(REMOVE_RECURSE "${assertion_test_project_dir}")
 file(MAKE_DIRECTORY "${assertion_test_project_dir}/src")

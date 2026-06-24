@@ -1211,11 +1211,12 @@ my_abel_project/
 
 ```bash
 $ABEL test --filter pass .
+$ABEL test --expect-fail known_fail .
 $ABEL test --report-json .abel/test-report.json .
 $ABEL test --report-junit .abel/test-report.xml .
 ```
 
-`--filter <substring>` 按测试文件相对路径筛选运行集合，适合先跑某一组测试。`--report-json <file>` 输出机器可读报告，包含 `total/passed/failed` 汇总，以及每个测试的 `path/status/phase/exitCode/diagnostics`，便于上层工具消费。`--report-junit <file>` 输出 JUnit XML，便于 CI 系统直接展示测试用例和失败信息。
+`--filter <substring>` 按测试文件相对路径筛选运行集合，适合先跑某一组测试。`--expect-fail <substring>` 把匹配相对路径的测试标记为预期失败：它失败时记为 `xfail` 且不让命令失败；它意外通过时记为 `xpass` 并让命令失败，提醒你清理预期失败列表。`--report-json <file>` 输出机器可读报告，包含 `total/passed/failed/expectedFailures/unexpectedPasses` 汇总，以及每个测试的 `path/status/phase/exitCode/diagnostics`，便于上层工具消费。`--report-junit <file>` 输出 JUnit XML，便于 CI 系统直接展示测试用例和失败信息。
 
 示例测试：
 

@@ -41,7 +41,7 @@ C/C++ 值模型
 + .abel/cache/backend 项目级 backend artifact 缓存与 .abel-cache.json sidecar
 + abel add/remove/update/build
 + abel check / abel run / abel test
-+ abel test --filter / --report-json / --report-junit
++ abel test --filter / --expect-fail / --report-json / --report-junit
 ```
 
 ---

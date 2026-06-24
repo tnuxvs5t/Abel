@@ -162,6 +162,15 @@ static bool writeJsonReport(const QString& path, const QJsonObject& report, QStr
     return true;
 }
 
+static bool matchesAnySubstring(const QString& text, const QStringList& patterns)
+{
+    for (const QString& pattern : patterns) {
+        if (!pattern.isEmpty() && text.contains(pattern))
+            return true;
+    }
+    return false;
+}
+
 static QString junitFailureMessage(const QJsonObject& test)
 {
     const QString phase = test.value(QStringLiteral("phase")).toString();
@@ -243,16 +252,25 @@ static bool writeJunitReport(const QString& path, const QJsonObject& report, QSt
     xml.writeAttribute(QStringLiteral("tests"), QString::number(report.value(QStringLiteral("total")).toInt()));
     xml.writeAttribute(QStringLiteral("failures"), QString::number(report.value(QStringLiteral("failed")).toInt()));
     xml.writeAttribute(QStringLiteral("errors"), QStringLiteral("0"));
-    xml.writeAttribute(QStringLiteral("skipped"), QStringLiteral("0"));
+    xml.writeAttribute(QStringLiteral("skipped"), QString::number(report.value(QStringLiteral("expectedFailures")).toInt()));
     xml.writeAttribute(QStringLiteral("time"), QStringLiteral("0"));
 
     const QString filter = report.value(QStringLiteral("filter")).toString();
-    if (!filter.isEmpty()) {
+    const QJsonArray expectedFailurePatterns = report.value(QStringLiteral("expectedFailurePatterns")).toArray();
+    if (!filter.isEmpty() || !expectedFailurePatterns.isEmpty()) {
         xml.writeStartElement(QStringLiteral("properties"));
-        xml.writeStartElement(QStringLiteral("property"));
-        xml.writeAttribute(QStringLiteral("name"), QStringLiteral("filter"));
-        xml.writeAttribute(QStringLiteral("value"), filter);
-        xml.writeEndElement();
+        if (!filter.isEmpty()) {
+            xml.writeStartElement(QStringLiteral("property"));
+            xml.writeAttribute(QStringLiteral("name"), QStringLiteral("filter"));
+            xml.writeAttribute(QStringLiteral("value"), filter);
+            xml.writeEndElement();
+        }
+        for (const QJsonValue& value : expectedFailurePatterns) {
+            xml.writeStartElement(QStringLiteral("property"));
+            xml.writeAttribute(QStringLiteral("name"), QStringLiteral("expectFail"));
+            xml.writeAttribute(QStringLiteral("value"), value.toString());
+            xml.writeEndElement();
+        }
         xml.writeEndElement();
     }
 
@@ -265,10 +283,19 @@ static bool writeJunitReport(const QString& path, const QJsonObject& report, QSt
         xml.writeAttribute(QStringLiteral("file"), test.value(QStringLiteral("file")).toString());
         xml.writeAttribute(QStringLiteral("time"), QStringLiteral("0"));
 
-        if (test.value(QStringLiteral("status")).toString() == QStringLiteral("failed")) {
+        const QString status = test.value(QStringLiteral("status")).toString();
+        if (status == QStringLiteral("failed") || status == QStringLiteral("xpass")) {
             xml.writeStartElement(QStringLiteral("failure"));
-            xml.writeAttribute(QStringLiteral("type"), test.value(QStringLiteral("phase")).toString());
-            xml.writeAttribute(QStringLiteral("message"), junitFailureMessage(test));
+            xml.writeAttribute(QStringLiteral("type"), status == QStringLiteral("xpass") ? QStringLiteral("xpass") : test.value(QStringLiteral("phase")).toString());
+            xml.writeAttribute(QStringLiteral("message"),
+                               status == QStringLiteral("xpass")
+                                   ? QStringLiteral("expected-fail test unexpectedly passed")
+                                   : junitFailureMessage(test));
+            xml.writeCharacters(junitFailureBody(test));
+            xml.writeEndElement();
+        } else if (status == QStringLiteral("xfail")) {
+            xml.writeStartElement(QStringLiteral("skipped"));
+            xml.writeAttribute(QStringLiteral("message"), QStringLiteral("expected failure"));
             xml.writeCharacters(junitFailureBody(test));
             xml.writeEndElement();
         }
@@ -704,9 +731,13 @@ int main(int argc, char** argv)
     QCommandLineOption testReportJunitOption(QStringLiteral("report-junit"),
                                              QStringLiteral("Write `abel test` JUnit XML report."),
                                              QStringLiteral("report.xml"));
+    QCommandLineOption testExpectFailOption(QStringLiteral("expect-fail"),
+                                            QStringLiteral("Treat matching test file relative paths as expected failures; unexpected pass fails the run."),
+                                            QStringLiteral("substring"));
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
     parser.addOption(testFilterOption);
+    parser.addOption(testExpectFailOption);
     parser.addOption(testReportJsonOption);
     parser.addOption(testReportJunitOption);
     parser.addPositionalArgument(QStringLiteral("command"),
@@ -918,12 +949,13 @@ int main(int argc, char** argv)
 
     if (command == QStringLiteral("test")) {
         if (args.size() > 2) {
-            err << "E0013: test expects: abel test [--filter substring] [--report-json file] [--report-junit file] [project-dir]" << Qt::endl;
+            err << "E0013: test expects: abel test [--filter substring] [--expect-fail substring] [--report-json file] [--report-junit file] [project-dir]" << Qt::endl;
             return 2;
         }
         const QString projectDir = args.size() == 2 ? args[1] : QStringLiteral(".");
         const QString reportJsonPath = parser.value(testReportJsonOption);
         const QString reportJunitPath = parser.value(testReportJunitOption);
+        const QStringList expectedFailurePatterns = parser.values(testExpectFailOption);
         auto graph = abel::packageGraphFromDirectory(projectDir);
         for (const auto& d : graph.diagnostics)
             printDiagnostic(d);
@@ -945,6 +977,10 @@ int main(int argc, char** argv)
         QJsonObject report;
         report.insert(QStringLiteral("project"), graph.root.rootDir);
         report.insert(QStringLiteral("filter"), testFilter);
+        QJsonArray expectedFailurePatternValues;
+        for (const QString& pattern : expectedFailurePatterns)
+            expectedFailurePatternValues.push_back(pattern);
+        report.insert(QStringLiteral("expectedFailurePatterns"), expectedFailurePatternValues);
         QJsonArray testReports;
 
         if (tests.isEmpty()) {
@@ -953,6 +989,9 @@ int main(int argc, char** argv)
                 report.insert(QStringLiteral("total"), 0);
                 report.insert(QStringLiteral("passed"), 0);
                 report.insert(QStringLiteral("failed"), 0);
+                report.insert(QStringLiteral("expectedFailures"), 0);
+                report.insert(QStringLiteral("unexpectedFailures"), 0);
+                report.insert(QStringLiteral("unexpectedPasses"), 0);
                 report.insert(QStringLiteral("tests"), testReports);
                 QString error;
                 if (!writeJsonReport(reportJsonPath, report, &error)) {
@@ -964,6 +1003,9 @@ int main(int argc, char** argv)
                 report.insert(QStringLiteral("total"), 0);
                 report.insert(QStringLiteral("passed"), 0);
                 report.insert(QStringLiteral("failed"), 0);
+                report.insert(QStringLiteral("expectedFailures"), 0);
+                report.insert(QStringLiteral("unexpectedFailures"), 0);
+                report.insert(QStringLiteral("unexpectedPasses"), 0);
                 report.insert(QStringLiteral("tests"), testReports);
                 QString error;
                 if (!writeJunitReport(reportJunitPath, report, &error)) {
@@ -978,27 +1020,37 @@ int main(int argc, char** argv)
         const QStringList resourceFiles = parser.values(resourceOption);
         int passed = 0;
         int failed = 0;
+        int expectedFailures = 0;
+        int unexpectedFailures = 0;
+        int unexpectedPasses = 0;
         for (const QString& testFile : tests) {
             const QString display = QDir(graph.root.rootDir).relativeFilePath(testFile);
+            const bool expectFailure = matchesAnySubstring(display, expectedFailurePatterns);
             out << "test " << display << " ... " << Qt::flush;
             QJsonObject testReport;
             testReport.insert(QStringLiteral("path"), display);
             testReport.insert(QStringLiteral("file"), testFile);
+            testReport.insert(QStringLiteral("expectedFailure"), expectFailure);
             const QList<abel::PackageSourceFile> sourceFiles = packageGraphSourceFileEntriesForTest(graph, testFile);
             const QList<abel::Diagnostic> checkDiagnostics = checkSourceFiles(sourceFiles);
             if (!checkDiagnostics.isEmpty()) {
-                out << "FAILED" << Qt::endl;
+                out << (expectFailure ? "xfail" : "FAILED") << Qt::endl;
                 for (const auto& d : checkDiagnostics)
                     printDiagnostic(d);
                 QJsonArray diagnostics;
                 for (const auto& d : checkDiagnostics)
                     diagnostics.push_back(diagnosticToJson(d));
-                testReport.insert(QStringLiteral("status"), QStringLiteral("failed"));
+                testReport.insert(QStringLiteral("status"), expectFailure ? QStringLiteral("xfail") : QStringLiteral("failed"));
                 testReport.insert(QStringLiteral("phase"), QStringLiteral("check"));
                 testReport.insert(QStringLiteral("exitCode"), QJsonValue());
                 testReport.insert(QStringLiteral("diagnostics"), diagnostics);
                 testReports.push_back(testReport);
-                ++failed;
+                if (expectFailure)
+                    ++expectedFailures;
+                else {
+                    ++failed;
+                    ++unexpectedFailures;
+                }
                 continue;
             }
 
@@ -1007,7 +1059,7 @@ int main(int argc, char** argv)
                                                      resourceFiles,
                                                      QCoreApplication::applicationDirPath());
             if (!run.diagnostics.isEmpty() || run.exitCode != 0) {
-                out << "FAILED" << Qt::endl;
+                out << (expectFailure ? "xfail" : "FAILED") << Qt::endl;
                 for (const auto& d : run.diagnostics)
                     printDiagnostic(d);
                 if (run.diagnostics.isEmpty())
@@ -1015,27 +1067,45 @@ int main(int argc, char** argv)
                 QJsonArray diagnostics;
                 for (const auto& d : run.diagnostics)
                     diagnostics.push_back(diagnosticToJson(d));
-                testReport.insert(QStringLiteral("status"), QStringLiteral("failed"));
+                testReport.insert(QStringLiteral("status"), expectFailure ? QStringLiteral("xfail") : QStringLiteral("failed"));
                 testReport.insert(QStringLiteral("phase"), QStringLiteral("run"));
                 testReport.insert(QStringLiteral("exitCode"), run.exitCode);
                 testReport.insert(QStringLiteral("diagnostics"), diagnostics);
                 testReports.push_back(testReport);
-                ++failed;
+                if (expectFailure)
+                    ++expectedFailures;
+                else {
+                    ++failed;
+                    ++unexpectedFailures;
+                }
                 continue;
             }
-            out << "ok" << Qt::endl;
-            testReport.insert(QStringLiteral("status"), QStringLiteral("passed"));
+            if (expectFailure) {
+                out << "XPASS" << Qt::endl;
+                testReport.insert(QStringLiteral("status"), QStringLiteral("xpass"));
+                ++failed;
+                ++unexpectedPasses;
+            } else {
+                out << "ok" << Qt::endl;
+                testReport.insert(QStringLiteral("status"), QStringLiteral("passed"));
+                ++passed;
+            }
             testReport.insert(QStringLiteral("phase"), QStringLiteral("run"));
             testReport.insert(QStringLiteral("exitCode"), run.exitCode);
             testReport.insert(QStringLiteral("diagnostics"), QJsonArray());
             testReports.push_back(testReport);
-            ++passed;
         }
         out << passed << "/" << tests.size() << " test(s) passed" << Qt::endl;
+        if (expectedFailures > 0 || unexpectedPasses > 0)
+            out << expectedFailures << " expected failure(s), "
+                << unexpectedPasses << " unexpected pass(es)" << Qt::endl;
         if (!reportJsonPath.isEmpty()) {
             report.insert(QStringLiteral("total"), tests.size());
             report.insert(QStringLiteral("passed"), passed);
             report.insert(QStringLiteral("failed"), failed);
+            report.insert(QStringLiteral("expectedFailures"), expectedFailures);
+            report.insert(QStringLiteral("unexpectedFailures"), unexpectedFailures);
+            report.insert(QStringLiteral("unexpectedPasses"), unexpectedPasses);
             report.insert(QStringLiteral("tests"), testReports);
             QString error;
             if (!writeJsonReport(reportJsonPath, report, &error)) {
@@ -1047,6 +1117,9 @@ int main(int argc, char** argv)
             report.insert(QStringLiteral("total"), tests.size());
             report.insert(QStringLiteral("passed"), passed);
             report.insert(QStringLiteral("failed"), failed);
+            report.insert(QStringLiteral("expectedFailures"), expectedFailures);
+            report.insert(QStringLiteral("unexpectedFailures"), unexpectedFailures);
+            report.insert(QStringLiteral("unexpectedPasses"), unexpectedPasses);
             report.insert(QStringLiteral("tests"), testReports);
             QString error;
             if (!writeJunitReport(reportJunitPath, report, &error)) {
