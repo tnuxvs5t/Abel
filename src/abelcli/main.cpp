@@ -18,6 +18,7 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QTextStream>
+#include <QXmlStreamWriter>
 
 #include <vector>
 
@@ -151,6 +152,136 @@ static bool writeJsonReport(const QString& path, const QJsonObject& report, QStr
     if (file.write(json) != json.size()) {
         if (error)
             *error = QStringLiteral("cannot write report '%1': %2").arg(path, file.errorString());
+        return false;
+    }
+    if (!file.commit()) {
+        if (error)
+            *error = QStringLiteral("cannot commit report '%1': %2").arg(path, file.errorString());
+        return false;
+    }
+    return true;
+}
+
+static QString junitFailureMessage(const QJsonObject& test)
+{
+    const QString phase = test.value(QStringLiteral("phase")).toString();
+    const QJsonArray diagnostics = test.value(QStringLiteral("diagnostics")).toArray();
+    if (!diagnostics.isEmpty()) {
+        const QJsonObject first = diagnostics.first().toObject();
+        const QString code = first.value(QStringLiteral("code")).toString();
+        const QString message = first.value(QStringLiteral("message")).toString();
+        if (!code.isEmpty() || !message.isEmpty())
+            return QStringLiteral("%1: %2").arg(code, message).trimmed();
+    }
+
+    const QJsonValue exitCode = test.value(QStringLiteral("exitCode"));
+    if (exitCode.isDouble())
+        return QStringLiteral("test failed in %1 phase with exit code %2")
+            .arg(phase, QString::number(exitCode.toInt()));
+    return QStringLiteral("test failed in %1 phase").arg(phase);
+}
+
+static QString junitFailureBody(const QJsonObject& test)
+{
+    QString body;
+    QTextStream stream(&body);
+    stream << "test: " << test.value(QStringLiteral("path")).toString() << Qt::endl;
+    stream << "phase: " << test.value(QStringLiteral("phase")).toString() << Qt::endl;
+    const QJsonValue exitCode = test.value(QStringLiteral("exitCode"));
+    if (exitCode.isDouble())
+        stream << "exitCode: " << exitCode.toInt() << Qt::endl;
+
+    const QJsonArray diagnostics = test.value(QStringLiteral("diagnostics")).toArray();
+    if (!diagnostics.isEmpty()) {
+        stream << "diagnostics:" << Qt::endl;
+        for (const QJsonValue& value : diagnostics) {
+            const QJsonObject diagnostic = value.toObject();
+            stream << "- "
+                   << diagnostic.value(QStringLiteral("code")).toString()
+                   << ": "
+                   << diagnostic.value(QStringLiteral("message")).toString()
+                   << Qt::endl;
+            const QJsonObject primary = diagnostic.value(QStringLiteral("primary")).toObject();
+            const QString file = primary.value(QStringLiteral("file")).toString();
+            if (!file.isEmpty()) {
+                stream << "  at " << file
+                       << ":" << primary.value(QStringLiteral("line")).toInt()
+                       << ":" << primary.value(QStringLiteral("column")).toInt()
+                       << Qt::endl;
+            }
+            const QString sourceLine = primary.value(QStringLiteral("sourceLine")).toString();
+            if (!sourceLine.isEmpty())
+                stream << "  " << sourceLine << Qt::endl;
+        }
+    }
+    return body;
+}
+
+static bool writeJunitReport(const QString& path, const QJsonObject& report, QString* error)
+{
+    const QFileInfo info(path);
+    QDir dir = info.dir();
+    if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+        if (error)
+            *error = QStringLiteral("cannot create report directory '%1'").arg(dir.absolutePath());
+        return false;
+    }
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (error)
+            *error = QStringLiteral("cannot open report '%1' for writing: %2").arg(path, file.errorString());
+        return false;
+    }
+
+    QXmlStreamWriter xml(&file);
+    xml.setAutoFormatting(true);
+    xml.writeStartDocument();
+    xml.writeStartElement(QStringLiteral("testsuite"));
+    xml.writeAttribute(QStringLiteral("name"), QStringLiteral("Abel"));
+    xml.writeAttribute(QStringLiteral("package"), report.value(QStringLiteral("project")).toString());
+    xml.writeAttribute(QStringLiteral("tests"), QString::number(report.value(QStringLiteral("total")).toInt()));
+    xml.writeAttribute(QStringLiteral("failures"), QString::number(report.value(QStringLiteral("failed")).toInt()));
+    xml.writeAttribute(QStringLiteral("errors"), QStringLiteral("0"));
+    xml.writeAttribute(QStringLiteral("skipped"), QStringLiteral("0"));
+    xml.writeAttribute(QStringLiteral("time"), QStringLiteral("0"));
+
+    const QString filter = report.value(QStringLiteral("filter")).toString();
+    if (!filter.isEmpty()) {
+        xml.writeStartElement(QStringLiteral("properties"));
+        xml.writeStartElement(QStringLiteral("property"));
+        xml.writeAttribute(QStringLiteral("name"), QStringLiteral("filter"));
+        xml.writeAttribute(QStringLiteral("value"), filter);
+        xml.writeEndElement();
+        xml.writeEndElement();
+    }
+
+    const QJsonArray tests = report.value(QStringLiteral("tests")).toArray();
+    for (const QJsonValue& value : tests) {
+        const QJsonObject test = value.toObject();
+        xml.writeStartElement(QStringLiteral("testcase"));
+        xml.writeAttribute(QStringLiteral("classname"), QStringLiteral("Abel"));
+        xml.writeAttribute(QStringLiteral("name"), test.value(QStringLiteral("path")).toString());
+        xml.writeAttribute(QStringLiteral("file"), test.value(QStringLiteral("file")).toString());
+        xml.writeAttribute(QStringLiteral("time"), QStringLiteral("0"));
+
+        if (test.value(QStringLiteral("status")).toString() == QStringLiteral("failed")) {
+            xml.writeStartElement(QStringLiteral("failure"));
+            xml.writeAttribute(QStringLiteral("type"), test.value(QStringLiteral("phase")).toString());
+            xml.writeAttribute(QStringLiteral("message"), junitFailureMessage(test));
+            xml.writeCharacters(junitFailureBody(test));
+            xml.writeEndElement();
+        }
+
+        xml.writeEndElement();
+    }
+
+    xml.writeEndElement();
+    xml.writeEndDocument();
+
+    if (xml.hasError()) {
+        if (error)
+            *error = QStringLiteral("cannot write JUnit report '%1'").arg(path);
         return false;
     }
     if (!file.commit()) {
@@ -570,10 +701,14 @@ int main(int argc, char** argv)
     QCommandLineOption testReportJsonOption(QStringLiteral("report-json"),
                                             QStringLiteral("Write `abel test` machine-readable JSON report."),
                                             QStringLiteral("report.json"));
+    QCommandLineOption testReportJunitOption(QStringLiteral("report-junit"),
+                                             QStringLiteral("Write `abel test` JUnit XML report."),
+                                             QStringLiteral("report.xml"));
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
     parser.addOption(testFilterOption);
     parser.addOption(testReportJsonOption);
+    parser.addOption(testReportJunitOption);
     parser.addPositionalArgument(QStringLiteral("command"),
                                  QStringLiteral("Command: init | add | remove | update | build | test | check | run | package | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
@@ -783,11 +918,12 @@ int main(int argc, char** argv)
 
     if (command == QStringLiteral("test")) {
         if (args.size() > 2) {
-            err << "E0013: test expects: abel test [--filter substring] [--report-json file] [project-dir]" << Qt::endl;
+            err << "E0013: test expects: abel test [--filter substring] [--report-json file] [--report-junit file] [project-dir]" << Qt::endl;
             return 2;
         }
         const QString projectDir = args.size() == 2 ? args[1] : QStringLiteral(".");
         const QString reportJsonPath = parser.value(testReportJsonOption);
+        const QString reportJunitPath = parser.value(testReportJunitOption);
         auto graph = abel::packageGraphFromDirectory(projectDir);
         for (const auto& d : graph.diagnostics)
             printDiagnostic(d);
@@ -820,6 +956,17 @@ int main(int argc, char** argv)
                 report.insert(QStringLiteral("tests"), testReports);
                 QString error;
                 if (!writeJsonReport(reportJsonPath, report, &error)) {
+                    err << "E0014: " << error << Qt::endl;
+                    return 1;
+                }
+            }
+            if (!reportJunitPath.isEmpty()) {
+                report.insert(QStringLiteral("total"), 0);
+                report.insert(QStringLiteral("passed"), 0);
+                report.insert(QStringLiteral("failed"), 0);
+                report.insert(QStringLiteral("tests"), testReports);
+                QString error;
+                if (!writeJunitReport(reportJunitPath, report, &error)) {
                     err << "E0014: " << error << Qt::endl;
                     return 1;
                 }
@@ -892,6 +1039,17 @@ int main(int argc, char** argv)
             report.insert(QStringLiteral("tests"), testReports);
             QString error;
             if (!writeJsonReport(reportJsonPath, report, &error)) {
+                err << "E0014: " << error << Qt::endl;
+                return 1;
+            }
+        }
+        if (!reportJunitPath.isEmpty()) {
+            report.insert(QStringLiteral("total"), tests.size());
+            report.insert(QStringLiteral("passed"), passed);
+            report.insert(QStringLiteral("failed"), failed);
+            report.insert(QStringLiteral("tests"), testReports);
+            QString error;
+            if (!writeJunitReport(reportJunitPath, report, &error)) {
                 err << "E0014: " << error << Qt::endl;
                 return 1;
             }

@@ -1212,9 +1212,10 @@ my_abel_project/
 ```bash
 $ABEL test --filter pass .
 $ABEL test --report-json .abel/test-report.json .
+$ABEL test --report-junit .abel/test-report.xml .
 ```
 
-`--filter <substring>` 按测试文件相对路径筛选运行集合，适合先跑某一组测试。`--report-json <file>` 输出机器可读报告，包含 `total/passed/failed` 汇总，以及每个测试的 `path/status/phase/exitCode/diagnostics`，便于 CI 或上层工具消费。
+`--filter <substring>` 按测试文件相对路径筛选运行集合，适合先跑某一组测试。`--report-json <file>` 输出机器可读报告，包含 `total/passed/failed` 汇总，以及每个测试的 `path/status/phase/exitCode/diagnostics`，便于上层工具消费。`--report-junit <file>` 输出 JUnit XML，便于 CI 系统直接展示测试用例和失败信息。
 
 示例测试：
 
