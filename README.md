@@ -39,7 +39,7 @@ Resource JSON `qtVersion` and `kit` are now load-time gates: `abel resources che
 
 `abel build <project-dir>` copies root/dependency backend artifacts into `.abel/cache/backend/...` and writes a neighboring `<plugin>.abel-cache.json` sidecar. `abel run <project-dir>` only prefers the cached plugin when that sidecar still matches the current source artifact path, size, mtime, ResourceNode fields, and symbol list; if metadata is missing or stale, it falls back to the source artifact path until `abel build` refreshes the cache.
 
-`abel test <project-dir>` runs every `tests/**/*.abel` file in a package project. Each test is checked with the same package graph as `abel check`, gets root/dependency library sources, uses the test file as its own entry `main`, auto-loads package backend artifacts, and passes only when it exits with code `0`. Test files can use `test_assert(cond, any...)`, `test_eq(actual, expected, any...)`, and `test_ne(actual, expected, any...)`; assertion failures produce Abel source spans and stack traces.
+`abel test <project-dir>` runs every `tests/**/*.abel` file in a package project. Each test is checked with the same package graph as `abel check`, gets root/dependency library sources, uses the test file as its own entry `main`, auto-loads package backend artifacts, and passes only when it exits with code `0`. Use `--filter <substring>` to run only tests whose relative path matches, and `--report-json <file>` to write a machine-readable report with total/passed/failed counts plus per-test status, phase, exit code, and diagnostics. Test files can use `test_assert(cond, any...)`, `test_eq(actual, expected, any...)`, and `test_ne(actual, expected, any...)`; assertion failures produce Abel source spans and stack traces.
 
 ## Build
 

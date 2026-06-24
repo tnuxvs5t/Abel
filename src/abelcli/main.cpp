@@ -12,6 +12,10 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
 #include <QSet>
 #include <QTextStream>
 
@@ -81,6 +85,80 @@ static void printDiagnostic(const abel::Diagnostic& d)
             printSourceExcerpt(err, frame.callSite, QStringLiteral("    "));
         }
     }
+}
+
+static QJsonObject sourceSpanToJson(const abel::SourceSpan& span)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("file"), span.file);
+    object.insert(QStringLiteral("line"), span.startLine);
+    object.insert(QStringLiteral("column"), span.startColumn);
+    object.insert(QStringLiteral("endLine"), span.endLine);
+    object.insert(QStringLiteral("endColumn"), span.endColumn);
+    if (!span.sourceLine.isEmpty())
+        object.insert(QStringLiteral("sourceLine"), span.sourceLine);
+    return object;
+}
+
+static QJsonObject diagnosticToJson(const abel::Diagnostic& diagnostic)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("code"), diagnostic.code);
+    object.insert(QStringLiteral("message"), diagnostic.message);
+    object.insert(QStringLiteral("primary"), sourceSpanToJson(diagnostic.primary));
+    if (!diagnostic.explanation.isEmpty())
+        object.insert(QStringLiteral("explanation"), diagnostic.explanation);
+
+    QJsonArray related;
+    for (const auto& span : diagnostic.related)
+        related.push_back(sourceSpanToJson(span));
+    object.insert(QStringLiteral("related"), related);
+
+    QJsonArray suggestions;
+    for (const QString& suggestion : diagnostic.suggestions)
+        suggestions.push_back(suggestion);
+    object.insert(QStringLiteral("suggestions"), suggestions);
+
+    QJsonArray stack;
+    for (const auto& frame : diagnostic.stackTrace) {
+        QJsonObject frameObject;
+        frameObject.insert(QStringLiteral("symbol"), frame.symbol);
+        frameObject.insert(QStringLiteral("callSite"), sourceSpanToJson(frame.callSite));
+        stack.push_back(frameObject);
+    }
+    object.insert(QStringLiteral("stack"), stack);
+    return object;
+}
+
+static bool writeJsonReport(const QString& path, const QJsonObject& report, QString* error)
+{
+    const QFileInfo info(path);
+    QDir dir = info.dir();
+    if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+        if (error)
+            *error = QStringLiteral("cannot create report directory '%1'").arg(dir.absolutePath());
+        return false;
+    }
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (error)
+            *error = QStringLiteral("cannot open report '%1' for writing: %2").arg(path, file.errorString());
+        return false;
+    }
+
+    const QByteArray json = QJsonDocument(report).toJson(QJsonDocument::Indented);
+    if (file.write(json) != json.size()) {
+        if (error)
+            *error = QStringLiteral("cannot write report '%1': %2").arg(path, file.errorString());
+        return false;
+    }
+    if (!file.commit()) {
+        if (error)
+            *error = QStringLiteral("cannot commit report '%1': %2").arg(path, file.errorString());
+        return false;
+    }
+    return true;
 }
 
 struct CliInput {
@@ -489,9 +567,13 @@ int main(int argc, char** argv)
     QCommandLineOption testFilterOption(QStringLiteral("filter"),
                                         QStringLiteral("Only run test files whose relative path contains substring."),
                                         QStringLiteral("substring"));
+    QCommandLineOption testReportJsonOption(QStringLiteral("report-json"),
+                                            QStringLiteral("Write `abel test` machine-readable JSON report."),
+                                            QStringLiteral("report.json"));
     parser.addOption(toolchainOption);
     parser.addOption(resourceOption);
     parser.addOption(testFilterOption);
+    parser.addOption(testReportJsonOption);
     parser.addPositionalArgument(QStringLiteral("command"),
                                  QStringLiteral("Command: init | add | remove | update | build | test | check | run | package | resources | version"));
     parser.addPositionalArgument(QStringLiteral("input"),
@@ -701,10 +783,11 @@ int main(int argc, char** argv)
 
     if (command == QStringLiteral("test")) {
         if (args.size() > 2) {
-            err << "E0013: test expects: abel test [--filter substring] [project-dir]" << Qt::endl;
+            err << "E0013: test expects: abel test [--filter substring] [--report-json file] [project-dir]" << Qt::endl;
             return 2;
         }
         const QString projectDir = args.size() == 2 ? args[1] : QStringLiteral(".");
+        const QString reportJsonPath = parser.value(testReportJsonOption);
         auto graph = abel::packageGraphFromDirectory(projectDir);
         for (const auto& d : graph.diagnostics)
             printDiagnostic(d);
@@ -722,8 +805,25 @@ int main(int argc, char** argv)
             }
             tests = filtered;
         }
+
+        QJsonObject report;
+        report.insert(QStringLiteral("project"), graph.root.rootDir);
+        report.insert(QStringLiteral("filter"), testFilter);
+        QJsonArray testReports;
+
         if (tests.isEmpty()) {
             out << "0/0 test(s) passed" << Qt::endl;
+            if (!reportJsonPath.isEmpty()) {
+                report.insert(QStringLiteral("total"), 0);
+                report.insert(QStringLiteral("passed"), 0);
+                report.insert(QStringLiteral("failed"), 0);
+                report.insert(QStringLiteral("tests"), testReports);
+                QString error;
+                if (!writeJsonReport(reportJsonPath, report, &error)) {
+                    err << "E0014: " << error << Qt::endl;
+                    return 1;
+                }
+            }
             return 0;
         }
 
@@ -734,12 +834,23 @@ int main(int argc, char** argv)
         for (const QString& testFile : tests) {
             const QString display = QDir(graph.root.rootDir).relativeFilePath(testFile);
             out << "test " << display << " ... " << Qt::flush;
+            QJsonObject testReport;
+            testReport.insert(QStringLiteral("path"), display);
+            testReport.insert(QStringLiteral("file"), testFile);
             const QList<abel::PackageSourceFile> sourceFiles = packageGraphSourceFileEntriesForTest(graph, testFile);
             const QList<abel::Diagnostic> checkDiagnostics = checkSourceFiles(sourceFiles);
             if (!checkDiagnostics.isEmpty()) {
                 out << "FAILED" << Qt::endl;
                 for (const auto& d : checkDiagnostics)
                     printDiagnostic(d);
+                QJsonArray diagnostics;
+                for (const auto& d : checkDiagnostics)
+                    diagnostics.push_back(diagnosticToJson(d));
+                testReport.insert(QStringLiteral("status"), QStringLiteral("failed"));
+                testReport.insert(QStringLiteral("phase"), QStringLiteral("check"));
+                testReport.insert(QStringLiteral("exitCode"), QJsonValue());
+                testReport.insert(QStringLiteral("diagnostics"), diagnostics);
+                testReports.push_back(testReport);
                 ++failed;
                 continue;
             }
@@ -754,13 +865,37 @@ int main(int argc, char** argv)
                     printDiagnostic(d);
                 if (run.diagnostics.isEmpty())
                     err << "test " << display << " failed with exit code " << run.exitCode << Qt::endl;
+                QJsonArray diagnostics;
+                for (const auto& d : run.diagnostics)
+                    diagnostics.push_back(diagnosticToJson(d));
+                testReport.insert(QStringLiteral("status"), QStringLiteral("failed"));
+                testReport.insert(QStringLiteral("phase"), QStringLiteral("run"));
+                testReport.insert(QStringLiteral("exitCode"), run.exitCode);
+                testReport.insert(QStringLiteral("diagnostics"), diagnostics);
+                testReports.push_back(testReport);
                 ++failed;
                 continue;
             }
             out << "ok" << Qt::endl;
+            testReport.insert(QStringLiteral("status"), QStringLiteral("passed"));
+            testReport.insert(QStringLiteral("phase"), QStringLiteral("run"));
+            testReport.insert(QStringLiteral("exitCode"), run.exitCode);
+            testReport.insert(QStringLiteral("diagnostics"), QJsonArray());
+            testReports.push_back(testReport);
             ++passed;
         }
         out << passed << "/" << tests.size() << " test(s) passed" << Qt::endl;
+        if (!reportJsonPath.isEmpty()) {
+            report.insert(QStringLiteral("total"), tests.size());
+            report.insert(QStringLiteral("passed"), passed);
+            report.insert(QStringLiteral("failed"), failed);
+            report.insert(QStringLiteral("tests"), testReports);
+            QString error;
+            if (!writeJsonReport(reportJsonPath, report, &error)) {
+                err << "E0014: " << error << Qt::endl;
+                return 1;
+            }
+        }
         return failed == 0 ? 0 : 1;
     }
 

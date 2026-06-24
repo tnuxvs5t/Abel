@@ -1207,6 +1207,15 @@ my_abel_project/
 
 每个 `tests/**/*.abel` 文件都是一个独立测试入口。`abel test .` 会把依赖包库源码、根项目 `src/**/*.abel` 非 entry 源码和当前测试文件合并，先执行同一套 `abel check`，再运行测试 `main`。退出码为 `0` 表示该测试通过；非 0 或诊断错误表示失败。
 
+测试入口支持两个基础工程化选项：
+
+```bash
+$ABEL test --filter pass .
+$ABEL test --report-json .abel/test-report.json .
+```
+
+`--filter <substring>` 按测试文件相对路径筛选运行集合，适合先跑某一组测试。`--report-json <file>` 输出机器可读报告，包含 `total/passed/failed` 汇总，以及每个测试的 `path/status/phase/exitCode/diagnostics`，便于 CI 或上层工具消费。
+
 示例测试：
 
 ```abel
