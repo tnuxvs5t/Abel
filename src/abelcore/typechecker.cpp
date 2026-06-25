@@ -596,6 +596,46 @@ QString templateInstantiationKey(const FunctionDeclNode& fn, const QHash<QString
     return declarationQualifiedName(fn, fn.name) + QStringLiteral("<") + parts.join(QStringLiteral(",")) + QStringLiteral(">");
 }
 
+bool isBareTemplateParam(const TypeNode& node, const QString& param)
+{
+    return node.name == param
+        && !node.isConst
+        && node.pointerDepth == 0
+        && !node.isReference
+        && !node.elementType
+        && node.functionParamTypes.empty()
+        && node.typeArguments.empty();
+}
+
+bool isOneArgTemplateApplicationOf(const TypeNode& node, const QString& param)
+{
+    return !node.name.isEmpty()
+        && !node.isConst
+        && node.pointerDepth == 0
+        && !node.isReference
+        && !node.elementType
+        && node.functionParamTypes.empty()
+        && node.typeArguments.size() == 1
+        && isBareTemplateParam(*node.typeArguments.front(), param);
+}
+
+bool isExactShapeBinaryOperatorTemplate(const FunctionDeclNode& fn)
+{
+    if (!fn.isOperator || fn.templateParams.size() != 1 || fn.params.size() != 2)
+        return false;
+    if (!fn.params[0] || !fn.params[1] || !fn.returnType)
+        return false;
+    if (fn.params[0]->variadic || fn.params[1]->variadic)
+        return false;
+    const QString param = fn.templateParams.front();
+    const TypeNode& lhs = *fn.params[0]->type;
+    const TypeNode& rhs = *fn.params[1]->type;
+    return isOneArgTemplateApplicationOf(*fn.returnType, param)
+        && isOneArgTemplateApplicationOf(lhs, param)
+        && isOneArgTemplateApplicationOf(rhs, param)
+        && lhs.name == rhs.name;
+}
+
 AbelType applyTypeDecorations(AbelType base, const TypeNode& node)
 {
     if (node.isConst)
@@ -715,8 +755,9 @@ void TypeChecker::checkTemplateDeclaration(const FunctionDeclNode& fn)
 {
     if (fn.debt)
         error(fn.span, QStringLiteral("function template '%1' cannot be debt in v1").arg(fn.name));
-    if (fn.isOperator)
-        error(fn.span, QStringLiteral("operator templates are not part of v1"));
+    if (fn.isOperator && !isExactShapeBinaryOperatorTemplate(fn))
+        error(fn.span,
+              QStringLiteral("operator templates must have exact shape: template <type T> fn R<T> operator OP(X<T> lhs, X<T> rhs)"));
     if (fn.name == QStringLiteral("main"))
         error(fn.span, QStringLiteral("main cannot be a function template"));
     QSet<QString> seen;
@@ -2215,28 +2256,48 @@ ExprType TypeChecker::checkUserBinaryOperator(const QString& op,
     if (candidates.isEmpty())
         return errorExpr(span, fallbackMessage);
 
-    QList<const FunctionDeclNode*> matches;
+    struct Match {
+        const FunctionDeclNode* fn = nullptr;
+        QHash<QString, AbelType> bindings;
+        bool isTemplate = false;
+    };
+
+    QList<Match> matches;
     QList<const FunctionDeclNode*> considered;
     int bestScore = 1'000'000;
+    const std::vector<ExprType> args{lhs, rhs};
     for (const FunctionDeclNode* fn : candidates) {
         if (!fn || !fn->isOperator || fn->operatorSymbol != op)
             continue;
         considered.push_back(fn);
         if (fn->params.size() != 2 || (!fn->params.empty() && fn->params.back()->variadic))
             continue;
+        QHash<QString, AbelType> bindings;
+        const bool isTemplate = !fn->templateParams.empty();
+        if (isTemplate) {
+            if (!isExactShapeBinaryOperatorTemplate(*fn))
+                continue;
+            auto maybeBindings = bindFunctionTemplate(*fn, args, nullptr, false);
+            if (!maybeBindings)
+                continue;
+            bindings = std::move(*maybeBindings);
+        }
+        std::unique_ptr<TemplateTypeGuard> guard;
+        if (isTemplate)
+            guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, bindings);
         const AbelType lhsParam = typeFromAstForDecl(*fn->params[0]->type, *fn);
         const AbelType rhsParam = typeFromAstForDecl(*fn->params[1]->type, *fn);
         const auto lhsScore = scoreParameterArgument(lhsParam, lhs);
         const auto rhsScore = scoreParameterArgument(rhsParam, rhs);
         if (!lhsScore || !rhsScore)
             continue;
-        const int score = *lhsScore + *rhsScore;
+        const int score = *lhsScore + *rhsScore + (isTemplate ? 1 : 0);
         if (score < bestScore) {
             bestScore = score;
             matches.clear();
-            matches.push_back(fn);
+            matches.push_back(Match{fn, bindings, isTemplate});
         } else if (score == bestScore) {
-            matches.push_back(fn);
+            matches.push_back(Match{fn, bindings, isTemplate});
         }
     }
 
@@ -2248,7 +2309,10 @@ ExprType TypeChecker::checkUserBinaryOperator(const QString& op,
                              .arg(op, lhs.type.displayName(), rhs.type.displayName()));
     }
     if (matches.size() > 1) {
-        const QStringList origins = declOriginList(matches, [](const FunctionDeclNode& fn) { return fn.name; });
+        QList<const FunctionDeclNode*> ambiguous;
+        for (const Match& match : matches)
+            ambiguous.push_back(match.fn);
+        const QStringList origins = declOriginList(ambiguous, [](const FunctionDeclNode& fn) { return fn.name; });
         return errorExpr(span,
                          QStringLiteral("operator '%1' is ambiguous for %2 and %3; candidates: %4")
                              .arg(op,
@@ -2257,7 +2321,13 @@ ExprType TypeChecker::checkUserBinaryOperator(const QString& op,
                                   origins.join(QStringLiteral(", "))));
     }
 
-    const FunctionDeclNode* fn = matches.front();
+    const Match match = matches.front();
+    const FunctionDeclNode* fn = match.fn;
+    std::unique_ptr<TemplateTypeGuard> guard;
+    if (match.isTemplate)
+        guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, match.bindings);
+    if (match.isTemplate)
+        checkTemplateInstantiation(*fn, match.bindings);
     return callReturnExprType(typeFromAstForDecl(*fn->returnType, *fn));
 }
 
@@ -2959,6 +3029,29 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
         return checkFunctionValueCall(calleeType, expr.args, expr.span);
     }
 
+    if (const TypeAliasDeclNode* alias = resolveTypeAlias(name->name, m_currentPackage, name->span, false)) {
+        AbelType aliased = makeType(TypeKind::Unknown);
+        if (!alias->templateParams.empty()) {
+            if (!expr.hasExplicitTypeArgs)
+                return errorExpr(expr.span, QStringLiteral("template type alias '%1' construction requires type arguments").arg(name->name));
+            auto bindings = bindTypeTemplateParams(alias->templateParams, expr.explicitTypeArgs, *alias, expr.span, true);
+            if (!bindings)
+                return unknownExprType();
+            TemplateTypeGuard guard(m_templateTypes, *bindings);
+            aliased = typeFromAstForDecl(*alias->targetType, *alias);
+        } else {
+            if (expr.hasExplicitTypeArgs)
+                return errorExpr(expr.span, QStringLiteral("type alias '%1' is not a template").arg(name->name));
+            aliased = typeFromAstForDecl(*alias->targetType, *alias);
+        }
+        if (aliased.kind != TypeKind::Struct)
+            return errorExpr(expr.span, QStringLiteral("type alias '%1' does not name a constructible struct").arg(name->name));
+        const StructInfo* info = structInfoForType(aliased);
+        if (!info)
+            return errorExpr(expr.span, QStringLiteral("unknown struct type '%1'").arg(aliased.displayName()));
+        return checkStructConstructorCall(name->name, *info, expr.args, expr.span, &aliased);
+    }
+
     if (const StructInfo* info = resolveStruct(name->name, name->span)) {
         if (expr.hasExplicitTypeArgs) {
             if (!info->decl || info->decl->templateParams.empty())
@@ -3285,6 +3378,12 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                                                  const AbelType* constructedType)
 {
     const AbelType resultType = constructedType ? *constructedType : makeStructType(structTypeName(*info.decl));
+    std::unique_ptr<TemplateTypeGuard> structTemplateGuard;
+    if (info.decl && !info.decl->templateParams.empty()) {
+        auto bindings = structTemplateBindingsForType(*info.decl, resultType);
+        if (bindings)
+            structTemplateGuard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
+    }
     const size_t argc = args.size();
     if (info.constructors.isEmpty()) {
         if (argc == 0) {
@@ -3338,10 +3437,6 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                                    QStringLiteral("constructor parameter '%1'").arg(param.name));
         }
         if (info.decl->templateParams.empty() == false) {
-            std::unique_ptr<TemplateTypeGuard> ctorGuard;
-            auto bindings = structTemplateBindingsForType(*info.decl, resultType);
-            if (bindings)
-                ctorGuard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
             checkConstructor(*info.decl, *ctor, &resultType);
         }
         return {resultType, ValueCategory::PRValue, false};
@@ -3419,10 +3514,6 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                                QStringLiteral("constructor parameter '%1'").arg(param.name));
     }
     if (info.decl->templateParams.empty() == false) {
-        std::unique_ptr<TemplateTypeGuard> ctorGuard;
-        auto bindings = structTemplateBindingsForType(*info.decl, resultType);
-        if (bindings)
-            ctorGuard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
         checkConstructor(*info.decl, *ctor, &resultType);
     }
     return {resultType, ValueCategory::PRValue, false};
@@ -4028,8 +4119,22 @@ bool TypeChecker::inferTemplateTypes(const TypeNode& pattern, const ExprType& ar
             }
             return true;
         }
-        if (!node.typeArguments.empty())
-            return false;
+        if (!node.typeArguments.empty()) {
+            if (actual.kind != TypeKind::Struct)
+                return false;
+            const StructInfo* info = resolveStruct(node.name, node.span, false);
+            if (!info || !info->decl || info->decl->templateParams.size() != node.typeArguments.size())
+                return false;
+            auto actualBindings = structTemplateBindingsForType(*info->decl, actual);
+            if (!actualBindings)
+                return false;
+            for (size_t i = 0; i < node.typeArguments.size(); ++i) {
+                const AbelType actualArg = actualBindings->value(info->decl->templateParams[i], makeType(TypeKind::Unknown));
+                if (!inferNode(*node.typeArguments[i], actualArg))
+                    return false;
+            }
+            return true;
+        }
         return true;
     };
 
@@ -4044,6 +4149,7 @@ std::optional<QHash<QString, AbelType>> TypeChecker::bindFunctionTemplate(
 {
     if (fn.templateParams.empty())
         return std::nullopt;
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, fn);
 
     QHash<QString, AbelType> bindings;
     for (const QString& param : fn.templateParams)

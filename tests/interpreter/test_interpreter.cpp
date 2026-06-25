@@ -1903,6 +1903,53 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 7);
     }
+
+    void runsAliasConstructorsAndExactShapeOperatorTemplates()
+    {
+        const QString src = QStringLiteral(R"(
+            template <type T>
+            struct Box {
+                T value;
+
+                init(T v) {
+                    value = v;
+                }
+            }
+
+            template <type T>
+            fn Box<T> operator +(Box<T> lhs, Box<T> rhs) {
+                return Box<T>(lhs.value + rhs.value);
+            }
+
+            template <type A, type B>
+            struct Pair {
+                A first;
+                B second;
+
+                init(A a, B b) {
+                    first = a;
+                    second = b;
+                }
+            }
+
+            template <type A, type B>
+            type Pair2 = Pair<A, B>;
+
+            fn int main() {
+                Box<int> a = Box<int>(2);
+                Box<int> b = Box<int>(3);
+                Box<int> c = a + b;
+                Pair<int, int> p = Pair<int, int>(2, 2);
+                Pair2<int, int> q = Pair2<int, int>(3, 4);
+                return c.value + p.first + p.second + q.first + q.second;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 16);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)
