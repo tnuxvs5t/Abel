@@ -147,6 +147,9 @@ bool Parser::isTopLevelDeclarationStart(TokenKind kind) const
         || kind == TokenKind::KwStruct
         || kind == TokenKind::KwEnum
         || kind == TokenKind::KwType
+        || kind == TokenKind::KwTemplate
+        || kind == TokenKind::KwInterface
+        || kind == TokenKind::KwRequire
         || kind == TokenKind::KwFn;
 }
 
@@ -233,6 +236,28 @@ std::unique_ptr<DeclNode> Parser::parseDeclaration()
         return parseEnum(exported);
     if (match(TokenKind::KwType))
         return parseTypeAlias(exported);
+    if (match(TokenKind::KwInterface) || match(TokenKind::KwRequire)) {
+        errorAt(previous(), QStringLiteral("interface/require are reserved for v2 template constraints"));
+        return nullptr;
+    }
+    if (match(TokenKind::KwTemplate)) {
+        std::vector<QString> templateParams = parseTemplatePrefix();
+        if (match(TokenKind::KwStruct) || match(TokenKind::KwType)) {
+            errorAt(previous(), QStringLiteral("template structs/types are reserved; v1 only supports minimal function templates"));
+            return nullptr;
+        }
+        if (match(TokenKind::KwInterface) || match(TokenKind::KwRequire)) {
+            errorAt(previous(), QStringLiteral("template+interface/require constraints are not part of v1"));
+            return nullptr;
+        }
+        if (!match(TokenKind::KwFn)) {
+            errorAt(peek(), QStringLiteral("expected fn after template <type ...>; v1 only supports function templates"));
+            return nullptr;
+        }
+        auto fn = parseFunction(exported, false);
+        fn->templateParams = std::move(templateParams);
+        return fn;
+    }
     if (match(TokenKind::KwFn))
         return parseFunction(exported, false);
     errorAt(peek(), QStringLiteral("expected top-level declaration"));
@@ -269,6 +294,23 @@ QString Parser::parseQualifiedName(const QString& what)
     while (match(TokenKind::Dot))
         parts.push_back(consume(TokenKind::Identifier, QStringLiteral("expected identifier after '.' in %1").arg(what)).text);
     return parts.join(QLatin1Char('.'));
+}
+
+std::vector<QString> Parser::parseTemplatePrefix()
+{
+    std::vector<QString> params;
+    consume(TokenKind::Less, QStringLiteral("expected '<' after template"));
+    if (!check(TokenKind::Greater)) {
+        do {
+            consume(TokenKind::KwType, QStringLiteral("expected type template parameter"));
+            const Token name = consume(TokenKind::Identifier, QStringLiteral("expected template type parameter name"));
+            params.push_back(name.text);
+        } while (match(TokenKind::Comma));
+    }
+    consume(TokenKind::Greater, QStringLiteral("expected '>' after template parameter list"));
+    if (params.empty())
+        errorAt(previous(), QStringLiteral("template requires at least one type parameter"));
+    return params;
 }
 
 std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt)
@@ -496,6 +538,14 @@ std::unique_ptr<TypeNode> Parser::parseType()
         t->name = QStringLiteral("any");
     } else {
         t->name = parseTypeName();
+        if (match(TokenKind::Less)) {
+            if (!check(TokenKind::Greater)) {
+                do {
+                    t->typeArguments.push_back(parseType());
+                } while (match(TokenKind::Comma));
+            }
+            consume(TokenKind::Greater, QStringLiteral("expected '>' after type arguments"));
+        }
     }
     while (match(TokenKind::Star))
         ++t->pointerDepth;
@@ -824,10 +874,49 @@ std::unique_ptr<ExprNode> Parser::parsePostfix()
 {
     auto expr = parsePrimary();
     for (;;) {
+        auto looksLikeExplicitTemplateCall = [&]() {
+            if (!dynamic_cast<NameExprNode*>(expr.get()) || !check(TokenKind::Less))
+                return false;
+            int depth = 0;
+            for (qsizetype pos = m_pos; pos < m_tokens.size(); ++pos) {
+                const TokenKind kind = m_tokens[pos].kind;
+                if (kind == TokenKind::Less) {
+                    ++depth;
+                } else if (kind == TokenKind::Greater) {
+                    --depth;
+                    if (depth == 0)
+                        return pos + 1 < m_tokens.size() && m_tokens[pos + 1].kind == TokenKind::LParen;
+                } else if (kind == TokenKind::End || kind == TokenKind::Semicolon || kind == TokenKind::LBrace || kind == TokenKind::RBrace) {
+                    return false;
+                }
+            }
+            return false;
+        };
         if (match(TokenKind::LParen)) {
             auto call = std::make_unique<CallExprNode>();
             const SourceSpan startSpan = expr->span;
             call->callee = std::move(expr);
+            if (!check(TokenKind::RParen)) {
+                do {
+                    call->args.push_back(parseExpression());
+                } while (match(TokenKind::Comma));
+            }
+            const Token close = consume(TokenKind::RParen, QStringLiteral("expected ')'"));
+            call->span = mergeSpans(startSpan, close.span);
+            expr = std::move(call);
+        } else if (looksLikeExplicitTemplateCall()) {
+            auto call = std::make_unique<CallExprNode>();
+            const SourceSpan startSpan = expr->span;
+            call->callee = std::move(expr);
+            call->hasExplicitTypeArgs = true;
+            consume(TokenKind::Less, QStringLiteral("expected '<'"));
+            if (!check(TokenKind::Greater)) {
+                do {
+                    call->explicitTypeArgs.push_back(parseType());
+                } while (match(TokenKind::Comma));
+            }
+            consume(TokenKind::Greater, QStringLiteral("expected '>' after explicit template arguments"));
+            consume(TokenKind::LParen, QStringLiteral("expected '(' after explicit template arguments"));
             if (!check(TokenKind::RParen)) {
                 do {
                     call->args.push_back(parseExpression());

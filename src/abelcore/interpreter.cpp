@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace abel {
 
@@ -49,6 +50,51 @@ QString declarationQualifiedName(const DeclNode& decl, const QString& name)
 QString structTypeName(const StructDeclNode& decl)
 {
     return declarationQualifiedName(decl, decl.name);
+}
+
+QString typePatternSignature(const TypeNode& node, const std::vector<QString>& templateParams)
+{
+    auto templateIndex = [&](const QString& name) -> int {
+        for (size_t i = 0; i < templateParams.size(); ++i) {
+            if (templateParams[i] == name)
+                return static_cast<int>(i);
+        }
+        return -1;
+    };
+
+    QString out;
+    if (node.isConst)
+        out += QStringLiteral("const ");
+    const int idx = templateIndex(node.name);
+    if (idx >= 0 && !node.elementType && node.functionParamTypes.empty() && node.typeArguments.empty()) {
+        out += QStringLiteral("$T%1").arg(idx);
+    } else if (node.name == QStringLiteral("vector") && node.elementType) {
+        out += QStringLiteral("vector<") + typePatternSignature(*node.elementType, templateParams) + QStringLiteral(">");
+    } else if (node.name == QStringLiteral("func") && node.elementType) {
+        out += QStringLiteral("func ") + typePatternSignature(*node.elementType, templateParams) + QStringLiteral("(");
+        for (size_t i = 0; i < node.functionParamTypes.size(); ++i) {
+            if (i > 0)
+                out += QStringLiteral(",");
+            out += typePatternSignature(*node.functionParamTypes[i], templateParams);
+        }
+        out += QStringLiteral(")");
+    } else {
+        out += node.name;
+        if (!node.typeArguments.empty()) {
+            out += QStringLiteral("<");
+            for (size_t i = 0; i < node.typeArguments.size(); ++i) {
+                if (i > 0)
+                    out += QStringLiteral(",");
+                out += typePatternSignature(*node.typeArguments[i], templateParams);
+            }
+            out += QStringLiteral(">");
+        }
+    }
+    for (int i = 0; i < node.pointerDepth; ++i)
+        out += QStringLiteral("*");
+    if (node.isReference)
+        out += QStringLiteral("&");
+    return out;
 }
 
 bool sameDeclNamespace(const DeclNode& lhs, const DeclNode& rhs)
@@ -248,6 +294,25 @@ private:
     QString m_previousStruct;
 };
 
+class TemplateTypeGuard {
+public:
+    TemplateTypeGuard(QHash<QString, AbelType>& current, const QHash<QString, AbelType>& next)
+        : m_current(current)
+        , m_previous(current)
+    {
+        m_current = next;
+    }
+
+    ~TemplateTypeGuard()
+    {
+        m_current = m_previous;
+    }
+
+private:
+    QHash<QString, AbelType>& m_current;
+    QHash<QString, AbelType> m_previous;
+};
+
 bool isSourceLocationBuiltinName(const QString& name)
 {
     return name == QStringLiteral("__FILE__")
@@ -279,6 +344,7 @@ void Interpreter::beginRun(AbelRuntimeContext& ctx, BackendRegistry* backendRegi
     m_backends.clear();
     m_enums.clear();
     m_typeAliases.clear();
+    m_templateTypes.clear();
     m_resolvingTypeAliases.clear();
     m_currentPackage.clear();
     m_currentModule.clear();
@@ -595,15 +661,24 @@ bool Interpreter::sameFunctionSignature(const FunctionDeclNode& lhs, const Funct
 {
     if (lhs.name != rhs.name)
         return false;
+    if (lhs.templateParams.size() != rhs.templateParams.size())
+        return false;
     if (lhs.params.size() != rhs.params.size())
         return false;
     for (size_t i = 0; i < lhs.params.size(); ++i) {
         if (lhs.params[i]->variadic != rhs.params[i]->variadic)
             return false;
-        const AbelType lhsType = typeFromAstForDecl(*lhs.params[i]->type, lhs);
-        const AbelType rhsType = typeFromAstForDecl(*rhs.params[i]->type, rhs);
-        if (lhsType != rhsType)
-            return false;
+        if (!lhs.templateParams.empty() || !rhs.templateParams.empty()) {
+            if (typePatternSignature(*lhs.params[i]->type, lhs.templateParams)
+                != typePatternSignature(*rhs.params[i]->type, rhs.templateParams)) {
+                return false;
+            }
+        } else {
+            const AbelType lhsType = typeFromAstForDecl(*lhs.params[i]->type, lhs);
+            const AbelType rhsType = typeFromAstForDecl(*rhs.params[i]->type, rhs);
+            if (lhsType != rhsType)
+                return false;
+        }
     }
     return true;
 }
@@ -956,6 +1031,20 @@ AbelType Interpreter::typeFromAstInCurrentPackage(const TypeNode& node)
 
 AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& packageName)
 {
+    if (auto found = m_templateTypes.constFind(node.name); found != m_templateTypes.constEnd()) {
+        AbelType base = found.value();
+        if (!node.typeArguments.empty() && m_ctx)
+            m_ctx->error(QStringLiteral("E0584"),
+                         QStringLiteral("template type parameter '%1' cannot take type arguments").arg(node.name),
+                         node.span);
+        if (node.isConst)
+            base = makeConstType(base);
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
     if (node.name == QStringLiteral("vector") && node.elementType) {
         AbelType base = makeVectorType(typeFromAstInPackage(*node.elementType, packageName));
         if (node.isConst)
@@ -972,6 +1061,21 @@ AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& 
         for (const auto& param : node.functionParamTypes)
             params.push_back(typeFromAstInPackage(*param, packageName));
         AbelType base = makeFunctionType(typeFromAstInPackage(*node.elementType, packageName), std::move(params));
+        if (node.isConst)
+            base = makeConstType(base);
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
+
+    if (!node.typeArguments.empty()) {
+        if (m_ctx)
+            m_ctx->error(QStringLiteral("E0584"),
+                         QStringLiteral("generic named type '%1' is reserved; v1 only supports vector<T> and function templates").arg(node.name),
+                         node.span);
+        AbelType base = makeType(TypeKind::Unknown);
         if (node.isConst)
             base = makeConstType(base);
         for (int i = 0; i < node.pointerDepth; ++i)
@@ -1491,35 +1595,156 @@ std::optional<int> Interpreter::scorePreparedArgument(const AbelType& paramType,
     return paramType == arg.value.type() ? 0 : 1;
 }
 
+bool Interpreter::bindTemplateTypeName(const QString& name, const AbelType& type, QHash<QString, AbelType>& bindings) const
+{
+    auto found = bindings.find(name);
+    if (found == bindings.end())
+        return false;
+
+    AbelType normalized = type;
+    normalized.isConst = false;
+    if (found->kind == TypeKind::Unknown) {
+        *found = normalized;
+        return true;
+    }
+    return *found == normalized;
+}
+
+bool Interpreter::inferTemplateTypes(const TypeNode& pattern, const PreparedCallArg& arg, QHash<QString, AbelType>& bindings)
+{
+    std::function<bool(const TypeNode&, AbelType)> inferNode = [&](const TypeNode& node, AbelType actual) -> bool {
+        for (int i = 0; i < node.pointerDepth; ++i) {
+            if (!actual.isPointer() || !actual.pointee)
+                return false;
+            actual = *actual.pointee;
+        }
+        if (node.isConst)
+            actual.isConst = false;
+
+        const bool bareTemplateParam = bindings.contains(node.name)
+            && !node.elementType
+            && node.functionParamTypes.empty()
+            && node.typeArguments.empty();
+        if (bareTemplateParam)
+            return bindTemplateTypeName(node.name, actual, bindings);
+
+        if (node.name == QStringLiteral("vector") && node.elementType) {
+            if (actual.kind != TypeKind::Vector || !actual.pointee)
+                return false;
+            return inferNode(*node.elementType, *actual.pointee);
+        }
+        if (node.name == QStringLiteral("func") && node.elementType) {
+            if (actual.kind != TypeKind::Function || !actual.pointee || actual.params.size() != node.functionParamTypes.size())
+                return false;
+            if (!inferNode(*node.elementType, *actual.pointee))
+                return false;
+            for (size_t i = 0; i < node.functionParamTypes.size(); ++i) {
+                if (!inferNode(*node.functionParamTypes[i], actual.params[i]))
+                    return false;
+            }
+            return true;
+        }
+        if (!node.typeArguments.empty())
+            return false;
+        return true;
+    };
+
+    return inferNode(pattern, arg.value.type());
+}
+
+std::optional<QHash<QString, AbelType>> Interpreter::bindFunctionTemplate(
+    const FunctionDeclNode& fn,
+    const std::vector<PreparedCallArg>& args,
+    const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
+    bool hasExplicitTypeArgs)
+{
+    if (fn.templateParams.empty())
+        return std::nullopt;
+
+    QHash<QString, AbelType> bindings;
+    for (const QString& param : fn.templateParams)
+        bindings.insert(param, makeType(TypeKind::Unknown));
+
+    if (hasExplicitTypeArgs) {
+        if (!explicitTypeArgs)
+            return std::nullopt;
+        if (explicitTypeArgs->size() > fn.templateParams.size())
+            return std::nullopt;
+        for (size_t i = 0; i < explicitTypeArgs->size(); ++i)
+            bindings[fn.templateParams[i]] = typeFromAstForDecl(*(*explicitTypeArgs)[i], fn);
+    }
+
+    const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
+    const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
+    if ((!variadic && args.size() != fn.params.size()) || (variadic && args.size() < fixedCount))
+        return std::nullopt;
+
+    for (size_t i = 0; i < fixedCount; ++i) {
+        if (!inferTemplateTypes(*fn.params[i]->type, args[i], bindings))
+            return std::nullopt;
+    }
+
+    for (const QString& param : fn.templateParams) {
+        if (bindings.value(param).kind == TypeKind::Unknown)
+            return std::nullopt;
+    }
+    return bindings;
+}
+
 const FunctionDeclNode* Interpreter::selectFunctionOverload(const QString& displayName,
                                                             const QList<const FunctionDeclNode*>& candidates,
                                                             const std::vector<PreparedCallArg>& args,
-                                                            const SourceSpan& span)
+                                                            const SourceSpan& span,
+                                                            const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
+                                                            bool hasExplicitTypeArgs,
+                                                            QHash<QString, AbelType>* outTemplateBindings)
 {
-    const FunctionDeclNode* onlyOrdinary = nullptr;
-    int ordinaryCount = 0;
+    struct Match {
+        const FunctionDeclNode* fn = nullptr;
+        QHash<QString, AbelType> bindings;
+        bool isTemplate = false;
+    };
+
+    const FunctionDeclNode* singleNonTemplate = nullptr;
+    int nonTemplateCount = 0;
     for (const FunctionDeclNode* fn : candidates) {
-        if (fn && !fn->isOperator) {
-            onlyOrdinary = fn;
-            ++ordinaryCount;
+        if (fn && !fn->isOperator && fn->templateParams.empty()) {
+            singleNonTemplate = fn;
+            ++nonTemplateCount;
         }
     }
-    if (ordinaryCount == 1)
-        return onlyOrdinary;
+    if (!hasExplicitTypeArgs && nonTemplateCount == 1)
+        return singleNonTemplate;
 
-    QList<const FunctionDeclNode*> matches;
+    QList<Match> matches;
     bool sawOrdinary = false;
     int bestScore = 1'000'000;
     for (const FunctionDeclNode* fn : candidates) {
         if (!fn || fn->isOperator)
             continue;
         sawOrdinary = true;
+
+        QHash<QString, AbelType> bindings;
+        const bool isTemplate = !fn->templateParams.empty();
+        if (isTemplate) {
+            auto maybeBindings = bindFunctionTemplate(*fn, args, explicitTypeArgs, hasExplicitTypeArgs);
+            if (!maybeBindings)
+                continue;
+            bindings = std::move(*maybeBindings);
+        } else if (hasExplicitTypeArgs) {
+            continue;
+        }
+
+        std::unique_ptr<TemplateTypeGuard> guard;
+        if (isTemplate)
+            guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, bindings);
+
         const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
         const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
         if ((!variadic && args.size() != fn->params.size()) || (variadic && args.size() < fixedCount))
             continue;
 
-        int score = variadic ? 4 : 0;
+        int score = (variadic ? 4 : 0) + (isTemplate ? 1 : 0);
         bool ok = true;
         for (size_t i = 0; i < fixedCount; ++i) {
             const AbelType paramType = typeFromAstForDecl(*fn->params[i]->type, *fn);
@@ -1543,9 +1768,9 @@ const FunctionDeclNode* Interpreter::selectFunctionOverload(const QString& displ
         if (score < bestScore) {
             bestScore = score;
             matches.clear();
-            matches.push_back(fn);
+            matches.push_back(Match{fn, bindings, isTemplate});
         } else if (score == bestScore) {
-            matches.push_back(fn);
+            matches.push_back(Match{fn, bindings, isTemplate});
         }
     }
 
@@ -1565,14 +1790,25 @@ const FunctionDeclNode* Interpreter::selectFunctionOverload(const QString& displ
         error(QStringLiteral("E0525"), QStringLiteral("function '%1' overload is ambiguous").arg(displayName), span);
         return nullptr;
     }
-    return matches.front();
+    const Match match = matches.front();
+    if (outTemplateBindings)
+        *outTemplateBindings = match.isTemplate ? match.bindings : QHash<QString, AbelType>{};
+    return match.fn;
 }
 
 ExecResult Interpreter::callFunctionPrepared(const FunctionDeclNode& fn,
                                              const std::vector<PreparedCallArg>& args,
-                                             const SourceSpan& span)
+                                             const SourceSpan& span,
+                                             const QHash<QString, AbelType>* templateBindings)
 {
     DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, fn);
+    std::unique_ptr<TemplateTypeGuard> templateGuard;
+    if (templateBindings)
+        templateGuard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *templateBindings);
+    else if (!fn.templateParams.empty()) {
+        error(QStringLiteral("E0544"), QStringLiteral("function template '%1' was called without template bindings").arg(fn.name), span);
+        return ExecResult::returned(AbelValue::makeUnknown());
+    }
     if (fn.debt || !fn.body) {
         error(QStringLiteral("E0539"), QStringLiteral("function '%1' has no Abel body").arg(fn.name), fn.span);
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -1675,15 +1911,25 @@ ExecResult Interpreter::callFunctionPrepared(const FunctionDeclNode& fn,
 ExecResult Interpreter::callFunctionOverloadExpr(const QString& displayName,
                                                  const QList<const FunctionDeclNode*>& candidates,
                                                  const std::vector<std::unique_ptr<ExprNode>>& args,
-                                                 const SourceSpan& span)
+                                                 const SourceSpan& span,
+                                                 const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
+                                                 bool hasExplicitTypeArgs)
 {
     std::vector<PreparedCallArg> prepared = prepareFunctionArgs(args);
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
-    const FunctionDeclNode* fn = selectFunctionOverload(displayName, candidates, prepared, span);
+    QHash<QString, AbelType> templateBindings;
+    const FunctionDeclNode* fn = selectFunctionOverload(displayName,
+                                                        candidates,
+                                                        prepared,
+                                                        span,
+                                                        explicitTypeArgs,
+                                                        hasExplicitTypeArgs,
+                                                        &templateBindings);
     if (!fn)
         return ExecResult::returned(AbelValue::makeUnknown());
-    return callFunctionPrepared(*fn, prepared, span);
+    const QHash<QString, AbelType>* bindings = fn->templateParams.empty() ? nullptr : &templateBindings;
+    return callFunctionPrepared(*fn, prepared, span, bindings);
 }
 
 ExecResult Interpreter::callFunctionOverloadPipeExpr(const QString& displayName,
@@ -1695,10 +1941,12 @@ ExecResult Interpreter::callFunctionOverloadPipeExpr(const QString& displayName,
     std::vector<PreparedCallArg> prepared = prepareFunctionPipeArgs(firstArg, restArgs);
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
-    const FunctionDeclNode* fn = selectFunctionOverload(displayName, candidates, prepared, span);
+    QHash<QString, AbelType> templateBindings;
+    const FunctionDeclNode* fn = selectFunctionOverload(displayName, candidates, prepared, span, nullptr, false, &templateBindings);
     if (!fn)
         return ExecResult::returned(AbelValue::makeUnknown());
-    return callFunctionPrepared(*fn, prepared, span);
+    const QHash<QString, AbelType>* bindings = fn->templateParams.empty() ? nullptr : &templateBindings;
+    return callFunctionPrepared(*fn, prepared, span, bindings);
 }
 
 ExecResult Interpreter::callStructFunctionPrepared(const FunctionDeclNode& fn,
@@ -2987,6 +3235,10 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         return AbelValue::makeUnknown();
     }
     if (const VariableSlot* slot = m_ctx->lookupVariable(name->name)) {
+        if (expr.hasExplicitTypeArgs) {
+            error(QStringLiteral("E0544"), QStringLiteral("explicit template arguments require a function template"), expr.span);
+            return AbelValue::makeUnknown();
+        }
         AbelValue callee = slot->location ? slot->location->read() : AbelValue::makeUnknown();
         if (callee.type().kind == TypeKind::Function)
             return callFunctionValue(callee, expr.args, expr.span);
@@ -2994,15 +3246,31 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         return AbelValue::makeUnknown();
     }
     if (const StructRuntimeInfo* info = resolveStruct(name->name))
+    {
+        if (expr.hasExplicitTypeArgs) {
+            error(QStringLiteral("E0544"), QStringLiteral("generic struct construction is reserved; v1 only supports function templates"), expr.span);
+            return AbelValue::makeUnknown();
+        }
         return evalStructConstructor(name->name, *info, expr.args, expr.span);
+    }
 
     if (m_functions.contains(name->name)) {
         const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name->name);
         if (!candidates.isEmpty())
-            return callFunctionOverloadExpr(name->name, candidates, expr.args, expr.span).value;
+            return callFunctionOverloadExpr(name->name,
+                                            candidates,
+                                            expr.args,
+                                            expr.span,
+                                            &expr.explicitTypeArgs,
+                                            expr.hasExplicitTypeArgs)
+                .value;
     }
 
     if (m_builtins.hasFunction(name->name)) {
+        if (expr.hasExplicitTypeArgs) {
+            error(QStringLiteral("E0544"), QStringLiteral("builtin function '%1' is not a function template").arg(name->name), expr.span);
+            return AbelValue::makeUnknown();
+        }
         BuiltinFunctionCall call{*m_ctx, name->name, {}, {}, expr.span};
         attachStringifier(call);
         call.args.reserve(expr.args.size());

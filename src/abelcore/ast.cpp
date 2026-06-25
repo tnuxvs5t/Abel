@@ -13,6 +13,15 @@ QString TypeNode::displayName() const
             : QStringLiteral("vector<") + elementType->displayName() + QStringLiteral(">");
     else
         out += name;
+    if (!typeArguments.empty()) {
+        out += QStringLiteral("<");
+        for (qsizetype i = 0; i < static_cast<qsizetype>(typeArguments.size()); ++i) {
+            if (i > 0)
+                out += QStringLiteral(", ");
+            out += typeArguments[static_cast<size_t>(i)]->displayName();
+        }
+        out += QStringLiteral(">");
+    }
     if (name == QStringLiteral("func")) {
         out += QStringLiteral("(");
         for (qsizetype i = 0; i < static_cast<qsizetype>(functionParamTypes.size()); ++i) {

@@ -23,6 +23,7 @@ struct TypeNode : AstNode {
     bool isReference = false;
     std::unique_ptr<TypeNode> elementType; // vector<T> element or func return type
     std::vector<std::unique_ptr<TypeNode>> functionParamTypes;
+    std::vector<std::unique_ptr<TypeNode>> typeArguments; // minimal named generic types, e.g. Box<int>
 
     QString displayName() const;
 };
@@ -64,6 +65,8 @@ struct CastExprNode final : ExprNode {
 
 struct CallExprNode final : ExprNode {
     std::unique_ptr<ExprNode> callee;
+    bool hasExplicitTypeArgs = false;
+    std::vector<std::unique_ptr<TypeNode>> explicitTypeArgs;
     std::vector<std::unique_ptr<ExprNode>> args;
 };
 
@@ -189,6 +192,7 @@ struct FunctionDeclNode final : DeclNode {
     QString operatorSymbol;
     std::unique_ptr<TypeNode> returnType;
     QString name;
+    std::vector<QString> templateParams;
     std::vector<std::unique_ptr<ParameterNode>> params;
     std::unique_ptr<BlockStmtNode> body;
 };

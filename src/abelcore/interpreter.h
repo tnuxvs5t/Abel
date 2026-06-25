@@ -59,6 +59,7 @@ private:
     QHash<QString, QList<BackendRuntimeInfo>> m_backends;
     QHash<QString, QList<EnumRuntimeInfo>> m_enums;
     QHash<QString, QList<const TypeAliasDeclNode*>> m_typeAliases;
+    QHash<QString, AbelType> m_templateTypes;
     QSet<QString> m_resolvingTypeAliases;
     BackendRegistry m_backendRegistry;
     BackendRegistry* m_activeBackendRegistry = nullptr;
@@ -110,14 +111,20 @@ private:
     const FunctionDeclNode* selectFunctionOverload(const QString& displayName,
                                                    const QList<const FunctionDeclNode*>& candidates,
                                                    const std::vector<PreparedCallArg>& args,
-                                                   const SourceSpan& span);
+                                                   const SourceSpan& span,
+                                                   const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs = nullptr,
+                                                   bool hasExplicitTypeArgs = false,
+                                                   QHash<QString, AbelType>* outTemplateBindings = nullptr);
     ExecResult callFunctionPrepared(const FunctionDeclNode& fn,
                                     const std::vector<PreparedCallArg>& args,
-                                    const SourceSpan& span);
+                                    const SourceSpan& span,
+                                    const QHash<QString, AbelType>* templateBindings = nullptr);
     ExecResult callFunctionOverloadExpr(const QString& displayName,
                                         const QList<const FunctionDeclNode*>& candidates,
                                         const std::vector<std::unique_ptr<ExprNode>>& args,
-                                        const SourceSpan& span);
+                                        const SourceSpan& span,
+                                        const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs = nullptr,
+                                        bool hasExplicitTypeArgs = false);
     ExecResult callFunctionOverloadPipeExpr(const QString& displayName,
                                             const QList<const FunctionDeclNode*>& candidates,
                                             const ExprNode& firstArg,
@@ -204,6 +211,12 @@ private:
     bool isReadOnlyBinding(const AbelType& type, bool syntacticConst) const;
     bool canBindReferenceValue(const AbelType& referenceType, const AbelType& sourceType) const;
     std::optional<int> scoreValueArgument(const AbelType& paramType, const AbelValue& arg) const;
+    bool bindTemplateTypeName(const QString& name, const AbelType& type, QHash<QString, AbelType>& bindings) const;
+    bool inferTemplateTypes(const TypeNode& pattern, const PreparedCallArg& arg, QHash<QString, AbelType>& bindings);
+    std::optional<QHash<QString, AbelType>> bindFunctionTemplate(const FunctionDeclNode& fn,
+                                                                 const std::vector<PreparedCallArg>& args,
+                                                                 const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
+                                                                 bool hasExplicitTypeArgs);
     void error(const QString& code, const QString& message, const SourceSpan& span);
 };
 

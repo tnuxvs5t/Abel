@@ -1891,6 +1891,76 @@ private slots:
         )"));
         QVERIFY(!ambiguous.diagnostics.isEmpty());
     }
+
+    void acceptsMinimalFunctionTemplates()
+    {
+        const QString src = QStringLiteral(R"(
+            template <type T>
+            fn T id(T x) {
+                return x;
+            }
+
+            template <type T>
+            fn int vec_len(vector<T> xs) {
+                return xs.len();
+            }
+
+            template <type T>
+            fn T make_default() {
+                return 7;
+            }
+
+            fn int main() {
+                vector<int> xs = {1, 2, 3};
+                str s = id<str>("ab");
+                return id(4) + make_default<int>() + vec_len(xs) + s.len();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsBadFunctionTemplates()
+    {
+        auto badInstantiation = checkSource(QStringLiteral(R"(
+            template <type T>
+            fn int bad_return(T x) {
+                return x;
+            }
+
+            fn int main() {
+                return bad_return("nope");
+            }
+        )"));
+        QVERIFY(!badInstantiation.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(badInstantiation, QStringLiteral("cannot return str from function returning int")) >= 1);
+
+        auto leakedCallerScope = checkSource(QStringLiteral(R"(
+            template <type T>
+            fn int leak(T x) {
+                return y;
+            }
+
+            fn int main() {
+                int y = 5;
+                return leak(1);
+            }
+        )"));
+        QVERIFY(!leakedCallerScope.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(leakedCallerScope, QStringLiteral("unknown variable 'y'")) >= 1);
+
+        auto genericType = checkSource(QStringLiteral(R"(
+            type Bad = Box<int>;
+
+            fn int main() {
+                return 0;
+            }
+        )"));
+        QVERIFY(!genericType.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(genericType, QStringLiteral("generic named type 'Box' is reserved")) >= 1);
+    }
 };
 
 QTEST_MAIN(AbelTypeCheckerTests)

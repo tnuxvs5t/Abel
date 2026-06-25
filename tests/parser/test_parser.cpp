@@ -387,6 +387,51 @@ private slots:
         QCOMPARE(fn->name, QStringLiteral("operator +"));
         QCOMPARE(fn->params.size(), static_cast<size_t>(2));
     }
+
+    void parsesMinimalFunctionTemplate()
+    {
+        const QString src = QStringLiteral(R"(
+            template <type T>
+            fn T id(T x) {
+                return x;
+            }
+
+            fn int main() {
+                return id<int>(1);
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(2));
+
+        auto* fn = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[0].get());
+        QVERIFY(fn != nullptr);
+        QCOMPARE(fn->templateParams.size(), static_cast<size_t>(1));
+        QCOMPARE(fn->templateParams[0], QStringLiteral("T"));
+    }
+
+    void rejectsReservedTemplateConstraintSyntax()
+    {
+        auto parse = [](const QString& src) {
+            abel::Lexer lexer;
+            auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+            if (!lexed.diagnostics.isEmpty())
+                return lexed.diagnostics;
+            abel::Parser parser;
+            return parser.parse(lexed.tokens).diagnostics;
+        };
+
+        QVERIFY(!parse(QStringLiteral("interface Eq { } fn int main() { return 0; }")).isEmpty());
+        QVERIFY(!parse(QStringLiteral("require Eq<int>; fn int main() { return 0; }")).isEmpty());
+        QVERIFY(!parse(QStringLiteral("template <type T> struct Box { T value; } fn int main() { return 0; }")).isEmpty());
+    }
 };
 
 QTEST_MAIN(AbelParserTests)

@@ -66,7 +66,10 @@ private:
     QHash<QString, QList<BackendInfo>> m_backends;
     QHash<QString, QList<EnumInfo>> m_enums;
     QHash<QString, QList<const TypeAliasDeclNode*>> m_typeAliases;
+    QHash<QString, AbelType> m_templateTypes;
     QSet<QString> m_resolvingTypeAliases;
+    QSet<QString> m_checkingTemplateInstantiations;
+    QSet<QString> m_checkedTemplateInstantiations;
     QList<QHash<QString, VariableInfo>> m_scopes;
     QList<Diagnostic> m_diagnostics;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
@@ -169,7 +172,9 @@ private:
                                        const QList<const FunctionDeclNode*>& candidates,
                                        const std::vector<ExprType>& args,
                                        const std::vector<SourceSpan>& argSpans,
-                                       const SourceSpan& span);
+                                       const SourceSpan& span,
+                                       const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs = nullptr,
+                                       bool hasExplicitTypeArgs = false);
     ExprType checkMethodOverloadCall(const QString& displayName,
                                      const QList<const FunctionDeclNode*>& candidates,
                                      const ExprType& receiver,
@@ -208,6 +213,14 @@ private:
                                 const SourceSpan& argSpan,
                                 const QString& label);
     std::optional<int> scoreParameterArgument(const AbelType& paramType, const ExprType& arg) const;
+    std::optional<QHash<QString, AbelType>> bindFunctionTemplate(const FunctionDeclNode& fn,
+                                                                 const std::vector<ExprType>& args,
+                                                                 const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
+                                                                 bool hasExplicitTypeArgs);
+    bool inferTemplateTypes(const TypeNode& pattern, const ExprType& arg, QHash<QString, AbelType>& bindings);
+    bool bindTemplateTypeName(const QString& name, const AbelType& type, QHash<QString, AbelType>& bindings) const;
+    void checkTemplateDeclaration(const FunctionDeclNode& fn);
+    void checkTemplateInstantiation(const FunctionDeclNode& fn, const QHash<QString, AbelType>& bindings);
 
     void pushScope();
     void popScope();

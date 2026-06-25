@@ -577,8 +577,8 @@ AGENTS.md        本仓库 Agent 操作手册。
 
 ```text
 当前阶段：v1 complete 推进中。
-最新已知提交：94a2266 struct: add constructor and method overloads。
-本轮文档任务：README/TUTORIAL/CODEX/AGENTS 大换血，删除远古 v0 日志式内容；AGENTS 已重划 tight v1 complete 边界，明确 v1 最小完备闭环与 v2+ 非阻塞无底洞。
+最新已知提交：template: add minimal function templates（具体哈希以 `git log --oneline -1` 为准）。
+本轮代码任务：审查并收口当前未提交 template 实现；完成无约束函数模板第一片，含 parser/typechecker/interpreter 闭环、显式类型实参、参数推导、实例化检查隔离、reserved constraint/template type 诊断和矩阵测试。
 ```
 
 已完成的大块能力摘要：
@@ -594,6 +594,7 @@ runtime stack/source excerpt/debug/test diagnostics 第一片已落地。
 fixed-width ints、enum/type alias、const reference、readonly locations、struct public/private 已落地。
 std.str/std.vec/std.math/std.io/std.path/std.env/std.char/std.any/std.debug/std.test 多个切片已落地。
 用户二元 operator overload-set、普通函数 overload-set、struct constructor/method overload-set 第一片已落地。
+无约束普通函数 template 第一片已落地：`template <type T> fn ...`、`f<int>(...)` 显式实参、从参数推导 `T`、`vector<T>`/`func` 模式推导、按实例化检查函数体、解释器运行同构；template struct/type 与 template+interface/require 仍按 v1 边界收束。
 ```
 
 最近验证命令模板：
@@ -609,7 +610,7 @@ v1 complete 尚未达成。
 需要做 v1 承诺语法矩阵审计，确认没有 parser-only 幻影功能。
 backend overload 未完成，但仅要求 v1 本地 ABI 窗口内闭环，不追求 C++ 完整 overload。
 const pointer/reference/value-category 仍需 v1 最小矩阵收口；完整 lifetime proof 不进 v1。
-template v1 可做最简无约束形态；template+interface/require 不进 v1，interface 若未实现需稳定 reserved/not implemented 诊断。
+template v1 函数第一片已落地；template struct/type 尚未完成，当前给 reserved 诊断，若最终纳入 v1 complete 需补最简无约束类型/struct 单态化或重新收窄文档承诺；template+interface/require 不进 v1。
 package 只要求本地/file registry 完整闭环；HTTP/network registry、全球索引、签名发布不进 v1。
 diagnostic 需要矩阵验收；交互式 debugger/DAP 不进 v1。
 标准库只要求常用本地程序 API 稳定；regex/locale/streaming/view/GUI 不进 v1。

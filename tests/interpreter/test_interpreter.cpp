@@ -1839,6 +1839,37 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 39);
     }
+
+    void runsMinimalFunctionTemplates()
+    {
+        const QString src = QStringLiteral(R"(
+            template <type T>
+            fn T id(T x) {
+                return x;
+            }
+
+            template <type T>
+            fn int vec_len(vector<T> xs) {
+                return xs.len();
+            }
+
+            template <type T>
+            fn T make_value() {
+                return 5;
+            }
+
+            fn int main() {
+                vector<int> xs = {1, 2, 3};
+                str s = id<str>("ab");
+                return id(4) + make_value<int>() + vec_len(xs) + s.len();
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 14);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

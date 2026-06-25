@@ -3,6 +3,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <functional>
 #include <optional>
 
 namespace abel {
@@ -542,6 +543,78 @@ QStringList qualifySuggestions(const QString& kind, const QStringList& origins)
     return suggestions;
 }
 
+QString typePatternSignature(const TypeNode& node, const std::vector<QString>& templateParams)
+{
+    auto templateIndex = [&](const QString& name) -> int {
+        for (size_t i = 0; i < templateParams.size(); ++i) {
+            if (templateParams[i] == name)
+                return static_cast<int>(i);
+        }
+        return -1;
+    };
+
+    QString out;
+    if (node.isConst)
+        out += QStringLiteral("const ");
+    const int idx = templateIndex(node.name);
+    if (idx >= 0 && !node.elementType && node.functionParamTypes.empty() && node.typeArguments.empty()) {
+        out += QStringLiteral("$T%1").arg(idx);
+    } else if (node.name == QStringLiteral("vector") && node.elementType) {
+        out += QStringLiteral("vector<") + typePatternSignature(*node.elementType, templateParams) + QStringLiteral(">");
+    } else if (node.name == QStringLiteral("func") && node.elementType) {
+        out += QStringLiteral("func ") + typePatternSignature(*node.elementType, templateParams) + QStringLiteral("(");
+        for (size_t i = 0; i < node.functionParamTypes.size(); ++i) {
+            if (i > 0)
+                out += QStringLiteral(",");
+            out += typePatternSignature(*node.functionParamTypes[i], templateParams);
+        }
+        out += QStringLiteral(")");
+    } else {
+        out += node.name;
+        if (!node.typeArguments.empty()) {
+            out += QStringLiteral("<");
+            for (size_t i = 0; i < node.typeArguments.size(); ++i) {
+                if (i > 0)
+                    out += QStringLiteral(",");
+                out += typePatternSignature(*node.typeArguments[i], templateParams);
+            }
+            out += QStringLiteral(">");
+        }
+    }
+    for (int i = 0; i < node.pointerDepth; ++i)
+        out += QStringLiteral("*");
+    if (node.isReference)
+        out += QStringLiteral("&");
+    return out;
+}
+
+QString templateInstantiationKey(const FunctionDeclNode& fn, const QHash<QString, AbelType>& bindings)
+{
+    QStringList parts;
+    for (const QString& param : fn.templateParams)
+        parts.push_back(bindings.value(param, makeType(TypeKind::Unknown)).displayName());
+    return declarationQualifiedName(fn, fn.name) + QStringLiteral("<") + parts.join(QStringLiteral(",")) + QStringLiteral(">");
+}
+
+class TemplateTypeGuard {
+public:
+    TemplateTypeGuard(QHash<QString, AbelType>& current, const QHash<QString, AbelType>& next)
+        : m_current(current)
+        , m_previous(current)
+    {
+        m_current = next;
+    }
+
+    ~TemplateTypeGuard()
+    {
+        m_current = m_previous;
+    }
+
+private:
+    QHash<QString, AbelType>& m_current;
+    QHash<QString, AbelType> m_previous;
+};
+
 } // namespace
 
 TypeCheckResult TypeChecker::check(const ProgramNode& program)
@@ -553,6 +626,9 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     m_backends.clear();
     m_scopes.clear();
     m_diagnostics.clear();
+    m_templateTypes.clear();
+    m_checkingTemplateInstantiations.clear();
+    m_checkedTemplateInstantiations.clear();
     m_currentReturnType = makeType(TypeKind::Void);
     m_currentStruct.clear();
     m_currentPackage.clear();
@@ -579,8 +655,12 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
             error(main->span, QStringLiteral("main must not take parameters in v0"));
     }
 
-    for (const auto* fn : m_functionDecls)
-        checkFunction(*fn);
+    for (const auto* fn : m_functionDecls) {
+        if (!fn->templateParams.empty())
+            checkTemplateDeclaration(*fn);
+        else
+            checkFunction(*fn);
+    }
     for (const auto& candidates : m_typeAliases) {
         for (const TypeAliasDeclNode* alias : candidates)
             checkTypeAlias(*alias);
@@ -595,6 +675,26 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     }
 
     return {m_diagnostics};
+}
+
+void TypeChecker::checkTemplateDeclaration(const FunctionDeclNode& fn)
+{
+    if (fn.debt)
+        error(fn.span, QStringLiteral("function template '%1' cannot be debt in v1").arg(fn.name));
+    if (fn.isOperator)
+        error(fn.span, QStringLiteral("operator templates are not part of v1"));
+    if (fn.name == QStringLiteral("main"))
+        error(fn.span, QStringLiteral("main cannot be a function template"));
+    QSet<QString> seen;
+    for (const QString& param : fn.templateParams) {
+        if (param.isEmpty())
+            continue;
+        if (seen.contains(param))
+            error(fn.span, QStringLiteral("duplicate template type parameter '%1'").arg(param));
+        seen.insert(param);
+    }
+    if (fn.templateParams.empty())
+        error(fn.span, QStringLiteral("template function '%1' has no template parameters").arg(fn.name));
 }
 
 void TypeChecker::collectEnums(const ProgramNode& program)
@@ -775,15 +875,24 @@ bool TypeChecker::sameFunctionSignature(const FunctionDeclNode& lhs, const Funct
 {
     if (lhs.name != rhs.name)
         return false;
+    if (lhs.templateParams.size() != rhs.templateParams.size())
+        return false;
     if (lhs.params.size() != rhs.params.size())
         return false;
     for (size_t i = 0; i < lhs.params.size(); ++i) {
         if (lhs.params[i]->variadic != rhs.params[i]->variadic)
             return false;
-        const AbelType lhsType = typeFromAstForDecl(*lhs.params[i]->type, lhs, false);
-        const AbelType rhsType = typeFromAstForDecl(*rhs.params[i]->type, rhs, false);
-        if (lhsType != rhsType)
-            return false;
+        if (!lhs.templateParams.empty() || !rhs.templateParams.empty()) {
+            if (typePatternSignature(*lhs.params[i]->type, lhs.templateParams)
+                != typePatternSignature(*rhs.params[i]->type, rhs.templateParams)) {
+                return false;
+            }
+        } else {
+            const AbelType lhsType = typeFromAstForDecl(*lhs.params[i]->type, lhs, false);
+            const AbelType rhsType = typeFromAstForDecl(*rhs.params[i]->type, rhs, false);
+            if (lhsType != rhsType)
+                return false;
+        }
     }
     return true;
 }
@@ -1313,6 +1422,18 @@ AbelType TypeChecker::typeFromAstInCurrentPackage(const TypeNode& node)
 
 AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& packageName, bool diagnose)
 {
+    if (auto found = m_templateTypes.constFind(node.name); found != m_templateTypes.constEnd()) {
+        AbelType base = found.value();
+        if (!node.typeArguments.empty() && diagnose)
+            error(node.span, QStringLiteral("template type parameter '%1' cannot take type arguments").arg(node.name));
+        if (node.isConst)
+            base = makeConstType(base);
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
     if (node.name == QStringLiteral("vector") && node.elementType) {
         AbelType base = makeVectorType(typeFromAstInPackage(*node.elementType, packageName, diagnose));
         if (node.isConst)
@@ -1329,6 +1450,18 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
         for (const auto& param : node.functionParamTypes)
             params.push_back(typeFromAstInPackage(*param, packageName, diagnose));
         AbelType base = makeFunctionType(typeFromAstInPackage(*node.elementType, packageName, diagnose), std::move(params));
+        if (node.isConst)
+            base = makeConstType(base);
+        for (int i = 0; i < node.pointerDepth; ++i)
+            base = makePointerType(base);
+        if (node.isReference)
+            base = makeReferenceType(base);
+        return base;
+    }
+    if (!node.typeArguments.empty()) {
+        if (diagnose)
+            error(node.span, QStringLiteral("generic named type '%1' is reserved; v1 only supports vector<T> and function templates").arg(node.name));
+        AbelType base = makeType(TypeKind::Unknown);
         if (node.isConst)
             base = makeConstType(base);
         for (int i = 0; i < node.pointerDepth; ++i)
@@ -2323,7 +2456,9 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
                                                 const QList<const FunctionDeclNode*>& candidates,
                                                 const std::vector<ExprType>& args,
                                                 const std::vector<SourceSpan>& argSpans,
-                                                const SourceSpan& span)
+                                                const SourceSpan& span,
+                                                const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
+                                                bool hasExplicitTypeArgs)
 {
     Q_ASSERT(args.size() == argSpans.size());
     for (const ExprType& arg : args) {
@@ -2331,44 +2466,41 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
             return unknownExprType();
     }
 
-    const FunctionDeclNode* onlyOrdinary = nullptr;
-    int ordinaryCount = 0;
-    for (const FunctionDeclNode* fn : candidates) {
-        if (fn && !fn->isOperator) {
-            onlyOrdinary = fn;
-            ++ordinaryCount;
-        }
-    }
-    if (ordinaryCount == 1) {
-        const FunctionDeclNode& fn = *onlyOrdinary;
-        const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
-        const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
-        if ((!variadic && args.size() != fn.params.size()) || (variadic && args.size() < fixedCount))
-            return errorExpr(span, QStringLiteral("function '%1' called with wrong argument count").arg(displayName));
-        for (size_t i = 0; i < fixedCount; ++i) {
-            const ParameterNode& param = *fn.params[i];
-            const AbelType paramType = typeFromAstForDecl(*param.type, fn);
-            checkParameterArgument(paramType,
-                                   args[i],
-                                   argSpans[i],
-                                   QStringLiteral("parameter '%1'").arg(param.name));
-        }
-        return callReturnExprType(typeFromAstForDecl(*fn.returnType, fn));
-    }
+    struct Match {
+        const FunctionDeclNode* fn = nullptr;
+        QHash<QString, AbelType> bindings;
+        bool isTemplate = false;
+    };
 
-    QList<const FunctionDeclNode*> matches;
+    QList<Match> matches;
     QList<const FunctionDeclNode*> considered;
     int bestScore = 1'000'000;
     for (const FunctionDeclNode* fn : candidates) {
         if (!fn || fn->isOperator)
             continue;
         considered.push_back(fn);
+
+        QHash<QString, AbelType> bindings;
+        const bool isTemplate = !fn->templateParams.empty();
+        if (isTemplate) {
+            auto maybeBindings = bindFunctionTemplate(*fn, args, explicitTypeArgs, hasExplicitTypeArgs);
+            if (!maybeBindings)
+                continue;
+            bindings = std::move(*maybeBindings);
+        } else if (hasExplicitTypeArgs) {
+            continue;
+        }
+
+        std::unique_ptr<TemplateTypeGuard> guard;
+        if (isTemplate)
+            guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, bindings);
+
         const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
         const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
         if ((!variadic && args.size() != fn->params.size()) || (variadic && args.size() < fixedCount))
             continue;
 
-        int score = variadic ? 4 : 0;
+        int score = (variadic ? 4 : 0) + (isTemplate ? 1 : 0);
         bool ok = true;
         for (size_t i = 0; i < fixedCount; ++i) {
             const AbelType paramType = typeFromAstForDecl(*fn->params[i]->type, *fn);
@@ -2392,9 +2524,9 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
         if (score < bestScore) {
             bestScore = score;
             matches.clear();
-            matches.push_back(fn);
+            matches.push_back(Match{fn, bindings, isTemplate});
         } else if (score == bestScore) {
-            matches.push_back(fn);
+            matches.push_back(Match{fn, bindings, isTemplate});
         }
     }
 
@@ -2407,21 +2539,28 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
                              .arg(args.size()));
     }
     if (matches.size() > 1) {
-        const QStringList origins = declOriginList(matches, [](const FunctionDeclNode& fn) { return fn.name; });
+        QList<const FunctionDeclNode*> ambiguous;
+        for (const Match& match : matches)
+            ambiguous.push_back(match.fn);
+        const QStringList origins = declOriginList(ambiguous, [](const FunctionDeclNode& fn) { return fn.name; });
         bool sameSignatureAmbiguity = true;
-        for (qsizetype i = 1; i < matches.size(); ++i)
-            sameSignatureAmbiguity = sameSignatureAmbiguity && sameFunctionSignature(*matches.front(), *matches[i]);
+        for (qsizetype i = 1; i < ambiguous.size(); ++i)
+            sameSignatureAmbiguity = sameSignatureAmbiguity && sameFunctionSignature(*ambiguous.front(), *ambiguous[i]);
         errorDetailed(span,
                       sameSignatureAmbiguity
                           ? QStringLiteral("function '%1' is ambiguous across imported modules").arg(displayName)
                           : QStringLiteral("function '%1' overload is ambiguous").arg(displayName),
-                      declSpanList(matches),
+                      declSpanList(ambiguous),
                       ambiguityExplanation(QStringLiteral("function"), origins),
                       qualifySuggestions(QStringLiteral("function"), origins));
         return unknownExprType();
     }
 
-    const FunctionDeclNode* fn = matches.front();
+    const Match match = matches.front();
+    const FunctionDeclNode* fn = match.fn;
+    std::unique_ptr<TemplateTypeGuard> guard;
+    if (match.isTemplate)
+        guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, match.bindings);
     const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
     const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
     for (size_t i = 0; i < fixedCount; ++i) {
@@ -2432,6 +2571,8 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
                                argSpans[i],
                                QStringLiteral("parameter '%1'").arg(param.name));
     }
+    if (match.isTemplate)
+        checkTemplateInstantiation(*fn, match.bindings);
     return callReturnExprType(typeFromAstForDecl(*fn->returnType, *fn));
 }
 
@@ -2632,6 +2773,8 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
         return checkFunctionValueCall(checkExpr(*expr.callee).type, expr.args, expr.span);
 
     if (const VariableInfo* variable = lookupVariable(name->name)) {
+        if (expr.hasExplicitTypeArgs)
+            return errorExpr(expr.span, QStringLiteral("explicit template arguments require a function template"));
         const AbelType calleeType = valueTypeOfVariable(variable->type);
         if (calleeType.kind != TypeKind::Function)
             return errorExpr(expr.span, QStringLiteral("variable '%1' is not a function value").arg(name->name));
@@ -2639,6 +2782,8 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (const StructInfo* info = resolveStruct(name->name, name->span)) {
+        if (expr.hasExplicitTypeArgs)
+            return errorExpr(expr.span, QStringLiteral("generic struct construction is reserved; v1 only supports function templates"));
         return checkStructConstructorCall(name->name, *info, expr.args, expr.span);
     }
     if (m_structs.contains(name->name)) {
@@ -2659,10 +2804,12 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
         const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name->name, name->span);
         if (candidates.isEmpty())
             return unknownExprType();
-        return checkFunctionOverloadCall(name->name, candidates, checked, spans, expr.span);
+        return checkFunctionOverloadCall(name->name, candidates, checked, spans, expr.span, &expr.explicitTypeArgs, expr.hasExplicitTypeArgs);
     }
 
     if (m_builtins.hasFunction(name->name)) {
+        if (expr.hasExplicitTypeArgs)
+            return errorExpr(expr.span, QStringLiteral("builtin function '%1' is not a function template").arg(name->name));
         const qsizetype argc = static_cast<qsizetype>(expr.args.size());
         if (name->name == QStringLiteral("to_str")) {
             if (argc != 1)
@@ -3624,6 +3771,128 @@ std::optional<int> TypeChecker::scoreParameterArgument(const AbelType& paramType
     if (!isAssignable(paramType, arg.type))
         return std::nullopt;
     return paramType == arg.type ? 0 : 1;
+}
+
+bool TypeChecker::bindTemplateTypeName(const QString& name, const AbelType& type, QHash<QString, AbelType>& bindings) const
+{
+    auto found = bindings.find(name);
+    if (found == bindings.end())
+        return false;
+
+    AbelType normalized = type;
+    normalized.isConst = false;
+    if (found->kind == TypeKind::Unknown) {
+        *found = normalized;
+        return true;
+    }
+    return *found == normalized;
+}
+
+bool TypeChecker::inferTemplateTypes(const TypeNode& pattern, const ExprType& arg, QHash<QString, AbelType>& bindings)
+{
+    std::function<bool(const TypeNode&, AbelType)> inferNode = [&](const TypeNode& node, AbelType actual) -> bool {
+        for (int i = 0; i < node.pointerDepth; ++i) {
+            if (!actual.isPointer() || !actual.pointee)
+                return false;
+            actual = *actual.pointee;
+        }
+        if (node.isConst)
+            actual.isConst = false;
+
+        const bool bareTemplateParam = bindings.contains(node.name)
+            && !node.elementType
+            && node.functionParamTypes.empty()
+            && node.typeArguments.empty();
+        if (bareTemplateParam)
+            return bindTemplateTypeName(node.name, actual, bindings);
+
+        if (node.name == QStringLiteral("vector") && node.elementType) {
+            if (actual.kind != TypeKind::Vector || !actual.pointee)
+                return false;
+            return inferNode(*node.elementType, *actual.pointee);
+        }
+        if (node.name == QStringLiteral("func") && node.elementType) {
+            if (actual.kind != TypeKind::Function || !actual.pointee || actual.params.size() != node.functionParamTypes.size())
+                return false;
+            if (!inferNode(*node.elementType, *actual.pointee))
+                return false;
+            for (size_t i = 0; i < node.functionParamTypes.size(); ++i) {
+                if (!inferNode(*node.functionParamTypes[i], actual.params[i]))
+                    return false;
+            }
+            return true;
+        }
+        if (!node.typeArguments.empty())
+            return false;
+        return true;
+    };
+
+    return inferNode(pattern, arg.type);
+}
+
+std::optional<QHash<QString, AbelType>> TypeChecker::bindFunctionTemplate(
+    const FunctionDeclNode& fn,
+    const std::vector<ExprType>& args,
+    const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
+    bool hasExplicitTypeArgs)
+{
+    if (fn.templateParams.empty())
+        return std::nullopt;
+
+    QHash<QString, AbelType> bindings;
+    for (const QString& param : fn.templateParams)
+        bindings.insert(param, makeType(TypeKind::Unknown));
+
+    if (hasExplicitTypeArgs) {
+        if (!explicitTypeArgs)
+            return std::nullopt;
+        if (explicitTypeArgs->size() > fn.templateParams.size())
+            return std::nullopt;
+        for (size_t i = 0; i < explicitTypeArgs->size(); ++i)
+            bindings[fn.templateParams[i]] = typeFromAstForDecl(*(*explicitTypeArgs)[i], fn);
+    }
+
+    const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
+    const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
+    if ((!variadic && args.size() != fn.params.size()) || (variadic && args.size() < fixedCount))
+        return std::nullopt;
+
+    for (size_t i = 0; i < fixedCount; ++i) {
+        if (!inferTemplateTypes(*fn.params[i]->type, args[i], bindings))
+            return std::nullopt;
+    }
+
+    for (const QString& param : fn.templateParams) {
+        if (bindings.value(param).kind == TypeKind::Unknown)
+            return std::nullopt;
+    }
+    return bindings;
+}
+
+void TypeChecker::checkTemplateInstantiation(const FunctionDeclNode& fn, const QHash<QString, AbelType>& bindings)
+{
+    const QString key = templateInstantiationKey(fn, bindings);
+    if (m_checkedTemplateInstantiations.contains(key) || m_checkingTemplateInstantiations.contains(key))
+        return;
+
+    m_checkingTemplateInstantiations.insert(key);
+    {
+        TemplateTypeGuard guard(m_templateTypes, bindings);
+        const AbelType previousReturnType = m_currentReturnType;
+        const QString previousStruct = m_currentStruct;
+        const int previousLoopDepth = m_loopDepth;
+        const QList<QHash<QString, VariableInfo>> previousScopes = m_scopes;
+        m_currentStruct.clear();
+        m_loopDepth = 0;
+        m_scopes.clear();
+        checkFunction(fn);
+        m_scopes = previousScopes;
+        m_loopDepth = previousLoopDepth;
+        m_currentStruct = previousStruct;
+        m_currentReturnType = previousReturnType;
+    }
+    m_checkingTemplateInstantiations.remove(key);
+    m_checkedTemplateInstantiations.insert(key);
 }
 
 void TypeChecker::pushScope()
