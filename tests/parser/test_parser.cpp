@@ -417,6 +417,49 @@ private slots:
         QCOMPARE(fn->templateParams[0], QStringLiteral("T"));
     }
 
+    void parsesMinimalStructAndTypeTemplates()
+    {
+        const QString src = QStringLiteral(R"(
+            template <type T>
+            struct Box {
+                T value;
+            }
+
+            template <type T>
+            type Bag = vector<T>;
+
+            fn int main() {
+                Box<int> b = Box<int>(1);
+                Bag<int> xs = {b.value};
+                return xs[0];
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(3));
+
+        auto* box = dynamic_cast<abel::StructDeclNode*>(parsed.program->declarations[0].get());
+        auto* bag = dynamic_cast<abel::TypeAliasDeclNode*>(parsed.program->declarations[1].get());
+        QVERIFY(box != nullptr);
+        QVERIFY(bag != nullptr);
+        QCOMPARE(box->templateParams.size(), static_cast<size_t>(1));
+        QCOMPARE(bag->templateParams.size(), static_cast<size_t>(1));
+
+        auto* mainFn = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[2].get());
+        QVERIFY(mainFn != nullptr);
+        QVERIFY(mainFn->body != nullptr);
+        QCOMPARE(mainFn->body->statements.size(), static_cast<size_t>(3));
+        QVERIFY(dynamic_cast<abel::VarDeclStmtNode*>(mainFn->body->statements[0].get()) != nullptr);
+        QVERIFY(dynamic_cast<abel::VarDeclStmtNode*>(mainFn->body->statements[1].get()) != nullptr);
+    }
+
     void rejectsReservedTemplateConstraintSyntax()
     {
         auto parse = [](const QString& src) {
@@ -430,7 +473,7 @@ private slots:
 
         QVERIFY(!parse(QStringLiteral("interface Eq { } fn int main() { return 0; }")).isEmpty());
         QVERIFY(!parse(QStringLiteral("require Eq<int>; fn int main() { return 0; }")).isEmpty());
-        QVERIFY(!parse(QStringLiteral("template <type T> struct Box { T value; } fn int main() { return 0; }")).isEmpty());
+        QVERIFY(!parse(QStringLiteral("template <type T> interface Eq { } fn int main() { return 0; }")).isEmpty());
     }
 };
 

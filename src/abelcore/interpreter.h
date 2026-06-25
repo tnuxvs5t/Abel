@@ -60,6 +60,7 @@ private:
     QHash<QString, QList<EnumRuntimeInfo>> m_enums;
     QHash<QString, QList<const TypeAliasDeclNode*>> m_typeAliases;
     QHash<QString, AbelType> m_templateTypes;
+    QHash<QString, QHash<QString, AbelType>> m_structTemplateInstantiations;
     QSet<QString> m_resolvingTypeAliases;
     BackendRegistry m_backendRegistry;
     BackendRegistry* m_activeBackendRegistry = nullptr;
@@ -98,6 +99,15 @@ private:
     AbelType typeFromAstInCurrentPackage(const TypeNode& node);
     AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName);
     AbelType typeFromAstForDecl(const TypeNode& node, const DeclNode& decl);
+    std::optional<QHash<QString, AbelType>> bindTypeTemplateParams(const std::vector<QString>& params,
+                                                                   const std::vector<std::unique_ptr<TypeNode>>& args,
+                                                                   const DeclNode& decl,
+                                                                   const SourceSpan& span);
+    QString templateTypeInstantiationName(const DeclNode& decl,
+                                          const QString& name,
+                                          const std::vector<QString>& params,
+                                          const QHash<QString, AbelType>& bindings) const;
+    std::optional<QHash<QString, AbelType>> structTemplateBindingsForType(const StructDeclNode& decl, const AbelType& type) const;
     ExecResult callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args);
     ExecResult callFunctionExpr(const FunctionDeclNode& fn, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExecResult callFunctionPipeExpr(const FunctionDeclNode& fn,
@@ -181,12 +191,17 @@ private:
                                              const SourceSpan& span);
     AbelValue evalLambda(const LambdaExprNode& expr);
     AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
-    AbelValue evalStructConstructor(const QString& name, const StructRuntimeInfo& info, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    AbelValue evalStructConstructor(const QString& name,
+                                    const StructRuntimeInfo& info,
+                                    const std::vector<std::unique_ptr<ExprNode>>& args,
+                                    const SourceSpan& span,
+                                    const AbelType* constructedType = nullptr);
     AbelValue evalStructConstructorPrepared(const QString& name,
                                             const StructRuntimeInfo& info,
                                             const ConstructorDeclNode* ctor,
                                             const std::vector<PreparedCallArg>& args,
-                                            const SourceSpan& span);
+                                            const SourceSpan& span,
+                                            const AbelType* constructedType = nullptr);
     AbelValue evalStructMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     AbelValue evalAssignment(const AssignExprNode& expr);
     AbelValue defaultConstructValue(const AbelType& type, const SourceSpan& span);

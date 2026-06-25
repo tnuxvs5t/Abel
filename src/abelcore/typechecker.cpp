@@ -596,6 +596,17 @@ QString templateInstantiationKey(const FunctionDeclNode& fn, const QHash<QString
     return declarationQualifiedName(fn, fn.name) + QStringLiteral("<") + parts.join(QStringLiteral(",")) + QStringLiteral(">");
 }
 
+AbelType applyTypeDecorations(AbelType base, const TypeNode& node)
+{
+    if (node.isConst)
+        base = makeConstType(base);
+    for (int i = 0; i < node.pointerDepth; ++i)
+        base = makePointerType(base);
+    if (node.isReference)
+        base = makeReferenceType(base);
+    return base;
+}
+
 class TemplateTypeGuard {
 public:
     TemplateTypeGuard(QHash<QString, AbelType>& current, const QHash<QString, AbelType>& next)
@@ -627,6 +638,7 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     m_scopes.clear();
     m_diagnostics.clear();
     m_templateTypes.clear();
+    m_structTemplateInstantiations.clear();
     m_checkingTemplateInstantiations.clear();
     m_checkedTemplateInstantiations.clear();
     m_currentReturnType = makeType(TypeKind::Void);
@@ -661,13 +673,35 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
         else
             checkFunction(*fn);
     }
+    auto checkTemplateParamList = [&](const std::vector<QString>& params, const SourceSpan& span, const QString& kind) {
+        if (params.empty()) {
+            error(span, QStringLiteral("%1 template requires at least one type parameter").arg(kind));
+            return;
+        }
+        QSet<QString> seen;
+        for (const QString& param : params) {
+            if (seen.contains(param))
+                error(span, QStringLiteral("duplicate template type parameter '%1'").arg(param));
+            seen.insert(param);
+        }
+    };
     for (const auto& candidates : m_typeAliases) {
-        for (const TypeAliasDeclNode* alias : candidates)
-            checkTypeAlias(*alias);
+        for (const TypeAliasDeclNode* alias : candidates) {
+            if (!alias->templateParams.empty())
+                checkTemplateParamList(alias->templateParams, alias->span, QStringLiteral("type alias"));
+            else
+                checkTypeAlias(*alias);
+        }
     }
     for (const auto& candidates : m_structs) {
-        for (const auto& info : candidates)
-            checkStruct(*info.decl);
+        for (const auto& info : candidates) {
+            if (!info.decl)
+                continue;
+            if (!info.decl->templateParams.empty())
+                checkTemplateParamList(info.decl->templateParams, info.decl->span, QStringLiteral("struct"));
+            else
+                checkStruct(*info.decl);
+        }
     }
     for (const auto& candidates : m_backends) {
         for (const auto& info : candidates)
@@ -812,6 +846,10 @@ void TypeChecker::collectStructs(const ProgramNode& program)
             for (const auto& field : s->fields) {
                 if (info.fields.contains(field->name)) {
                     error(field->span, QStringLiteral("duplicate field '%1'").arg(field->name));
+                    continue;
+                }
+                if (!s->templateParams.empty()) {
+                    info.fields.insert(field->name, FieldInfo{makeType(TypeKind::Unknown), field->type->isConst, field->isPrivate});
                     continue;
                 }
                 AbelType type = typeFromAstForDecl(*field->type, *s, false);
@@ -1199,6 +1237,11 @@ const TypeChecker::StructInfo* TypeChecker::structInfoForType(const AbelType& ty
                 continue;
             if (structTypeName(*info.decl) == type.spelling)
                 return &info;
+            if (!info.decl->templateParams.empty()
+                && m_structTemplateInstantiations.contains(type.spelling)
+                && type.spelling.startsWith(structTypeName(*info.decl) + QStringLiteral("<"))) {
+                return &info;
+            }
         }
     }
     return nullptr;
@@ -1420,29 +1463,80 @@ AbelType TypeChecker::typeFromAstInCurrentPackage(const TypeNode& node)
     return typeFromAstInPackage(node, m_currentPackage);
 }
 
+std::optional<QHash<QString, AbelType>> TypeChecker::bindTypeTemplateParams(
+    const std::vector<QString>& params,
+    const std::vector<std::unique_ptr<TypeNode>>& args,
+    const DeclNode& decl,
+    const SourceSpan& span,
+    bool diagnose)
+{
+    if (args.size() != params.size()) {
+        if (diagnose)
+            error(span,
+                  QStringLiteral("template '%1' expects %2 type argument(s), got %3")
+                      .arg(declOrigin(decl, QStringLiteral("type")))
+                      .arg(params.size())
+                      .arg(args.size()));
+        return std::nullopt;
+    }
+
+    QHash<QString, AbelType> bindings;
+    for (size_t i = 0; i < params.size(); ++i)
+        bindings.insert(params[i], typeFromAstForDecl(*args[i], decl, diagnose));
+    return bindings;
+}
+
+QString TypeChecker::templateTypeInstantiationName(const DeclNode& decl,
+                                                   const QString& name,
+                                                   const std::vector<QString>& params,
+                                                   const QHash<QString, AbelType>& bindings) const
+{
+    QStringList parts;
+    for (const QString& param : params)
+        parts.push_back(bindings.value(param, makeType(TypeKind::Unknown)).displayName());
+    return declarationQualifiedName(decl, name) + QStringLiteral("<") + parts.join(QStringLiteral(",")) + QStringLiteral(">");
+}
+
+std::optional<QHash<QString, AbelType>> TypeChecker::structTemplateBindingsForType(const StructDeclNode& decl, const AbelType& type) const
+{
+    if (decl.templateParams.empty())
+        return QHash<QString, AbelType>{};
+    auto found = m_structTemplateInstantiations.constFind(type.spelling);
+    if (found == m_structTemplateInstantiations.constEnd())
+        return std::nullopt;
+    return found.value();
+}
+
+TypeChecker::FieldInfo TypeChecker::fieldInfoForStructField(const StructInfo& info,
+                                                            const AbelType& structType,
+                                                            const FieldDeclNode& field)
+{
+    if (!info.decl || info.decl->templateParams.empty()) {
+        auto found = info.fields.constFind(field.name);
+        if (found != info.fields.constEnd())
+            return found.value();
+        return FieldInfo{makeType(TypeKind::Unknown), field.type->isConst, field.isPrivate};
+    }
+
+    auto bindings = structTemplateBindingsForType(*info.decl, structType);
+    if (!bindings)
+        return FieldInfo{makeType(TypeKind::Unknown), field.type->isConst, field.isPrivate};
+    TemplateTypeGuard guard(m_templateTypes, *bindings);
+    AbelType type = typeFromAstForDecl(*field.type, *info.decl);
+    return FieldInfo{type, isReadOnlyBinding(type, field.type->isConst), field.isPrivate};
+}
+
 AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& packageName, bool diagnose)
 {
     if (auto found = m_templateTypes.constFind(node.name); found != m_templateTypes.constEnd()) {
         AbelType base = found.value();
         if (!node.typeArguments.empty() && diagnose)
             error(node.span, QStringLiteral("template type parameter '%1' cannot take type arguments").arg(node.name));
-        if (node.isConst)
-            base = makeConstType(base);
-        for (int i = 0; i < node.pointerDepth; ++i)
-            base = makePointerType(base);
-        if (node.isReference)
-            base = makeReferenceType(base);
-        return base;
+        return applyTypeDecorations(base, node);
     }
     if (node.name == QStringLiteral("vector") && node.elementType) {
         AbelType base = makeVectorType(typeFromAstInPackage(*node.elementType, packageName, diagnose));
-        if (node.isConst)
-            base = makeConstType(base);
-        for (int i = 0; i < node.pointerDepth; ++i)
-            base = makePointerType(base);
-        if (node.isReference)
-            base = makeReferenceType(base);
-        return base;
+        return applyTypeDecorations(base, node);
     }
     if (node.name == QStringLiteral("func") && node.elementType) {
         std::vector<AbelType> params;
@@ -1450,28 +1544,56 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
         for (const auto& param : node.functionParamTypes)
             params.push_back(typeFromAstInPackage(*param, packageName, diagnose));
         AbelType base = makeFunctionType(typeFromAstInPackage(*node.elementType, packageName, diagnose), std::move(params));
-        if (node.isConst)
-            base = makeConstType(base);
-        for (int i = 0; i < node.pointerDepth; ++i)
-            base = makePointerType(base);
-        if (node.isReference)
-            base = makeReferenceType(base);
-        return base;
+        return applyTypeDecorations(base, node);
     }
     if (!node.typeArguments.empty()) {
+        if (const TypeAliasDeclNode* alias = resolveTypeAlias(node.name, packageName, node.span, diagnose)) {
+            if (alias->templateParams.empty()) {
+                if (diagnose)
+                    error(node.span, QStringLiteral("type alias '%1' is not a template").arg(node.name));
+                return applyTypeDecorations(makeType(TypeKind::Unknown), node);
+            }
+            auto bindings = bindTypeTemplateParams(alias->templateParams, node.typeArguments, *alias, node.span, diagnose);
+            if (!bindings)
+                return applyTypeDecorations(makeType(TypeKind::Unknown), node);
+            const QString key = templateTypeInstantiationName(*alias, alias->name, alias->templateParams, *bindings);
+            if (m_resolvingTypeAliases.contains(key)) {
+                if (diagnose)
+                    error(node.span, QStringLiteral("recursive type alias '%1'").arg(alias->name));
+                return applyTypeDecorations(makeType(TypeKind::Unknown), node);
+            }
+            m_resolvingTypeAliases.insert(key);
+            TemplateTypeGuard guard(m_templateTypes, *bindings);
+            AbelType base = typeFromAstForDecl(*alias->targetType, *alias, diagnose);
+            m_resolvingTypeAliases.remove(key);
+            return applyTypeDecorations(base, node);
+        }
+
+        if (const StructInfo* info = resolveStruct(node.name, node.span, diagnose)) {
+            if (!info->decl || info->decl->templateParams.empty()) {
+                if (diagnose)
+                    error(node.span, QStringLiteral("struct '%1' is not a template").arg(node.name));
+                return applyTypeDecorations(makeType(TypeKind::Unknown), node);
+            }
+            auto bindings = bindTypeTemplateParams(info->decl->templateParams, node.typeArguments, *info->decl, node.span, diagnose);
+            if (!bindings)
+                return applyTypeDecorations(makeType(TypeKind::Unknown), node);
+            const QString name = templateTypeInstantiationName(*info->decl, info->decl->name, info->decl->templateParams, *bindings);
+            m_structTemplateInstantiations.insert(name, *bindings);
+            return applyTypeDecorations(makeStructType(name), node);
+        }
+
         if (diagnose)
-            error(node.span, QStringLiteral("generic named type '%1' is reserved; v1 only supports vector<T> and function templates").arg(node.name));
-        AbelType base = makeType(TypeKind::Unknown);
-        if (node.isConst)
-            base = makeConstType(base);
-        for (int i = 0; i < node.pointerDepth; ++i)
-            base = makePointerType(base);
-        if (node.isReference)
-            base = makeReferenceType(base);
-        return base;
+            error(node.span, QStringLiteral("unknown generic type '%1'").arg(node.name));
+        return applyTypeDecorations(makeType(TypeKind::Unknown), node);
     }
 
     if (const TypeAliasDeclNode* alias = resolveTypeAlias(node.name, packageName, node.span, diagnose)) {
+        if (!alias->templateParams.empty()) {
+            if (diagnose)
+                error(node.span, QStringLiteral("template type alias '%1' requires type arguments").arg(node.name));
+            return applyTypeDecorations(makeType(TypeKind::Unknown), node);
+        }
         const QString key = declarationQualifiedName(*alias, alias->name);
         if (m_resolvingTypeAliases.contains(key)) {
             if (diagnose)
@@ -1481,13 +1603,7 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
         m_resolvingTypeAliases.insert(key);
         AbelType base = typeFromAstForDecl(*alias->targetType, *alias, diagnose);
         m_resolvingTypeAliases.remove(key);
-        if (node.isConst)
-            base = makeConstType(base);
-        for (int i = 0; i < node.pointerDepth; ++i)
-            base = makePointerType(base);
-        if (node.isReference)
-            base = makeReferenceType(base);
-        return base;
+        return applyTypeDecorations(base, node);
     }
 
     const EnumInfo* enumInfo = nullptr;
@@ -1497,31 +1613,30 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
         enumInfo = resolveEnumInPackage(node.name, packageName, node.span, false);
     if (const EnumInfo* info = enumInfo) {
         AbelType base = makeType(TypeKind::I32, info->decl ? info->decl->name : node.name);
-        if (node.isConst)
-            base = makeConstType(base);
-        for (int i = 0; i < node.pointerDepth; ++i)
-            base = makePointerType(base);
-        if (node.isReference)
-            base = makeReferenceType(base);
-        return base;
+        return applyTypeDecorations(base, node);
     }
 
     AbelType base = typeFromName(node.name);
     if (base.kind == TypeKind::Struct) {
         if (const auto qualified = splitQualifiedSymbol(node.name)) {
-            if (const StructInfo* info = resolveStructInModule(qualified->first, qualified->second, node.span, diagnose))
+            if (const StructInfo* info = resolveStructInModule(qualified->first, qualified->second, node.span, diagnose)) {
+                if (info->decl && !info->decl->templateParams.empty()) {
+                    if (diagnose)
+                        error(node.span, QStringLiteral("template struct '%1' requires type arguments").arg(node.name));
+                    return applyTypeDecorations(makeType(TypeKind::Unknown), node);
+                }
                 base = makeStructType(structTypeName(*info->decl));
+            }
         } else if (const StructInfo* info = resolveStructInPackage(node.name, packageName, node.span, diagnose)) {
+            if (info->decl && !info->decl->templateParams.empty()) {
+                if (diagnose)
+                    error(node.span, QStringLiteral("template struct '%1' requires type arguments").arg(node.name));
+                return applyTypeDecorations(makeType(TypeKind::Unknown), node);
+            }
             base = makeStructType(structTypeName(*info->decl));
         }
     }
-    if (node.isConst)
-        base = makeConstType(base);
-    for (int i = 0; i < node.pointerDepth; ++i)
-        base = makePointerType(base);
-    if (node.isReference)
-        base = makeReferenceType(base);
-    return base;
+    return applyTypeDecorations(base, node);
 }
 
 AbelType TypeChecker::typeFromAstForDecl(const TypeNode& node, const DeclNode& decl, bool diagnose)
@@ -1611,14 +1726,32 @@ void TypeChecker::checkBackend(const BackendBlockNode& backend)
     }
 }
 
-void TypeChecker::checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor)
+void TypeChecker::checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor, const AbelType* selfType)
 {
+    const AbelType previousReturnType = m_currentReturnType;
+    const QString previousStruct = m_currentStruct;
+    std::unique_ptr<TemplateTypeGuard> templateGuard;
+    if (selfType && !owner.templateParams.empty()) {
+        auto bindings = structTemplateBindingsForType(owner, *selfType);
+        if (bindings)
+            templateGuard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
+    }
     m_currentReturnType = makeType(TypeKind::Void);
     m_currentStruct = structTypeName(owner);
     pushScope();
     defineVariable(QStringLiteral("this"), makePointerType(makeStructType(structTypeName(owner))), false, owner.span);
-    for (const auto& field : owner.fields)
-        defineVariable(field->name, typeFromAstInCurrentPackage(*field->type), field->type->isConst, field->span);
+    for (const auto& field : owner.fields) {
+        AbelType fieldType = typeFromAstInCurrentPackage(*field->type);
+        bool fieldConst = field->type->isConst;
+        if (selfType && !owner.templateParams.empty()) {
+            if (const StructInfo* info = structInfoForType(*selfType)) {
+                const FieldInfo concreteField = fieldInfoForStructField(*info, *selfType, *field);
+                fieldType = concreteField.type;
+                fieldConst = concreteField.isConst;
+            }
+        }
+        defineVariable(field->name, fieldType, fieldConst, field->span);
+    }
     for (const auto& param : ctor.params) {
         AbelType paramType = typeFromAstInCurrentPackage(*param->type);
         if (!isSupportedType(paramType))
@@ -1630,23 +1763,44 @@ void TypeChecker::checkConstructor(const StructDeclNode& owner, const Constructo
     }
     checkBlock(*ctor.body, false);
     popScope();
-    m_currentStruct.clear();
+    m_currentStruct = previousStruct;
+    m_currentReturnType = previousReturnType;
 }
 
-void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNode& method)
+void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNode& method, const AbelType* selfType)
 {
+    const AbelType previousReturnType = m_currentReturnType;
+    const QString previousStruct = m_currentStruct;
+    std::unique_ptr<TemplateTypeGuard> templateGuard;
+    if (selfType && !owner.templateParams.empty()) {
+        auto bindings = structTemplateBindingsForType(owner, *selfType);
+        if (bindings)
+            templateGuard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
+    }
     const qsizetype diagnosticsBeforeCallable = m_diagnostics.size();
     const AbelType returnType = typeFromAstInCurrentPackage(*method.returnType);
     if (!isSupportedType(returnType)) {
         error(method.returnType->span, QStringLiteral("unsupported return type '%1'").arg(method.returnType->displayName()));
+        m_currentReturnType = previousReturnType;
+        m_currentStruct = previousStruct;
         return;
     }
     m_currentReturnType = returnType;
     m_currentStruct = structTypeName(owner);
     pushScope();
     defineVariable(QStringLiteral("this"), makePointerType(makeStructType(structTypeName(owner))), method.isConstMethod, method.span);
-    for (const auto& field : owner.fields)
-        defineVariable(field->name, typeFromAstInCurrentPackage(*field->type), method.isConstMethod || field->type->isConst, field->span);
+    for (const auto& field : owner.fields) {
+        AbelType fieldType = typeFromAstInCurrentPackage(*field->type);
+        bool fieldConst = field->type->isConst;
+        if (selfType && !owner.templateParams.empty()) {
+            if (const StructInfo* info = structInfoForType(*selfType)) {
+                const FieldInfo concreteField = fieldInfoForStructField(*info, *selfType, *field);
+                fieldType = concreteField.type;
+                fieldConst = concreteField.isConst;
+            }
+        }
+        defineVariable(field->name, fieldType, method.isConstMethod || fieldConst, field->span);
+    }
     for (const auto& param : method.params) {
         AbelType paramType = typeFromAstInCurrentPackage(*param->type);
         if (!isSupportedType(paramType))
@@ -1667,7 +1821,8 @@ void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNod
                   .arg(method.name, returnType.displayName()));
     }
     popScope();
-    m_currentStruct.clear();
+    m_currentStruct = previousStruct;
+    m_currentReturnType = previousReturnType;
 }
 
 void TypeChecker::checkFunction(const FunctionDeclNode& fn)
@@ -2617,6 +2772,15 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
                                    spans[i],
                                    QStringLiteral("method parameter '%1'").arg(param.name));
         }
+        if (method->templateParams.empty() && receiver.type.kind == TypeKind::Struct) {
+            if (const StructInfo* owner = structInfoForType(receiver.type); owner && owner->decl && !owner->decl->templateParams.empty()) {
+                std::unique_ptr<TemplateTypeGuard> methodGuard;
+                auto bindings = structTemplateBindingsForType(*owner->decl, receiver.type);
+                if (bindings)
+                    methodGuard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
+                checkMethod(*owner->decl, *method, &receiver.type);
+            }
+        }
         return callReturnExprType(typeFromAstForDecl(*method->returnType, *method));
     }
 
@@ -2696,6 +2860,13 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
                                spans[i],
                                QStringLiteral("method parameter '%1'").arg(param.name));
     }
+    if (const StructInfo* owner = structInfoForType(receiver.type); owner && owner->decl && !owner->decl->templateParams.empty()) {
+        std::unique_ptr<TemplateTypeGuard> methodGuard;
+        auto bindings = structTemplateBindingsForType(*owner->decl, receiver.type);
+        if (bindings)
+            methodGuard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
+        checkMethod(*owner->decl, *method, &receiver.type);
+    }
     return callReturnExprType(typeFromAstForDecl(*method->returnType, *method));
 }
 
@@ -2763,6 +2934,13 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             const QList<const FunctionDeclNode*> methods = info->methods.value(field->field);
             if (methods.isEmpty())
                 return errorExpr(field->span, QStringLiteral("unknown method '%1' on %2").arg(field->field, receiver.type.displayName()));
+            std::unique_ptr<TemplateTypeGuard> guard;
+            if (info->decl && !info->decl->templateParams.empty()) {
+                auto bindings = structTemplateBindingsForType(*info->decl, receiver.type);
+                if (!bindings)
+                    return errorExpr(field->span, QStringLiteral("unknown struct template instantiation '%1'").arg(receiver.type.displayName()));
+                guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
+            }
             return checkMethodOverloadCall(field->field, methods, receiver, expr.args, expr.span);
         }
         return checkBuiltinMethodCall(*field, expr.args);
@@ -2782,8 +2960,20 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (const StructInfo* info = resolveStruct(name->name, name->span)) {
-        if (expr.hasExplicitTypeArgs)
-            return errorExpr(expr.span, QStringLiteral("generic struct construction is reserved; v1 only supports function templates"));
+        if (expr.hasExplicitTypeArgs) {
+            if (!info->decl || info->decl->templateParams.empty())
+                return errorExpr(expr.span, QStringLiteral("struct '%1' is not a template").arg(name->name));
+            auto bindings = bindTypeTemplateParams(info->decl->templateParams, expr.explicitTypeArgs, *info->decl, expr.span, true);
+            if (!bindings)
+                return unknownExprType();
+            const QString instantiatedName = templateTypeInstantiationName(*info->decl, info->decl->name, info->decl->templateParams, *bindings);
+            m_structTemplateInstantiations.insert(instantiatedName, *bindings);
+            TemplateTypeGuard guard(m_templateTypes, *bindings);
+            AbelType resultType = makeStructType(instantiatedName);
+            return checkStructConstructorCall(name->name, *info, expr.args, expr.span, &resultType);
+        }
+        if (info->decl && !info->decl->templateParams.empty())
+            return errorExpr(expr.span, QStringLiteral("template struct '%1' construction requires explicit type arguments").arg(name->name));
         return checkStructConstructorCall(name->name, *info, expr.args, expr.span);
     }
     if (m_structs.contains(name->name)) {
@@ -3091,19 +3281,21 @@ ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee,
 ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                                                  const StructInfo& info,
                                                  const std::vector<std::unique_ptr<ExprNode>>& args,
-                                                 const SourceSpan& span)
+                                                 const SourceSpan& span,
+                                                 const AbelType* constructedType)
 {
+    const AbelType resultType = constructedType ? *constructedType : makeStructType(structTypeName(*info.decl));
     const size_t argc = args.size();
     if (info.constructors.isEmpty()) {
         if (argc == 0) {
-            if (!isDefaultConstructible(makeStructType(structTypeName(*info.decl))))
+            if (!isDefaultConstructible(resultType))
                 return errorExpr(span, QStringLiteral("constructor '%1' is not default-constructible").arg(displayName));
         } else {
             if (argc != info.fields.size())
                 return errorExpr(span, QStringLiteral("constructor '%1' expects 0 or %2 argument(s)").arg(displayName).arg(info.fields.size()));
             for (size_t i = 0; i < argc; ++i) {
                 const QString& fieldName = info.decl->fields[i]->name;
-                const FieldInfo field = info.fields.value(fieldName);
+                const FieldInfo field = fieldInfoForStructField(info, resultType, *info.decl->fields[i]);
                 if (field.isPrivate && m_currentStruct != structTypeName(*info.decl)) {
                     error(args[i]->span, QStringLiteral("field '%1' is private").arg(fieldName));
                     continue;
@@ -3113,7 +3305,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                     error(args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
             }
         }
-        return {makeStructType(structTypeName(*info.decl)), ValueCategory::PRValue, false};
+        return {resultType, ValueCategory::PRValue, false};
     }
 
     std::vector<ExprType> checked;
@@ -3145,7 +3337,14 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                                    spans[i],
                                    QStringLiteral("constructor parameter '%1'").arg(param.name));
         }
-        return {makeStructType(structTypeName(*info.decl)), ValueCategory::PRValue, false};
+        if (info.decl->templateParams.empty() == false) {
+            std::unique_ptr<TemplateTypeGuard> ctorGuard;
+            auto bindings = structTemplateBindingsForType(*info.decl, resultType);
+            if (bindings)
+                ctorGuard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
+            checkConstructor(*info.decl, *ctor, &resultType);
+        }
+        return {resultType, ValueCategory::PRValue, false};
     }
 
     QList<const ConstructorDeclNode*> matches;
@@ -3219,7 +3418,14 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                                spans[i],
                                QStringLiteral("constructor parameter '%1'").arg(param.name));
     }
-    return {makeStructType(structTypeName(*info.decl)), ValueCategory::PRValue, false};
+    if (info.decl->templateParams.empty() == false) {
+        std::unique_ptr<TemplateTypeGuard> ctorGuard;
+        auto bindings = structTemplateBindingsForType(*info.decl, resultType);
+        if (bindings)
+            ctorGuard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
+        checkConstructor(*info.decl, *ctor, &resultType);
+    }
+    return {resultType, ValueCategory::PRValue, false};
 }
 
 ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
@@ -3964,8 +4170,17 @@ normalFieldAccess:
         return errorExpr(expr.span, QStringLiteral("unknown struct type '%1'").arg(objectType.displayName()));
     if (!info->fields.contains(expr.field))
         return errorExpr(expr.span, QStringLiteral("unknown field '%1' on %2").arg(expr.field, objectType.displayName()));
-    const FieldInfo field = info->fields.value(expr.field);
-    if (field.isPrivate && m_currentStruct != structTypeName(*info->decl))
+    const FieldDeclNode* fieldDecl = nullptr;
+    for (const auto& candidate : info->decl->fields) {
+        if (candidate->name == expr.field) {
+            fieldDecl = candidate.get();
+            break;
+        }
+    }
+    if (!fieldDecl)
+        return errorExpr(expr.span, QStringLiteral("unknown field '%1' on %2").arg(expr.field, objectType.displayName()));
+    const FieldInfo field = fieldInfoForStructField(*info, objectType, *fieldDecl);
+    if (field.isPrivate && m_currentStruct != structTypeName(*info->decl) && m_currentStruct != objectType.spelling)
         return errorExpr(expr.span, QStringLiteral("field '%1' is private").arg(expr.field));
     return {field.type, ValueCategory::LValue, mutableBase && !field.isConst};
 }
@@ -4145,6 +4360,15 @@ bool TypeChecker::isDefaultConstructible(const AbelType& type, QSet<QString>& vi
         }
 
         visiting.insert(type.spelling);
+        std::unique_ptr<TemplateTypeGuard> guard;
+        if (!info->decl->templateParams.empty()) {
+            auto bindings = structTemplateBindingsForType(*info->decl, type);
+            if (!bindings) {
+                visiting.remove(type.spelling);
+                return false;
+            }
+            guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
+        }
         for (const auto& field : info->decl->fields) {
             if (!isDefaultConstructible(typeFromAstForDecl(*field->type, *info->decl), visiting)) {
                 visiting.remove(type.spelling);

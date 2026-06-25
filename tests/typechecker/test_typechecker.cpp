@@ -1951,15 +1951,96 @@ private slots:
         QVERIFY(!leakedCallerScope.diagnostics.isEmpty());
         QVERIFY(countMessagesContaining(leakedCallerScope, QStringLiteral("unknown variable 'y'")) >= 1);
 
-        auto genericType = checkSource(QStringLiteral(R"(
+        auto unknownGenericType = checkSource(QStringLiteral(R"(
             type Bad = Box<int>;
 
             fn int main() {
                 return 0;
             }
         )"));
-        QVERIFY(!genericType.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(genericType, QStringLiteral("generic named type 'Box' is reserved")) >= 1);
+        QVERIFY(!unknownGenericType.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(unknownGenericType, QStringLiteral("unknown generic type 'Box'")) >= 1);
+    }
+
+    void acceptsMinimalStructAndTypeTemplates()
+    {
+        const QString src = QStringLiteral(R"(
+            template <type T>
+            struct Box {
+                T value;
+
+                init(T v) {
+                    value = v;
+                }
+
+                fn T get() {
+                    return value;
+                }
+            }
+
+            template <type T>
+            type Bag = vector<T>;
+
+            fn int main() {
+                Box<int> a = Box<int>(3);
+                Box<str> b = Box<str>("abcd");
+                Bag<int> xs = {a.get(), b.get().len()};
+                return xs[0] + xs[1];
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsBadStructAndTypeTemplates()
+    {
+        auto noArgs = checkSource(QStringLiteral(R"(
+            template <type T>
+            struct Box {
+                T value;
+            }
+
+            fn int main() {
+                Box b = Box<int>(1);
+                return 0;
+            }
+        )"));
+        QVERIFY(!noArgs.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(noArgs, QStringLiteral("template struct 'Box' requires type arguments")) >= 1);
+
+        auto badFieldInit = checkSource(QStringLiteral(R"(
+            template <type T>
+            struct Box {
+                T value;
+            }
+
+            fn int main() {
+                Box<int> b = Box<int>("bad");
+                return 0;
+            }
+        )"));
+        QVERIFY(!badFieldInit.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(badFieldInit, QStringLiteral("cannot initialize field 'value'")) >= 1);
+
+        auto badMethodInstantiation = checkSource(QStringLiteral(R"(
+            template <type T>
+            struct Box {
+                T value;
+
+                fn int bad() {
+                    return value;
+                }
+            }
+
+            fn int main() {
+                Box<str> b = Box<str>("bad");
+                return b.bad();
+            }
+        )"));
+        QVERIFY(!badMethodInstantiation.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(badMethodInstantiation, QStringLiteral("cannot return str from function returning int")) >= 1);
     }
 };
 

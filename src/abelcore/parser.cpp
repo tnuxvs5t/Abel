@@ -242,16 +242,22 @@ std::unique_ptr<DeclNode> Parser::parseDeclaration()
     }
     if (match(TokenKind::KwTemplate)) {
         std::vector<QString> templateParams = parseTemplatePrefix();
-        if (match(TokenKind::KwStruct) || match(TokenKind::KwType)) {
-            errorAt(previous(), QStringLiteral("template structs/types are reserved; v1 only supports minimal function templates"));
-            return nullptr;
+        if (match(TokenKind::KwStruct)) {
+            auto s = parseStruct(exported);
+            s->templateParams = std::move(templateParams);
+            return s;
+        }
+        if (match(TokenKind::KwType)) {
+            auto alias = parseTypeAlias(exported);
+            alias->templateParams = std::move(templateParams);
+            return alias;
         }
         if (match(TokenKind::KwInterface) || match(TokenKind::KwRequire)) {
             errorAt(previous(), QStringLiteral("template+interface/require constraints are not part of v1"));
             return nullptr;
         }
         if (!match(TokenKind::KwFn)) {
-            errorAt(peek(), QStringLiteral("expected fn after template <type ...>; v1 only supports function templates"));
+            errorAt(peek(), QStringLiteral("expected struct, type, or fn after template <type ...>"));
             return nullptr;
         }
         auto fn = parseFunction(exported, false);
@@ -732,6 +738,28 @@ bool Parser::looksLikeType() const
         return true;
     if (looksLikeQualifiedTypeName())
         return true;
+    if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::Less) {
+        int depth = 0;
+        for (qsizetype pos = m_pos + 1; pos < m_tokens.size(); ++pos) {
+            const TokenKind kind = m_tokens[pos].kind;
+            if (kind == TokenKind::Less) {
+                ++depth;
+            } else if (kind == TokenKind::Greater) {
+                --depth;
+                if (depth == 0) {
+                    ++pos;
+                    while (pos < m_tokens.size() && m_tokens[pos].kind == TokenKind::Star)
+                        ++pos;
+                    if (pos < m_tokens.size() && m_tokens[pos].kind == TokenKind::Amp)
+                        ++pos;
+                    return pos < m_tokens.size() && m_tokens[pos].kind == TokenKind::Identifier;
+                }
+            } else if (kind == TokenKind::End || kind == TokenKind::Semicolon || kind == TokenKind::LBrace || kind == TokenKind::RBrace) {
+                return false;
+            }
+        }
+        return false;
+    }
     if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::Identifier)
         return true;
     if (check(TokenKind::Identifier) && (peek(1).kind == TokenKind::Star || peek(1).kind == TokenKind::Amp))

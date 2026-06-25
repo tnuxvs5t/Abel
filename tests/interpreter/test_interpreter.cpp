@@ -1870,6 +1870,39 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 14);
     }
+
+    void runsMinimalStructAndTypeTemplates()
+    {
+        const QString src = QStringLiteral(R"(
+            template <type T>
+            struct Box {
+                T value;
+
+                init(T v) {
+                    value = v;
+                }
+
+                fn T get() {
+                    return value;
+                }
+            }
+
+            template <type T>
+            type Bag = vector<T>;
+
+            fn int main() {
+                Box<int> a = Box<int>(4);
+                Box<str> b = Box<str>("abc");
+                Bag<int> xs = {a.get(), b.get().len()};
+                return xs[0] + xs[1];
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 7);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

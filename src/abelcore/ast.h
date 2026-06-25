@@ -212,6 +212,7 @@ struct ConstructorDeclNode : AstNode {
 struct StructDeclNode final : DeclNode {
     bool exported = false;
     QString name;
+    std::vector<QString> templateParams;
     std::vector<std::unique_ptr<FieldDeclNode>> fields;
     std::vector<std::unique_ptr<ConstructorDeclNode>> constructors;
     std::vector<std::unique_ptr<FunctionDeclNode>> methods;
@@ -226,6 +227,7 @@ struct EnumDeclNode final : DeclNode {
 struct TypeAliasDeclNode final : DeclNode {
     bool exported = false;
     QString name;
+    std::vector<QString> templateParams;
     std::unique_ptr<TypeNode> targetType;
 };
 

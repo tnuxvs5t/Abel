@@ -67,6 +67,7 @@ private:
     QHash<QString, QList<EnumInfo>> m_enums;
     QHash<QString, QList<const TypeAliasDeclNode*>> m_typeAliases;
     QHash<QString, AbelType> m_templateTypes;
+    QHash<QString, QHash<QString, AbelType>> m_structTemplateInstantiations;
     QSet<QString> m_resolvingTypeAliases;
     QSet<QString> m_checkingTemplateInstantiations;
     QSet<QString> m_checkedTemplateInstantiations;
@@ -135,12 +136,23 @@ private:
     AbelType typeFromAstInCurrentPackage(const TypeNode& node);
     AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName, bool diagnose = true);
     AbelType typeFromAstForDecl(const TypeNode& node, const DeclNode& decl, bool diagnose = true);
+    std::optional<QHash<QString, AbelType>> bindTypeTemplateParams(const std::vector<QString>& params,
+                                                                   const std::vector<std::unique_ptr<TypeNode>>& args,
+                                                                   const DeclNode& decl,
+                                                                   const SourceSpan& span,
+                                                                   bool diagnose);
+    QString templateTypeInstantiationName(const DeclNode& decl,
+                                          const QString& name,
+                                          const std::vector<QString>& params,
+                                          const QHash<QString, AbelType>& bindings) const;
+    std::optional<QHash<QString, AbelType>> structTemplateBindingsForType(const StructDeclNode& decl, const AbelType& type) const;
+    FieldInfo fieldInfoForStructField(const StructInfo& info, const AbelType& structType, const FieldDeclNode& field);
     void checkFunction(const FunctionDeclNode& fn);
     void checkTypeAlias(const TypeAliasDeclNode& alias);
     void checkStruct(const StructDeclNode& decl);
     void checkBackend(const BackendBlockNode& backend);
-    void checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor);
-    void checkMethod(const StructDeclNode& owner, const FunctionDeclNode& method);
+    void checkConstructor(const StructDeclNode& owner, const ConstructorDeclNode& ctor, const AbelType* selfType = nullptr);
+    void checkMethod(const StructDeclNode& owner, const FunctionDeclNode& method, const AbelType* selfType = nullptr);
     void checkBlock(const BlockStmtNode& block, bool pushScope);
     void checkStmt(const StmtNode& stmt);
     void checkVarDecl(const VarDeclStmtNode& stmt);
@@ -201,7 +213,8 @@ private:
     ExprType checkStructConstructorCall(const QString& displayName,
                                         const StructInfo& info,
                                         const std::vector<std::unique_ptr<ExprNode>>& args,
-                                        const SourceSpan& span);
+                                        const SourceSpan& span,
+                                        const AbelType* constructedType = nullptr);
     ExprType checkFunctionValueCall(const AbelType& functionType, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExprType checkLambda(const LambdaExprNode& expr);
     ExprType checkFieldAccess(const FieldAccessExprNode& expr);
