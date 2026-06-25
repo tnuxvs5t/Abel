@@ -66,7 +66,7 @@ private:
 
 class AbelBackendBinder {
 public:
-    using Runtime = std::function<AbelValue(const QList<AbelValue>&, AbelRuntimeContext&)>;
+    using Runtime = std::function<AbelValue(QList<AbelValue>&, AbelRuntimeContext&)>;
 
     template <typename Fn>
     static AbelBackendFunction describe(const QString& symbol, Fn&&)
@@ -83,7 +83,7 @@ public:
     static Runtime bind(Fn fn)
     {
         using Traits = FunctionTraits<std::decay_t<Fn>>;
-        return [fn = std::move(fn)](const QList<AbelValue>& args, AbelRuntimeContext& ctx) mutable {
+        return [fn = std::move(fn)](QList<AbelValue>& args, AbelRuntimeContext& ctx) mutable {
             if (args.size() != static_cast<qsizetype>(Traits::AbelArity)) {
                 ctx.error(QStringLiteral("E0620"),
                           QStringLiteral("backend native function expected %1 argument(s), got %2")
@@ -294,7 +294,12 @@ private:
                 return makeReferenceType(vectorType);
             return vectorType;
         } else {
-            return nativeScalarType<T>();
+            AbelType scalarType = nativeScalarType<T>();
+            if constexpr (std::is_const_v<std::remove_reference_t<T>>)
+                scalarType = makeConstType(scalarType);
+            if constexpr (std::is_lvalue_reference_v<T>)
+                return makeReferenceType(scalarType);
+            return scalarType;
         }
     }
 
@@ -538,19 +543,24 @@ private:
             }
         }
 
-        void commit()
+        void commit(AbelValue& target)
         {
-            if constexpr (IsStdVector<Bare>::value
-                          && std::is_lvalue_reference_v<T>
+            if constexpr (std::is_lvalue_reference_v<T>
                           && !std::is_const_v<std::remove_reference_t<T>>) {
-                using Element = typename IsStdVector<Bare>::Element;
-                if (!sourceVector)
-                    return;
-                sourceVector->elements.clear();
-                sourceVector->elements.reserve(vectorValue.size());
-                for (size_t i = 0; i < vectorValue.size(); ++i) {
-                    Element element = vectorValue[i];
-                    sourceVector->elements.push_back(toAbelScalar(element));
+                if constexpr (IsStdVector<Bare>::value) {
+                    using Element = typename IsStdVector<Bare>::Element;
+                    std::vector<AbelValue> elements;
+                    elements.reserve(vectorValue.size());
+                    for (size_t i = 0; i < vectorValue.size(); ++i) {
+                        Element element = vectorValue[i];
+                        elements.push_back(toAbelScalar(element));
+                    }
+                    target = AbelValue::makeVector(nativeScalarType<Element>(), std::move(elements));
+                    if (sourceVector) {
+                        sourceVector->elements = target.asVector()->elements;
+                    }
+                } else {
+                    target = toAbelScalar(Bare(get()));
                 }
             }
         }
@@ -593,7 +603,7 @@ private:
 
     template <typename Fn, typename R, typename AbelTuple, bool TakesRuntimeContext, size_t... I>
     static AbelValue invokeImpl(Fn& fn,
-                                const QList<AbelValue>& args,
+                                QList<AbelValue>& args,
                                 AbelRuntimeContext& ctx,
                                 std::index_sequence<I...>)
     {
@@ -608,7 +618,7 @@ private:
                 std::invoke(fn, std::get<I>(native).get()..., ctx);
             else
                 std::invoke(fn, std::get<I>(native).get()...);
-            (std::get<I>(native).commit(), ...);
+            (std::get<I>(native).commit(args[static_cast<qsizetype>(I)]), ...);
             if (ctx.hasError())
                 return AbelValue::makeUnknown();
             return AbelValue::makeVoid();
@@ -619,7 +629,7 @@ private:
                 else
                     return std::invoke(fn, std::get<I>(native).get()...);
             }();
-            (std::get<I>(native).commit(), ...);
+            (std::get<I>(native).commit(args[static_cast<qsizetype>(I)]), ...);
             if (ctx.hasError())
                 return AbelValue::makeUnknown();
             return toAbelValue(std::move(result));
@@ -627,7 +637,7 @@ private:
     }
 
     template <typename Fn, typename R, typename AbelTuple, bool TakesRuntimeContext>
-    static AbelValue invoke(Fn& fn, const QList<AbelValue>& args, AbelRuntimeContext& ctx)
+    static AbelValue invoke(Fn& fn, QList<AbelValue>& args, AbelRuntimeContext& ctx)
     {
         return invokeImpl<Fn, R, AbelTuple, TakesRuntimeContext>(
             fn,

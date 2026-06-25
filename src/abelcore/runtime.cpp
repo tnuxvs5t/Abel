@@ -69,7 +69,7 @@ void AbelRuntimeContext::popFrame()
         m_frames.pop_back();
 }
 
-AbelLocation* AbelRuntimeContext::createStorage(const AbelValue& value, bool isReadOnly)
+AbelLocation* AbelRuntimeContext::createStorage(const AbelValue& value, bool isReadOnly, AbelType declaredType)
 {
     auto storage = std::make_unique<AbelStorage>();
     storage->value = value;
@@ -77,6 +77,7 @@ AbelLocation* AbelRuntimeContext::createStorage(const AbelValue& value, bool isR
     m_storage.push_back(std::move(storage));
     auto location = std::make_unique<AbelLocation>();
     location->storage = raw;
+    location->declaredType = declaredType.kind == TypeKind::Unknown ? value.type() : std::move(declaredType);
     location->isReadOnly = isReadOnly;
     AbelLocation* loc = location.get();
     m_locations.push_back(std::move(location));
@@ -88,17 +89,26 @@ AbelLocation* AbelRuntimeContext::createVectorElementLocation(AbelVectorValue* v
     auto location = std::make_unique<AbelLocation>();
     location->vector = vector;
     location->index = index;
+    location->declaredType = vector ? vector->elementType : makeType(TypeKind::Unknown);
     location->isReadOnly = isReadOnly;
     AbelLocation* loc = location.get();
     m_locations.push_back(std::move(location));
     return loc;
 }
 
-AbelLocation* AbelRuntimeContext::createStructFieldLocation(AbelStructValue* object, const QString& fieldName, bool isReadOnly)
+AbelLocation* AbelRuntimeContext::createStructFieldLocation(AbelStructValue* object,
+                                                            const QString& fieldName,
+                                                            bool isReadOnly,
+                                                            AbelType declaredType)
 {
     auto location = std::make_unique<AbelLocation>();
     location->object = object;
     location->fieldName = fieldName;
+    if (declaredType.kind != TypeKind::Unknown) {
+        location->declaredType = std::move(declaredType);
+    } else if (object && object->fields.contains(fieldName)) {
+        location->declaredType = object->fields.value(fieldName).type();
+    }
     location->isReadOnly = isReadOnly;
     AbelLocation* loc = location.get();
     m_locations.push_back(std::move(location));

@@ -123,7 +123,9 @@ use cli.lib.a;
 use cli.lib.b;
 
 fn int main() {
-    return cli.lib.a::value() + cli.lib.b::value() + 2;
+    func int() va = cli.lib.a::value;
+    func int() vb = cli.lib.b::value;
+    return va() + vb() + 2;
 }
 ]=])
 

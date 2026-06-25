@@ -190,6 +190,7 @@ private:
                                              const std::vector<std::unique_ptr<ExprNode>>& args,
                                              const SourceSpan& span);
     AbelValue evalLambda(const LambdaExprNode& expr);
+    AbelValue makeFunctionValue(const FunctionDeclNode& fn);
     AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     AbelValue evalStructConstructor(const QString& name,
                                     const StructRuntimeInfo& info,
@@ -216,6 +217,7 @@ private:
     bool isDeclVisible(const DeclNode& decl, bool exportedSymbol) const;
     bool isEnumVisible(const EnumDeclNode& decl) const;
     bool isTypeAliasVisible(const TypeAliasDeclNode& alias) const;
+    AbelType structFieldType(const AbelType& structType, const QString& fieldName);
     bool structFieldReadOnly(const AbelType& structType, const QString& fieldName);
     bool structFieldPrivate(const AbelType& structType, const QString& fieldName) const;
     bool isCurrentStruct(const StructRuntimeInfo& info) const;

@@ -34,6 +34,7 @@ class AbelBackendResourceTests final : public QObject {
             QStringLiteral("MathSystem.make_range"),
             QStringLiteral("MathSystem.sum_f64"),
             QStringLiteral("MathSystem.flip_bools"),
+            QStringLiteral("MathSystem.scalar_refs"),
             QStringLiteral("MathSystem.fail_if_negative"),
             QStringLiteral("MathSystem.join_debug"),
             QStringLiteral("MathSystem.count_variadic"),
@@ -160,19 +161,61 @@ private slots:
 
         abel::AbelRuntimeContext ctx;
         auto runtime = abel::AbelBackendBinder::bind(fn);
-        auto value = runtime({
+        QList<abel::AbelValue> args{
             abel::AbelValue::makeInt(1, abel::TypeKind::I8),
             abel::AbelValue::makeInt(2, abel::TypeKind::I16),
             abel::AbelValue::makeInt(3, abel::TypeKind::U8),
             abel::AbelValue::makeInt(4, abel::TypeKind::U16),
             abel::AbelValue::makeInt(5, abel::TypeKind::U32),
             abel::AbelValue::makeInt(6, abel::TypeKind::U64),
-        }, ctx);
+        };
+        auto value = runtime(args, ctx);
         for (const auto& d : ctx.diagnostics())
             qWarning() << d.code << d.message;
         QVERIFY(!ctx.hasError());
         QCOMPARE(value.type().kind, abel::TypeKind::U64);
         QCOMPARE(static_cast<quint64>(value.asInt()), quint64{21});
+    }
+
+    void backendBinderDescribesAndWritesScalarReferences()
+    {
+        auto fn = [](bool& flag, int& i, qint64& l, double& d, QString& s) {
+            flag = !flag;
+            i += 2;
+            l += 3;
+            d += 1.5;
+            s += QStringLiteral(":out");
+            return i;
+        };
+        auto desc = abel::AbelBackendBinder::describe(QStringLiteral("MathSystem.scalar_refs"), fn);
+        QCOMPARE(desc.params.size(), static_cast<size_t>(5));
+        for (const auto& param : desc.params)
+            QVERIFY(param.isReference());
+        QCOMPARE(desc.params[0].pointee->kind, abel::TypeKind::Bool);
+        QCOMPARE(desc.params[1].pointee->kind, abel::TypeKind::I32);
+        QCOMPARE(desc.params[2].pointee->kind, abel::TypeKind::I64);
+        QCOMPARE(desc.params[3].pointee->kind, abel::TypeKind::F64);
+        QCOMPARE(desc.params[4].pointee->kind, abel::TypeKind::Str);
+
+        abel::AbelRuntimeContext ctx;
+        auto runtime = abel::AbelBackendBinder::bind(fn);
+        QList<abel::AbelValue> args{
+            abel::AbelValue::makeBool(false),
+            abel::AbelValue::makeInt(3),
+            abel::AbelValue::makeInt(4, abel::TypeKind::I64),
+            abel::AbelValue::makeDouble(2.5),
+            abel::AbelValue::makeString(QStringLiteral("x")),
+        };
+        auto value = runtime(args, ctx);
+        for (const auto& d : ctx.diagnostics())
+            qWarning() << d.code << d.message;
+        QVERIFY(!ctx.hasError());
+        QCOMPARE(value.asInt(), 5);
+        QCOMPARE(args[0].asBool(), true);
+        QCOMPARE(args[1].asInt(), 5);
+        QCOMPARE(args[2].asInt(), 7);
+        QCOMPARE(args[3].asDouble(), 4.0);
+        QCOMPARE(args[4].asString(), QStringLiteral("x:out"));
     }
 
     void parsesValidResourceNodeJson()
@@ -378,6 +421,7 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("make_range")));
         QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("sum_f64")));
         QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("flip_bools")));
+        QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("scalar_refs")));
         QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("fail_if_negative")));
         QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("join_debug")));
         QVERIFY(registry.hasFunction(QStringLiteral("MathSystem"), QStringLiteral("count_variadic")));
@@ -542,6 +586,7 @@ private slots:
                 fn vector<int> make_range(int n);
                 fn double sum_f64(vector<double> xs);
                 fn void flip_bools(vector<bool>& xs);
+                fn int scalar_refs(bool& flag, int& i, i64& l, f64& d, str& s);
                 fn int fail_if_negative(int x);
                 fn str join_debug(any... args);
                 fn int count_variadic(any... args);
@@ -553,6 +598,10 @@ private slots:
                 vector<bool> flags = {true, false};
                 MathSystem::sort(xs);
                 MathSystem::flip_bools(flags);
+                long big = 4;
+                double scalar = 2.5;
+                str text = "x";
+                int scalar_refs = MathSystem::scalar_refs(flags[1], xs[0], big, scalar, text);
 
                 int bonus = 0;
                 if (flags[0]) {
@@ -573,7 +622,13 @@ private slots:
                 } else {
                     joined_bonus = 100;
                 }
-                return MathSystem::fast_add(xs[0], xs[2]) + n + c + d + ok + bonus + joined_bonus + variadic_count;
+                int refs_bonus = 0;
+                if (!flags[1] && xs[0] == 3 && big == 7 && cast<int>(scalar) == 4 && text == "x:out") {
+                    refs_bonus = scalar_refs;
+                } else {
+                    refs_bonus = 1000;
+                }
+                return MathSystem::fast_add(xs[0], xs[2]) + n + c + d + ok + bonus + joined_bonus + variadic_count + refs_bonus;
             }
         )");
 
@@ -592,7 +647,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 101);
+        QCOMPARE(result.exitCode, 122);
     }
 };
 

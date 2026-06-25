@@ -1950,6 +1950,53 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 16);
     }
+
+    void runsThisMethodNestedStructAssignmentAndFunctionValues()
+    {
+        const QString src = QStringLiteral(R"(
+            module app.main;
+
+            struct A {
+                int x;
+
+                init(int v) {
+                    x = v;
+                }
+
+                fn int hit(int a, int b) {
+                    return x + a + b;
+                }
+
+                fn int call() {
+                    return this.hit(1, 2);
+                }
+            }
+
+            struct B {
+                A a;
+
+                init() {
+                    a = A(7);
+                }
+            }
+
+            fn int f(str s) {
+                return s.len();
+            }
+
+            fn int main() {
+                A a = A(4);
+                B b = B();
+                func int(str) cb = f;
+                return a.call() + b.a.x + cb("abc");
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 17);
+    }
 };
 
 QTEST_MAIN(AbelInterpreterTests)

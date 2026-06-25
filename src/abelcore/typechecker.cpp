@@ -1780,7 +1780,10 @@ void TypeChecker::checkConstructor(const StructDeclNode& owner, const Constructo
     m_currentReturnType = makeType(TypeKind::Void);
     m_currentStruct = structTypeName(owner);
     pushScope();
-    defineVariable(QStringLiteral("this"), makePointerType(makeStructType(structTypeName(owner))), false, owner.span);
+    defineVariable(QStringLiteral("this"),
+                   selfType ? *selfType : makeStructType(structTypeName(owner)),
+                   false,
+                   owner.span);
     for (const auto& field : owner.fields) {
         AbelType fieldType = typeFromAstInCurrentPackage(*field->type);
         bool fieldConst = field->type->isConst;
@@ -1829,7 +1832,10 @@ void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNod
     m_currentReturnType = returnType;
     m_currentStruct = structTypeName(owner);
     pushScope();
-    defineVariable(QStringLiteral("this"), makePointerType(makeStructType(structTypeName(owner))), method.isConstMethod, method.span);
+    defineVariable(QStringLiteral("this"),
+                   selfType ? *selfType : makeStructType(structTypeName(owner)),
+                   method.isConstMethod,
+                   method.span);
     for (const auto& field : owner.fields) {
         AbelType fieldType = typeFromAstInCurrentPackage(*field->type);
         bool fieldConst = field->type->isConst;
@@ -2121,12 +2127,41 @@ ExprType TypeChecker::checkExpr(const ExprNode& expr)
     if (dynamic_cast<const ThisExprNode*>(&expr)) {
         if (m_currentStruct.isEmpty())
             return errorExpr(expr.span, QStringLiteral("this is only available inside struct methods"));
-        return {makePointerType(makeStructType(m_currentStruct)), ValueCategory::PRValue, false};
+        const VariableInfo* self = lookupVariable(QStringLiteral("this"));
+        if (!self)
+            return errorExpr(expr.span, QStringLiteral("this is not available here"));
+        return {valueTypeOfVariable(self->type), ValueCategory::LValue, !self->isConst};
     }
     if (dynamic_cast<const InitListExprNode*>(&expr))
         return errorExpr(expr.span, QStringLiteral("initializer list needs a target type"));
-    if (dynamic_cast<const StaticAccessExprNode*>(&expr))
+    if (auto* e = dynamic_cast<const StaticAccessExprNode*>(&expr)) {
+        const QString moduleName = staticAccessModuleName(*e);
+        if (!moduleName.isEmpty()) {
+            const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidatesInModule(moduleName, e->member, e->span, false);
+            QList<const FunctionDeclNode*> valueCandidates;
+            for (const FunctionDeclNode* fn : candidates) {
+                if (fn && !fn->isOperator)
+                    valueCandidates.push_back(fn);
+            }
+            if (valueCandidates.size() == 1) {
+                const FunctionDeclNode* fn = valueCandidates.front();
+                if (!fn->templateParams.empty())
+                    return errorExpr(expr.span,
+                                     QStringLiteral("function template '%1::%2' cannot be used as a function value without instantiation")
+                                         .arg(moduleName, e->member));
+                std::vector<AbelType> params;
+                params.reserve(fn->params.size());
+                for (const auto& param : fn->params)
+                    params.push_back(typeFromAstForDecl(*param->type, *fn));
+                return {makeFunctionType(typeFromAstForDecl(*fn->returnType, *fn), std::move(params)), ValueCategory::PRValue, false};
+            }
+            if (valueCandidates.size() > 1)
+                return errorExpr(expr.span,
+                                 QStringLiteral("function '%1::%2' is overloaded; cannot infer function value type")
+                                     .arg(moduleName, e->member));
+        }
         return errorExpr(expr.span, QStringLiteral("static/backend access is not typechecked in this stage"));
+    }
 
     return errorExpr(expr.span, QStringLiteral("expression is not supported by the Stage 8 typechecker"));
 }
@@ -2148,6 +2183,26 @@ ExprType TypeChecker::checkName(const NameExprNode& expr)
                 return errorExpr(expr.span, QStringLiteral("enum '%1' has no enumerator '%2'").arg(enumName, enumerator));
             }
         }
+        const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(expr.name, expr.span, false);
+        QList<const FunctionDeclNode*> valueCandidates;
+        for (const FunctionDeclNode* fn : candidates) {
+            if (fn && !fn->isOperator)
+                valueCandidates.push_back(fn);
+        }
+        if (valueCandidates.size() == 1) {
+            const FunctionDeclNode* fn = valueCandidates.front();
+            if (!fn->templateParams.empty())
+                return errorExpr(expr.span,
+                                 QStringLiteral("function template '%1' cannot be used as a function value without instantiation")
+                                     .arg(expr.name));
+            std::vector<AbelType> params;
+            params.reserve(fn->params.size());
+            for (const auto& param : fn->params)
+                params.push_back(typeFromAstForDecl(*param->type, *fn));
+            return {makeFunctionType(typeFromAstForDecl(*fn->returnType, *fn), std::move(params)), ValueCategory::PRValue, false};
+        }
+        if (valueCandidates.size() > 1)
+            return errorExpr(expr.span, QStringLiteral("function '%1' is overloaded; cannot infer function value type").arg(expr.name));
         return errorExpr(expr.span, QStringLiteral("unknown variable '%1'").arg(expr.name));
     }
     return {valueTypeOfVariable(var->type), ValueCategory::LValue, !var->isConst};

@@ -577,8 +577,8 @@ AGENTS.md        本仓库 Agent 操作手册。
 
 ```text
 当前阶段：v1 complete 推进中。
-最新已知提交：template: add exact operator templates（具体哈希以 `git log --oneline -1` 为准）。
-本轮代码任务：继续收口 v1 template 承诺；补 exact-shape 二元 operator template 第一片，仅支持 `template <type T> fn R<T> operator OP(X<T> lhs, X<T> rhs)`，并补齐 template type alias 作为构造器入口（如 `Pair2<int,int>(...)`）的 check/run 一致性。
+最新已知提交：semantics: close P1-P4 value/function/backend gaps（具体哈希以 `git log --oneline -1` 为准）。
+本轮代码任务：围绕用户实测 P1~P4 做语义闭环修复：`this`/method lookup、struct 字段赋构造值、命名/模块限定函数值、backend scalar reference out 参数与签名 mismatch 诊断；同时分离 runtime location declared type 与当前 value type，避免 `<unknown>` 字段值污染赋值转换。
 ```
 
 已完成的大块能力摘要：
@@ -596,6 +596,7 @@ std.str/std.vec/std.math/std.io/std.path/std.env/std.char/std.any/std.debug/std.
 用户二元 operator overload-set、普通函数 overload-set、struct constructor/method overload-set 第一片已落地。
 无约束 template 第一片已落地：普通函数支持 `template <type T> fn ...`、显式实参、参数推导、`vector<T>`/`func` 模式推导、按实例化检查函数体；struct/type alias 支持 `template <type T> struct Box { ... }`、`Box<int>` 类型、`Box<int>(...)` 显式构造、字段/构造/方法按实例化绑定检查、`template <type T> type Alias = ...` 展开；解释器运行同构。
 exact-shape 二元 operator template 已落地第一片：只接受 `template <type T> fn R<T> operator OP(X<T> lhs, X<T> rhs)`，TypeChecker/Interpreter 共享参数推导与实例化绑定；template type alias 可作为 struct 构造器入口。
+P1~P4 语义闭环修复已落地：`this` 作为对象 lvalue 参与字段/方法 lookup；struct 字段 location 记录 declared type，嵌套构造赋值不再按 `<unknown>` 当前值转换；命名函数与模块限定函数可作为 `func` 值（overload/template 给静态诊断）；backend binder/Qt plugin 支持 bool/int/i64/f64/str 等 scalar `T&` 写回，并强化 declaration/bound signature mismatch 诊断。
 ```
 
 最近验证命令模板：

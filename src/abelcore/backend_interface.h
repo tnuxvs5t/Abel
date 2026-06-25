@@ -26,7 +26,7 @@ public:
     virtual QString backendId() const = 0;
     virtual QList<AbelBackendFunction> functions() const = 0;
     virtual AbelValue call(const QString& symbol,
-                           const QList<AbelValue>& args,
+                           QList<AbelValue>& args,
                            AbelRuntimeContext& ctx) = 0;
 };
 

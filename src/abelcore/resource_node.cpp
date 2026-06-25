@@ -369,7 +369,7 @@ ResourceNodeLoadResult loadBackendResourceNode(const ResourceNode& node,
         Diagnostic diagnostic;
         if (!registry.bindFunction(node.backendId,
                                    symbol,
-                                   [backend, loader, symbol](const BackendCall& call, AbelRuntimeContext& ctx) {
+                                   [backend, loader, symbol, params = found->params](const BackendCall& call, AbelRuntimeContext& ctx) {
                                        QList<AbelValue> args;
                                        args.reserve(static_cast<qsizetype>(call.args.size()));
                                        for (size_t i = 0; i < call.args.size(); ++i) {
@@ -378,7 +378,27 @@ ResourceNodeLoadResult loadBackendResourceNode(const ResourceNode& node,
                                            else
                                                args.push_back(call.args[i]);
                                        }
-                                       return backend->call(symbol, args, ctx);
+                                       AbelValue result = backend->call(symbol, args, ctx);
+                                       if (ctx.hasError())
+                                           return result;
+                                       for (size_t i = 0; i < params.size() && i < call.argLocations.size() && i < static_cast<size_t>(args.size()); ++i) {
+                                           const AbelType& paramType = params[i];
+                                           AbelLocation* loc = call.argLocations[i];
+                                           if (!loc || !paramType.isReference() || !paramType.pointee || paramType.pointee->isConst)
+                                               continue;
+                                           const AbelType target = loc->declaredType.kind != TypeKind::Unknown ? loc->declaredType : *paramType.pointee;
+                                           AbelValue converted = convertValue(args[static_cast<qsizetype>(i)], target);
+                                           if (converted.type().kind == TypeKind::Unknown) {
+                                               ctx.error(QStringLiteral("E0624"),
+                                                         QStringLiteral("backend output argument %1 cannot write %2 to %3")
+                                                             .arg(i)
+                                                             .arg(args[static_cast<qsizetype>(i)].type().displayName(), target.displayName()),
+                                                         call.callSpan);
+                                               return AbelValue::makeUnknown();
+                                           }
+                                           loc->write(converted);
+                                       }
+                                       return result;
                                    },
                                    &diagnostic)) {
             result.diagnostics.push_back(diagnostic);

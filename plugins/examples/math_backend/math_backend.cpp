@@ -40,6 +40,14 @@ public:
             for (size_t i = 0; i < xs.size(); ++i)
                 xs[i] = !xs[i];
         });
+        bind(QStringLiteral("MathSystem.scalar_refs"), [](bool& flag, int& i, qint64& l, double& d, QString& s) -> int {
+            flag = !flag;
+            i += 2;
+            l += 3;
+            d += 1.5;
+            s += QStringLiteral(":out");
+            return i + static_cast<int>(l) + static_cast<int>(d) + s.size() + (flag ? 1 : 0);
+        });
         bind(QStringLiteral("MathSystem.fail_if_negative"), [](int x, abel::AbelRuntimeContext& ctx) {
             if (x < 0) {
                 ctx.error(QStringLiteral("E0623"),

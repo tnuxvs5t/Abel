@@ -17,7 +17,7 @@ public:
     }
 
     AbelValue call(const QString& symbol,
-                   const QList<AbelValue>& args,
+                   QList<AbelValue>& args,
                    AbelRuntimeContext& ctx) override
     {
         const QString key = canonicalSymbol(symbol);

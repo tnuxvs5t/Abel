@@ -36,6 +36,23 @@ QString backendFrameSymbol(const QString& backendId, const QString& symbol)
     return QStringLiteral("backend %1::%2").arg(backendId, symbol);
 }
 
+QString backendSignatureText(const AbelType& returnType, const std::vector<AbelType>& params, bool variadic)
+{
+    QStringList parts;
+    for (size_t i = 0; i < params.size(); ++i) {
+        QString text = params[i].displayName();
+        if (variadic && i + 1 == params.size())
+            text += QStringLiteral("...");
+        parts.push_back(text);
+    }
+    return returnType.displayName() + QStringLiteral("(") + parts.join(QStringLiteral(", ")) + QStringLiteral(")");
+}
+
+QString backendSignatureText(const BackendFunctionDesc& desc)
+{
+    return backendSignatureText(desc.returnType, desc.params, desc.variadic);
+}
+
 QString declarationQualifiedName(const DeclNode& decl, const QString& name)
 {
     QStringList parts;
@@ -1299,8 +1316,11 @@ bool Interpreter::collectBackends(const ProgramNode& program, AbelRuntimeContext
             if (const BackendFunctionDesc* existing = m_activeBackendRegistry->findFunction(backend->name, fn->name)) {
                 if (existing->returnType != desc.returnType || existing->params != desc.params || existing->variadic != desc.variadic) {
                     ctx.error(QStringLiteral("E0614"),
-                              QStringLiteral("backend declaration '%1::%2' does not match bound backend signature")
-                                  .arg(backend->name, fn->name),
+                              QStringLiteral("backend declaration '%1::%2' does not match bound backend signature: declaration %3, bound %4")
+                                  .arg(backend->name,
+                                       fn->name,
+                                       backendSignatureText(desc),
+                                       backendSignatureText(*existing)),
                               fn->span);
                     ok = false;
                 }
@@ -2153,7 +2173,8 @@ ExecResult Interpreter::callStructFunctionPrepared(const FunctionDeclNode& fn,
         m_ctx->defineVariable(fieldName,
                               m_ctx->createStructFieldLocation(object.get(),
                                                                fieldName,
-                                                               fn.isConstMethod || self->isReadOnly || structFieldReadOnly(selfValue.type(), fieldName)),
+                                                               fn.isConstMethod || self->isReadOnly || structFieldReadOnly(selfValue.type(), fieldName),
+                                                               structFieldType(selfValue.type(), fieldName)),
                               fn.isConstMethod || self->isReadOnly || structFieldReadOnly(selfValue.type(), fieldName),
                               false,
                               span);
@@ -2352,7 +2373,17 @@ AbelValue Interpreter::callFunctionValue(const AbelValue& fnValue,
         return AbelValue::makeUnknown();
     }
     auto function = fnValue.asFunction();
-    if (!function || !function->lambda || !function->lambda->ownedBody) {
+    if (!function) {
+        error(QStringLiteral("E0581"), QStringLiteral("invalid function value"), span);
+        return AbelValue::makeUnknown();
+    }
+    if (function->function) {
+        std::vector<PreparedCallArg> prepared = prepareFunctionArgs(args);
+        if (m_ctx->hasError())
+            return AbelValue::makeUnknown();
+        return callFunctionPrepared(*function->function, prepared, span).value;
+    }
+    if (!function->lambda || !function->lambda->ownedBody) {
         error(QStringLiteral("E0581"), QStringLiteral("invalid function value"), span);
         return AbelValue::makeUnknown();
     }
@@ -2446,7 +2477,13 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
         return AbelValue::makeUnknown();
     }
     auto function = fnValue.asFunction();
-    if (!function || !function->lambda || !function->lambda->ownedBody) {
+    if (!function) {
+        error(QStringLiteral("E0581"), QStringLiteral("invalid function value"), span);
+        return AbelValue::makeUnknown();
+    }
+    if (function->function)
+        return callFunctionPipeExpr(*function->function, firstArg, restArgs, span).value;
+    if (!function->lambda || !function->lambda->ownedBody) {
         error(QStringLiteral("E0581"), QStringLiteral("invalid function value"), span);
         return AbelValue::makeUnknown();
     }
@@ -2787,7 +2824,18 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
 
         const VariableSlot* slot = m_ctx->lookupVariable(e->name);
         if (!slot) {
-            error(QStringLiteral("E0513"), QStringLiteral("unknown variable '%1'").arg(e->name), e->span);
+            const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(e->name);
+            QList<const FunctionDeclNode*> valueCandidates;
+            for (const FunctionDeclNode* fn : candidates) {
+                if (fn && !fn->isOperator)
+                    valueCandidates.push_back(fn);
+            }
+            if (valueCandidates.size() == 1)
+                return makeFunctionValue(*valueCandidates.front());
+            if (valueCandidates.size() > 1)
+                error(QStringLiteral("E0513"), QStringLiteral("function '%1' is overloaded; cannot infer function value type").arg(e->name), e->span);
+            else
+                error(QStringLiteral("E0513"), QStringLiteral("unknown variable '%1'").arg(e->name), e->span);
             return AbelValue::makeUnknown();
         }
         return slot->location ? slot->location->read() : AbelValue::makeUnknown();
@@ -2798,8 +2846,7 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
             error(QStringLiteral("E0570"), QStringLiteral("this is not available here"), expr.span);
             return AbelValue::makeUnknown();
         }
-        AbelValue self = slot->location->read();
-        return AbelValue::makePointer(self.type(), slot->location);
+        return slot->location->read();
     }
     if (auto* e = dynamic_cast<const UnaryExprNode*>(&expr))
         return evalUnary(*e);
@@ -2840,8 +2887,26 @@ normalFieldEval:
         error(QStringLiteral("E0545"), QStringLiteral("initializer list needs a target type"), expr.span);
         return AbelValue::makeUnknown();
     }
-    if (dynamic_cast<const StaticAccessExprNode*>(&expr)) {
-        error(QStringLiteral("E0514"), QStringLiteral("static/backend access is parsed but not executable in Stage 3"), expr.span);
+    if (auto* access = dynamic_cast<const StaticAccessExprNode*>(&expr)) {
+        const QString moduleName = staticAccessModuleName(*access);
+        if (!moduleName.isEmpty()) {
+            const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidatesInModule(moduleName, access->member);
+            QList<const FunctionDeclNode*> valueCandidates;
+            for (const FunctionDeclNode* fn : candidates) {
+                if (fn && !fn->isOperator)
+                    valueCandidates.push_back(fn);
+            }
+            if (valueCandidates.size() == 1)
+                return makeFunctionValue(*valueCandidates.front());
+            if (valueCandidates.size() > 1)
+                error(QStringLiteral("E0514"),
+                      QStringLiteral("function '%1::%2' is overloaded; cannot infer function value type").arg(moduleName, access->member),
+                      expr.span);
+            else
+                error(QStringLiteral("E0514"), QStringLiteral("static/backend access is parsed but not executable in Stage 3"), expr.span);
+        } else {
+            error(QStringLiteral("E0514"), QStringLiteral("static/backend access is parsed but not executable in Stage 3"), expr.span);
+        }
         return AbelValue::makeUnknown();
     }
 
@@ -2851,6 +2916,14 @@ normalFieldEval:
 
 AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
 {
+    if (dynamic_cast<const ThisExprNode*>(&expr)) {
+        VariableSlot* slot = m_ctx->lookupVariable(QStringLiteral("this"));
+        if (!slot || !slot->location) {
+            error(QStringLiteral("E0570"), QStringLiteral("this is not available here"), expr.span);
+            return nullptr;
+        }
+        return slot->location;
+    }
     if (auto* e = dynamic_cast<const NameExprNode*>(&expr)) {
         VariableSlot* slot = m_ctx->lookupVariable(e->name);
         if (!slot || !slot->location) {
@@ -2899,7 +2972,7 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
             return nullptr;
         }
         const bool fieldReadOnly = baseReadOnly || base.type().isConst || structFieldReadOnly(base.type(), e->field);
-        return m_ctx->createStructFieldLocation(object, e->field, fieldReadOnly);
+        return m_ctx->createStructFieldLocation(object, e->field, fieldReadOnly, structFieldType(base.type(), e->field));
     }
     if (auto* e = dynamic_cast<const UnaryExprNode*>(&expr); e && e->op == QStringLiteral("*")) {
         AbelValue ptr = evalExpr(*e->expr);
@@ -3728,6 +3801,30 @@ AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)
     return AbelValue::makeFunction(makeFunctionType(returnType, std::move(params)), std::move(function));
 }
 
+AbelValue Interpreter::makeFunctionValue(const FunctionDeclNode& fn)
+{
+    if (!fn.templateParams.empty()) {
+        error(QStringLiteral("E0581"),
+              QStringLiteral("function template '%1' cannot be used as a function value without instantiation").arg(fn.name),
+              fn.span);
+        return AbelValue::makeUnknown();
+    }
+
+    std::vector<AbelType> params;
+    params.reserve(fn.params.size());
+    for (const auto& param : fn.params)
+        params.push_back(typeFromAstForDecl(*param->type, fn));
+
+    auto function = std::make_shared<AbelFunctionValue>();
+    function->function = &fn;
+    function->packageName = fn.packageName;
+    function->moduleName = fn.moduleName;
+    function->currentStruct.clear();
+    function->importedModules = fn.importedModules;
+    function->importedModuleAliases = fn.importedModuleAliases;
+    return AbelValue::makeFunction(makeFunctionType(typeFromAstForDecl(*fn.returnType, fn), std::move(params)), std::move(function));
+}
+
 AbelValue Interpreter::evalStructConstructor(const QString& name,
                                              const StructRuntimeInfo& info,
                                              const std::vector<std::unique_ptr<ExprNode>>& args,
@@ -3877,7 +3974,8 @@ AbelValue Interpreter::evalStructConstructorPrepared(const QString& name,
         m_ctx->defineVariable(fieldName,
                               m_ctx->createStructFieldLocation(structValue.get(),
                                                                fieldName,
-                                                               structFieldReadOnly(object.type(), fieldName)),
+                                                               structFieldReadOnly(object.type(), fieldName),
+                                                               structFieldType(object.type(), fieldName)),
                               structFieldReadOnly(object.type(), fieldName),
                               false,
                               span);
@@ -3996,7 +4094,10 @@ AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
             return AbelValue::makeUnknown();
         }
         AbelValue current = slot->location ? slot->location->read() : AbelValue::makeUnknown();
-        AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.rhs->span);
+        const AbelType targetType = slot->location && slot->location->declaredType.kind != TypeKind::Unknown
+            ? slot->location->declaredType
+            : current.type();
+        AbelValue rhs = convertOrError(evalExpr(*expr.rhs), targetType, expr.rhs->span);
         m_ctx->assignVariable(name->name, rhs, expr.span);
         return rhs;
     }
@@ -4007,7 +4108,8 @@ AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
         return AbelValue::makeUnknown();
     }
     AbelValue current = lhs->read();
-    AbelValue rhs = convertOrError(evalExpr(*expr.rhs), current.type(), expr.rhs->span);
+    const AbelType targetType = lhs->declaredType.kind != TypeKind::Unknown ? lhs->declaredType : current.type();
+    AbelValue rhs = convertOrError(evalExpr(*expr.rhs), targetType, expr.rhs->span);
     if (lhs->isReadOnly) {
         error(QStringLiteral("E0526"), QStringLiteral("cannot assign to readonly lvalue"), expr.span);
         return AbelValue::makeUnknown();
@@ -4089,7 +4191,8 @@ AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceS
                 m_ctx->defineVariable(fieldName,
                                       m_ctx->createStructFieldLocation(structValue.get(),
                                                                        fieldName,
-                                                                       structFieldReadOnly(object.type(), fieldName)),
+                                                                       structFieldReadOnly(object.type(), fieldName),
+                                                                       structFieldType(object.type(), fieldName)),
                                       structFieldReadOnly(object.type(), fieldName),
                                       false,
                                       span);
@@ -4181,6 +4284,25 @@ bool Interpreter::isEnumVisible(const EnumDeclNode& decl) const
 bool Interpreter::isTypeAliasVisible(const TypeAliasDeclNode& alias) const
 {
     return isDeclVisible(alias, alias.exported);
+}
+
+AbelType Interpreter::structFieldType(const AbelType& structType, const QString& fieldName)
+{
+    const StructRuntimeInfo* info = structInfoForType(structType);
+    if (!info || !info->decl)
+        return makeType(TypeKind::Unknown);
+    std::unique_ptr<TemplateTypeGuard> guard;
+    if (!info->decl->templateParams.empty()) {
+        auto bindings = structTemplateBindingsForType(*info->decl, structType);
+        if (!bindings)
+            return makeType(TypeKind::Unknown);
+        guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
+    }
+    for (const auto& field : info->decl->fields) {
+        if (field->name == fieldName)
+            return typeFromAstForDecl(*field->type, *info->decl);
+    }
+    return makeType(TypeKind::Unknown);
 }
 
 bool Interpreter::structFieldReadOnly(const AbelType& structType, const QString& fieldName)

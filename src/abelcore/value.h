@@ -18,6 +18,7 @@ struct AbelVectorValue;
 struct AbelAnyValue;
 struct AbelStructValue;
 struct AbelFunctionValue;
+struct FunctionDeclNode;
 struct LambdaExprNode;
 
 class AbelValue {
@@ -85,6 +86,7 @@ struct AbelStructValue {
 
 struct AbelFunctionValue {
     const LambdaExprNode* lambda = nullptr;
+    const FunctionDeclNode* function = nullptr;
     QString packageName;
     QString moduleName;
     QString currentStruct;
