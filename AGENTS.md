@@ -909,9 +909,9 @@ AGENTS.md        本仓库 Agent 操作手册。
 ## 13. 当前进度
 
 ```text
-当前阶段：v1.1 complete 推进中（v1 complete 仍需最终矩阵验收）。
+当前阶段：v1.1-a/b scope 已完成；v1 complete 仍需最终矩阵验收。
 最新已知提交：不再手工固化，具体以 `git log --oneline -1` 为准。
-本轮实现任务：继续 v1.1-a Structured Calls 收口；补 module-qualified ordinary function 的 named/default/spread + pipe 边界测试，确保 `lib.math::scale(x: _)` / `tail |> lib.math::count("prefix", ..._)` 不再退化成 backend lookup 误诊断。
+本轮实现任务：完成 v1.1-a/b 最终边界钉扎；补 builtin method positional-only 负例，形成 Structured Calls + Backend Carries Complexity 的当前完整证据闭环。
 ```
 
 已完成的大块能力摘要：
@@ -952,8 +952,8 @@ template v1 最简无约束函数/struct/type alias 与 exact-shape 二元 opera
 package 只要求本地/file registry 完整闭环；HTTP/network registry、全球索引、签名发布不进 v1。
 diagnostic 需要矩阵验收；交互式 debugger/DAP 不进 v1。
 标准库只要求常用本地程序 API 稳定；regex/locale/streaming/view/GUI 不进 v1。
-v1.1-a 剩余：builtin method 与 function value call 继续保持 positional-only 边界；继续做最终矩阵审计，确认 named/default/spread/pipe 没有 parser-only 或 check/run 分裂；任何后续推进都必须继续走 TypeChecker/Interpreter/测试三件套闭环。
-v1.1-b 剩余：继续扩展 SDK/backend 诊断与 helper 文档/示例矩阵；复杂库能力仍必须通过 backend-backed Abel surface 类型承载，禁止把 map/object/dict/symbol/resource/dynamic invoke 下沉进语言内核。
+v1.1-a 状态：当前 scope 完成。后续只允许做回归测试、文档澄清或 bugfix；builtin method 与 function value call 继续保持 positional-only 边界，不作为 v1.1-a 缺口。
+v1.1-b 状态：当前 scope 完成。后续只允许扩展 SDK/backend helper 的文档/示例/诊断质量；复杂库能力仍必须通过 backend-backed Abel surface 类型承载，禁止把 map/object/dict/symbol/resource/dynamic invoke 下沉进语言内核。
 ```
 
 提交记录不再手工复制长列表；需要历史请用：

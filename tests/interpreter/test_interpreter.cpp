@@ -2063,6 +2063,15 @@ private slots:
         QVERIFY(!functionValueNamedPipe.diagnostics.isEmpty());
         QCOMPARE(functionValueNamedPipe.exitCode, 1);
 
+        auto builtinMethodNamed = runSource(QStringLiteral(R"(
+            fn int main() {
+                bool ok = "abel".contains(needle: "be");
+                return 0;
+            }
+        )"));
+        QVERIFY(!builtinMethodNamed.diagnostics.isEmpty());
+        QCOMPARE(builtinMethodNamed.exitCode, 1);
+
         auto pipeBuiltinSpreadNonAnyVector = runSource(QStringLiteral(R"(
             fn int main() {
                 vector<int> xs = {1, 2};

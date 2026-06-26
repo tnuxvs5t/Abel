@@ -452,6 +452,15 @@ private slots:
         )"));
         QVERIFY(countMessagesContaining(functionValueNamedPipe, QStringLiteral("function value calls only accept positional")) >= 1);
 
+        auto builtinMethodNamed = checkSource(QStringLiteral(R"(
+            fn int main() {
+                bool ok = "abel".contains(needle: "be");
+                return 0;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(builtinMethodNamed,
+                                        QStringLiteral("builtin method calls do not support named")) >= 1);
+
         auto backendDuplicateMutableRefPipe = checkSource(QStringLiteral(R"(
             backend MathSystem {
                 fn void two_refs(int& a, int& b);
