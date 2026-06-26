@@ -12,6 +12,7 @@ Abel is designed around:
 - A tree-run interpreter with a static type checker.
 - Qt-native `str` / `char` values (`QString` / `QChar`).
 - Builtin standard-library slices for strings, vectors, math, file/path/env, debug, and tests.
+- v1.1 structured calls: named/default arguments, pipe holes, and limited spread into `any...`.
 - `backend` blocks that call Qt/C++ plugins through `libabelcore.so`.
 - Package projects with `abel.package.json`, local dependencies, local registries, lockfiles, backend artifact caching, and project tests.
 
@@ -111,6 +112,27 @@ fn int main() {
     return 0;
 }
 ```
+
+Structured call example:
+
+```abel
+fn int scale(int x, int by = 2) {
+    return x * by;
+}
+
+fn str report(any... xs) {
+    return build_string(...xs);
+}
+
+fn int main() {
+    vector<any> tail = {" units", true};
+    int value = 3 |> scale(x: _, by: 4);
+    str text = report("value=", value, ...tail);
+    return text.len();
+}
+```
+
+Structured calls are syntax sugar over statically checked calls. Function values and builtin methods remain positional-only ABI boundaries.
 
 ## Smoke commands
 

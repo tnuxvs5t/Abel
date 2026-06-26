@@ -286,7 +286,6 @@ fn int main() {
 当前不承诺：
 
 - friend/protected/nested type。
-- 默认参数。
 - 模板方法/模板构造。
 - 返回类型 overload。
 - 完整 C++ overload ranking。
@@ -330,6 +329,86 @@ fn Point operator +(Point a, Point b) {
 ```
 
 当前不支持 `operator()` / `operator[]` / `operator<>`。
+
+---
+
+## 8.1 v1.1 Structured Calls
+
+v1.1-a 已落地的是“调用层结构化糖”，不是动态对象系统。它会在前端归一化到已有函数、方法、构造器、backend call、overload 和引用绑定规则。
+
+### named/default args
+
+```abel
+fn int inc(int x, int by = 1) {
+    return x + by;
+}
+
+struct Point {
+    int x;
+    int y;
+
+    init(int x, int y = 0) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+fn int main() {
+    int a = inc(1);              // inc(1, 1)
+    int b = inc(x: 1, by: 2);    // inc(1, 2)
+    Point p = Point(x: 3);       // Point(3, 0)
+    return a + b + p.x + p.y;
+}
+```
+
+边界：
+
+- positional 参数必须在 named 参数之前。
+- named 参数必须匹配声明参数名，不能重复。
+- 缺失参数必须有 default。
+- function value 调用不接收 named args，也不会自动补声明处 default。
+
+### pipe holes
+
+```abel
+fn int add(int a, int b) {
+    return a + b;
+}
+
+fn void bump(int& x) {
+    x = x + 1;
+}
+
+fn int main() {
+    int x = 3;
+    int y = x |> add(_, 4);       // add(x, 4)
+    int z = y |> add(10, _);      // add(10, y)
+    int twice = x |> add(_, _);   // add(x, x)，lhs 只求值一次
+    x |> bump(_);                 // hole 保留 lvalue，可绑定 int&
+    bool ok = "ab" |> _.contains(_);
+    str s = " abel " |> _.trim().upper();
+    return x + y + z + twice + s.len();
+}
+```
+
+如果同一个 pipe hole 在 RHS 中出现多次，只允许读用。只要任一用法是 mutable receiver 或 mutable reference 参数，TypeChecker/Interpreter 都会拒绝。
+
+### limited spread into `any...`
+
+```abel
+fn str report(any... xs) {
+    return build_string(...xs);
+}
+
+fn int main() {
+    vector<any> tail = {" units", true};
+    str text = report("value=", 12, ...tail);
+    println(...tail);
+    return text.len();
+}
+```
+
+spread 只展开 `vector<any>` / `any...` 到 `any...` tail；不会把 `vector<int>` 或 `vector<any>` 展开成固定参数。
 
 ---
 
@@ -560,6 +639,7 @@ C++ plugin 侧理想形态：
 
 ```cpp
 #include <abelcore/backend_plugin_base.h>
+#include <abelcore/backend_handle_store.h>
 
 class MathBackend final : public abel::AbelBackendPluginBase {
     Q_OBJECT
@@ -578,6 +658,13 @@ public:
     }
 };
 ```
+
+复杂对象不要做进 Abel 内核。推荐由 backend 持有对象表，Abel surface 只暴露普通 `long` handle / `any` 边界，再用普通 struct/template/type alias 包装。例如 SDK 提供：
+
+- `abel::AbelValueKey`：给 backend map/set 这类容器使用的 AbelValue key 深拷贝、hash/equality helper；unsupported key type 应给诊断。
+- `abel::AbelBackendHandleStore<T>`：header-only 的 `long -> T` 后端对象表，带 missing-handle 诊断 helper。
+
+这条路线不会新增 `map/object/dict` 内建类型、对象字面量、动态字段或 dynamic backend invoke。
 
 安装 SDK：
 

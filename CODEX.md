@@ -152,6 +152,9 @@ vector<T>
 struct、init、方法、const 方法、public/private
 普通函数 overload
 struct constructor/method overload
+named/default args
+pipe holes
+limited spread into any... tail
 lambda / func type
 any... variadic
 用户二元 operator 第一片
@@ -168,7 +171,6 @@ minimal template functions/types if the current Abel CLI supports them
 template+interface 约束系统
 完整 pointer/const/lifetime 矩阵
 完整 C++ overload ranking
-默认参数
 backend overload
 JIT/split
 HTTP/network registry
@@ -358,6 +360,13 @@ $ABEL_BIN run .
 ```
 
 普通用户不应手写 ResourceNode JSON；那是专家调试入口。
+
+复杂对象优先放在 backend 里，不要要求 Abel 内核新增 `map/object/dict` 或动态字段。SDK 侧可用：
+
+- `abel::AbelValueKey`：给 C++ map/set 使用的 AbelValue key helper。
+- `abel::AbelBackendHandleStore<T>`：`long` handle 到 backend-owned object 的对象表 helper。
+
+Abel surface 推荐暴露普通 `backend fn`、`long` handle、`any` 边界，再用 Abel struct/template/type alias 包装。
 
 ---
 
