@@ -88,6 +88,45 @@ bool callArgSpread(const CallExprNode& call, size_t index)
     return index < call.argSpreads.size() && call.argSpreads[index];
 }
 
+std::unique_ptr<TypeNode> cloneTypeNode(const TypeNode& node)
+{
+    auto out = std::make_unique<TypeNode>();
+    out->span = node.span;
+    out->name = node.name;
+    out->isConst = node.isConst;
+    out->pointerDepth = node.pointerDepth;
+    out->isReference = node.isReference;
+    if (node.elementType)
+        out->elementType = cloneTypeNode(*node.elementType);
+    out->functionParamTypes.reserve(node.functionParamTypes.size());
+    for (const auto& param : node.functionParamTypes)
+        out->functionParamTypes.push_back(cloneTypeNode(*param));
+    out->typeArguments.reserve(node.typeArguments.size());
+    for (const auto& arg : node.typeArguments)
+        out->typeArguments.push_back(cloneTypeNode(*arg));
+    return out;
+}
+
+std::unique_ptr<ExprNode> cloneCallableExprNode(const ExprNode& node)
+{
+    if (auto* name = dynamic_cast<const NameExprNode*>(&node)) {
+        auto out = std::make_unique<NameExprNode>();
+        out->span = name->span;
+        out->name = name->name;
+        return out;
+    }
+    if (auto* access = dynamic_cast<const StaticAccessExprNode*>(&node)) {
+        auto out = std::make_unique<StaticAccessExprNode>();
+        out->span = access->span;
+        out->member = access->member;
+        out->base = cloneCallableExprNode(*access->base);
+        return out;
+    }
+    auto out = std::make_unique<NameExprNode>();
+    out->span = node.span;
+    return out;
+}
+
 bool callHasNamedArgs(const CallExprNode& call)
 {
     for (size_t i = 0; i < call.args.size(); ++i) {
@@ -2543,7 +2582,12 @@ ExprType TypeChecker::checkPipe(const BinaryExprNode& expr)
     if (auto* call = dynamic_cast<CallExprNode*>(expr.rhs.get())) {
         if (auto* name = dynamic_cast<NameExprNode*>(call->callee.get()))
             return checkPipeTarget(name->name, name->span, lhs, call->args, expr.span, call);
-        return errorExpr(call->callee->span, QStringLiteral("pipe target call must use a named function"));
+        if (auto* access = dynamic_cast<StaticAccessExprNode*>(call->callee.get())) {
+            auto built = buildPipeArgs(lhs, call->args, expr.span, call);
+            CallExprNode synthetic = makeSyntheticPipeCall(call->callee.get(), call, built, expr.span);
+            return checkStaticCall(*access, synthetic, &built.checked, &built.holes);
+        }
+        return errorExpr(call->callee->span, QStringLiteral("pipe target call must use a named function or static/backend function"));
     }
 
     return errorExpr(expr.rhs->span, QStringLiteral("pipe right side must be f or f(args...)"));
@@ -2564,67 +2608,6 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
         }
     };
 
-    auto buildPipeArgs = [&]() {
-        std::vector<ExprType> checked;
-        std::vector<SourceSpan> spans;
-        std::vector<bool> holeFlags;
-        std::vector<QString> names;
-        std::vector<bool> spreads;
-        const bool hasHoles = hasPipeHole(args);
-        checked.reserve(args.size() + (hasHoles ? 0 : 1));
-        spans.reserve(args.size() + (hasHoles ? 0 : 1));
-        holeFlags.reserve(args.size() + (hasHoles ? 0 : 1));
-        names.reserve(args.size() + (hasHoles ? 0 : 1));
-        spreads.reserve(args.size() + (hasHoles ? 0 : 1));
-        if (!hasHoles) {
-            checked.push_back(lhs);
-            spans.push_back(span);
-            holeFlags.push_back(false);
-            names.push_back({});
-            spreads.push_back(false);
-        }
-        for (size_t i = 0; i < args.size(); ++i) {
-            const auto& argExpr = args[i];
-            if (isPipeHoleExpr(*argExpr)) {
-                checked.push_back(lhs);
-                spans.push_back(argExpr->span);
-                holeFlags.push_back(true);
-            } else {
-                checked.push_back(checkExpr(*argExpr));
-                spans.push_back(argExpr->span);
-                holeFlags.push_back(false);
-            }
-            names.push_back(sourceCall ? callArgName(*sourceCall, i) : QString());
-            spreads.push_back(sourceCall && callArgSpread(*sourceCall, i));
-        }
-        struct BuiltPipeArgs {
-            std::vector<ExprType> checked;
-            std::vector<SourceSpan> spans;
-            std::vector<bool> holes;
-            std::vector<QString> names;
-            std::vector<bool> spreads;
-        };
-        return BuiltPipeArgs{std::move(checked), std::move(spans), std::move(holeFlags), std::move(names), std::move(spreads)};
-    };
-
-    auto makeSyntheticCall = [&](const decltype(buildPipeArgs())& built) {
-        CallExprNode call;
-        call.span = span;
-        auto callee = std::make_unique<NameExprNode>();
-        callee->name = name;
-        callee->span = nameSpan;
-        call.callee = std::move(callee);
-        call.argNames = built.names;
-        call.argSpreads = built.spreads;
-        call.args.reserve(built.spans.size());
-        for (const SourceSpan& argSpan : built.spans) {
-            auto dummy = std::make_unique<NameExprNode>();
-            dummy->span = argSpan;
-            call.args.push_back(std::move(dummy));
-        }
-        return call;
-    };
-
     if (const VariableInfo* variable = lookupVariable(name)) {
         if (sourceCall && callHasStructuredArgs(*sourceCall))
             return errorExpr(span, QStringLiteral("function value calls only accept positional arguments"));
@@ -2637,7 +2620,7 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             checkRestArgs();
             return unknownExprType();
         }
-        auto built = buildPipeArgs();
+        auto built = buildPipeArgs(lhs, args, span, sourceCall);
         const auto& checked = built.checked;
         const auto& spans = built.spans;
         if (checked.size() != calleeType.params.size())
@@ -2657,12 +2640,64 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
     }
 
     if (m_functions.contains(name)) {
-        auto built = buildPipeArgs();
+        auto built = buildPipeArgs(lhs, args, span, sourceCall);
         const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name, nameSpan);
         if (candidates.isEmpty())
             return unknownExprType();
-        CallExprNode call = makeSyntheticCall(built);
+        CallExprNode call = makeSyntheticPipeCall(sourceCall ? sourceCall->callee.get() : nullptr, sourceCall, built, span);
         return checkStructuredFunctionOverloadCallWithArgs(name, candidates, call, built.checked, &built.holes);
+    }
+
+    if (sourceCall) {
+        if (const TypeAliasDeclNode* alias = resolveTypeAlias(name, m_currentPackage, nameSpan, false)) {
+            AbelType aliased = makeType(TypeKind::Unknown);
+            if (!alias->templateParams.empty()) {
+                if (!sourceCall->hasExplicitTypeArgs)
+                    return errorExpr(span, QStringLiteral("template type alias '%1' construction requires type arguments").arg(name));
+                auto bindings = bindTypeTemplateParams(alias->templateParams, sourceCall->explicitTypeArgs, *alias, span, true);
+                if (!bindings)
+                    return unknownExprType();
+                TemplateTypeGuard guard(m_templateTypes, *bindings);
+                aliased = typeFromAstForDecl(*alias->targetType, *alias);
+            } else {
+                if (sourceCall->hasExplicitTypeArgs)
+                    return errorExpr(span, QStringLiteral("type alias '%1' is not a template").arg(name));
+                aliased = typeFromAstForDecl(*alias->targetType, *alias);
+            }
+            if (aliased.kind != TypeKind::Struct)
+                return errorExpr(span, QStringLiteral("type alias '%1' does not name a constructible struct").arg(name));
+            const StructInfo* info = structInfoForType(aliased);
+            if (!info)
+                return errorExpr(span, QStringLiteral("unknown struct type '%1'").arg(aliased.displayName()));
+            auto built = buildPipeArgs(lhs, args, span, sourceCall);
+            CallExprNode call = makeSyntheticPipeCall(sourceCall->callee.get(), sourceCall, built, span);
+            return checkStructConstructorCall(name, *info, call, &aliased, &built.checked, &built.holes);
+        }
+
+        if (const StructInfo* info = resolveStruct(name, nameSpan)) {
+            auto built = buildPipeArgs(lhs, args, span, sourceCall);
+            CallExprNode call = makeSyntheticPipeCall(sourceCall->callee.get(), sourceCall, built, span);
+            if (sourceCall->hasExplicitTypeArgs) {
+                if (!info->decl || info->decl->templateParams.empty())
+                    return errorExpr(span, QStringLiteral("struct '%1' is not a template").arg(name));
+                auto bindings = bindTypeTemplateParams(info->decl->templateParams, sourceCall->explicitTypeArgs, *info->decl, span, true);
+                if (!bindings)
+                    return unknownExprType();
+                const QString instantiatedName = templateTypeInstantiationName(*info->decl, info->decl->name, info->decl->templateParams, *bindings);
+                m_structTemplateInstantiations.insert(instantiatedName, *bindings);
+                TemplateTypeGuard guard(m_templateTypes, *bindings);
+                AbelType resultType = makeStructType(instantiatedName);
+                return checkStructConstructorCall(name, *info, call, &resultType, &built.checked, &built.holes);
+            }
+            if (info->decl && !info->decl->templateParams.empty())
+                return errorExpr(span, QStringLiteral("template struct '%1' construction requires explicit type arguments").arg(name));
+            return checkStructConstructorCall(name, *info, call, nullptr, &built.checked, &built.holes);
+        }
+
+        if (m_structs.contains(name)) {
+            checkRestArgs();
+            return unknownExprType();
+        }
     }
 
     if (m_builtins.hasFunction(name)) {
@@ -2670,7 +2705,7 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             return errorExpr(span, QStringLiteral("builtin function calls do not support named arguments"));
         if (sourceCall && callHasSpreadArgs(*sourceCall))
             return errorExpr(span, QStringLiteral("spread arguments in pipe builtin calls are not implemented in this v1.1 slice"));
-        auto built = buildPipeArgs();
+        auto built = buildPipeArgs(lhs, args, span, sourceCall);
         const auto& checked = built.checked;
         const auto& spans = built.spans;
         const qsizetype argc = static_cast<qsizetype>(checked.size());
@@ -2861,6 +2896,73 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
     }
 
     return errorExpr(nameSpan, QStringLiteral("unknown pipe target '%1'").arg(name));
+}
+
+TypeChecker::BuiltPipeArgs TypeChecker::buildPipeArgs(const ExprType& lhs,
+                                                      const std::vector<std::unique_ptr<ExprNode>>& args,
+                                                      const SourceSpan& span,
+                                                      const CallExprNode* sourceCall)
+{
+    BuiltPipeArgs built;
+    const bool hasHoles = hasPipeHole(args);
+    built.checked.reserve(args.size() + (hasHoles ? 0 : 1));
+    built.spans.reserve(args.size() + (hasHoles ? 0 : 1));
+    built.holes.reserve(args.size() + (hasHoles ? 0 : 1));
+    built.names.reserve(args.size() + (hasHoles ? 0 : 1));
+    built.spreads.reserve(args.size() + (hasHoles ? 0 : 1));
+    if (!hasHoles) {
+        built.checked.push_back(lhs);
+        built.spans.push_back(span);
+        built.holes.push_back(false);
+        built.names.push_back({});
+        built.spreads.push_back(false);
+    }
+    for (size_t i = 0; i < args.size(); ++i) {
+        const auto& argExpr = args[i];
+        if (isPipeHoleExpr(*argExpr)) {
+            built.checked.push_back(lhs);
+            built.spans.push_back(argExpr->span);
+            built.holes.push_back(true);
+        } else {
+            built.checked.push_back(checkExpr(*argExpr));
+            built.spans.push_back(argExpr->span);
+            built.holes.push_back(false);
+        }
+        built.names.push_back(sourceCall ? callArgName(*sourceCall, i) : QString());
+        built.spreads.push_back(sourceCall && callArgSpread(*sourceCall, i));
+    }
+    return built;
+}
+
+CallExprNode TypeChecker::makeSyntheticPipeCall(const ExprNode* callee,
+                                                const CallExprNode* source,
+                                                const BuiltPipeArgs& built,
+                                                const SourceSpan& span)
+{
+    CallExprNode call;
+    call.span = span;
+    if (source) {
+        call.hasExplicitTypeArgs = source->hasExplicitTypeArgs;
+        call.explicitTypeArgs.reserve(source->explicitTypeArgs.size());
+        for (const auto& typeArg : source->explicitTypeArgs)
+            call.explicitTypeArgs.push_back(cloneTypeNode(*typeArg));
+    }
+    if (callee) {
+        call.callee = cloneCallableExprNode(*callee);
+    } else {
+        auto dummy = std::make_unique<NameExprNode>();
+        dummy->span = span;
+        call.callee = std::move(dummy);
+    }
+    call.argNames = built.names;
+    call.argSpreads = built.spreads;
+    call.args.reserve(built.spans.size());
+    for (const SourceSpan& argSpan : built.spans) {
+        auto dummy = std::make_unique<NameExprNode>();
+        dummy->span = argSpan;
+        call.args.push_back(std::move(dummy));
+    }
+    return call;
 }
 
 ExprType TypeChecker::checkFunctionCallShape(const QString& name,
@@ -3918,7 +4020,10 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     return errorExpr(expr.span, QStringLiteral("unknown function '%1'").arg(name->name));
 }
 
-ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee, const CallExprNode& call)
+ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee,
+                                      const CallExprNode& call,
+                                      const std::vector<ExprType>* precheckedArgs,
+                                      const std::vector<bool>* rawPipeHoles)
 {
     if (auto* nested = dynamic_cast<StaticAccessExprNode*>(callee.base.get())) {
         const QString moduleName = staticAccessModuleName(*nested);
@@ -3931,7 +4036,9 @@ ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee, const 
                     return checkBackendCallByName(moduleName + QStringLiteral("::") + backendName,
                                                   nested->span,
                                                   callee.member,
-                                                  call);
+                                                  call,
+                                                  precheckedArgs,
+                                                  rawPipeHoles);
             }
         }
     }
@@ -3949,28 +4056,39 @@ ExprType TypeChecker::checkStaticCall(const StaticAccessExprNode& callee, const 
         if (info.decl && info.decl->moduleName == resolvedModuleName) {
             const StructInfo* resolved = resolveStructInModule(moduleName, callee.member, callee.base->span);
             if (!resolved) {
-                for (const auto& argExpr : call.args)
-                    checkExpr(*argExpr);
+                if (!precheckedArgs) {
+                    for (const auto& argExpr : call.args)
+                        checkExpr(*argExpr);
+                }
                 return unknownExprType();
             }
-            return checkStructConstructorCall(moduleName + QStringLiteral("::") + callee.member, *resolved, call);
+            return checkStructConstructorCall(moduleName + QStringLiteral("::") + callee.member,
+                                              *resolved,
+                                              call,
+                                              nullptr,
+                                              precheckedArgs,
+                                              rawPipeHoles);
         }
     }
 
     const auto functions = m_functions.value(callee.member);
     for (const FunctionDeclNode* fn : functions) {
         if (fn->moduleName == resolvedModuleName)
-            return checkQualifiedFunctionCall(moduleName, callee.base->span, callee.member, call);
+            return checkQualifiedFunctionCall(moduleName, callee.base->span, callee.member, call, precheckedArgs, rawPipeHoles);
     }
 
-    return checkBackendCallByName(baseName, callee.base->span, callee.member, call);
+    return checkBackendCallByName(baseName, callee.base->span, callee.member, call, precheckedArgs, rawPipeHoles);
 }
 
 ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                                                  const StructInfo& info,
                                                  const CallExprNode& call,
-                                                 const AbelType* constructedType)
+                                                 const AbelType* constructedType,
+                                                 const std::vector<ExprType>* precheckedArgs,
+                                                 const std::vector<bool>* rawPipeHoles)
 {
+    Q_ASSERT(!precheckedArgs || precheckedArgs->size() == call.args.size());
+    Q_ASSERT(!rawPipeHoles || rawPipeHoles->size() == call.args.size());
     const AbelType resultType = constructedType ? *constructedType : makeStructType(structTypeName(*info.decl));
     std::unique_ptr<TemplateTypeGuard> structTemplateGuard;
     if (info.decl && !info.decl->templateParams.empty()) {
@@ -3995,7 +4113,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                     error(call.args[i]->span, QStringLiteral("field '%1' is private").arg(fieldName));
                     continue;
                 }
-                ExprType arg = checkExpr(*call.args[i]);
+                ExprType arg = precheckedArgs ? (*precheckedArgs)[i] : checkExpr(*call.args[i]);
                 if (!isUnknownType(arg.type) && !isAssignable(field.type, arg.type))
                     error(call.args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
             }
@@ -4005,8 +4123,12 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
 
     std::vector<ExprType> checked;
     checked.reserve(call.args.size());
-    for (const auto& argExpr : call.args)
-        checked.push_back(checkExpr(*argExpr));
+    if (precheckedArgs) {
+        checked = *precheckedArgs;
+    } else {
+        for (const auto& argExpr : call.args)
+            checked.push_back(checkExpr(*argExpr));
+    }
     for (const ExprType& arg : checked) {
         if (isUnknownType(arg.type))
             return unknownExprType();
@@ -4018,14 +4140,21 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
             return unknownExprType();
         if (ctor->isPrivate && m_currentStruct != structTypeName(*info.decl))
             return errorExpr(call.span, QStringLiteral("constructor '%1' is private").arg(displayName));
-        NormalizedCallArgs normalized = normalizeCallArgsForParams(*info.decl, displayName, ctor->params, call, checked, true);
+        NormalizedCallArgs normalized = normalizeCallArgsForParams(*info.decl, displayName, ctor->params, call, checked, true, rawPipeHoles);
         if (!normalized.ok)
             return unknownExprType();
         const bool variadic = !ctor->params.empty() && ctor->params.back()->variadic;
         const size_t fixedCount = variadic ? ctor->params.size() - 1 : ctor->params.size();
+        int mutableRefHoleCount = 0;
         for (size_t i = 0; i < fixedCount; ++i) {
             const ParameterNode& param = *ctor->params[i];
             AbelType paramType = typeFromAstForDecl(*param.type, *info.decl);
+            if (i < normalized.pipeHoles.size()
+                && normalized.pipeHoles[i]
+                && paramType.isReference()
+                && !(paramType.pointee && paramType.pointee->isConst)) {
+                ++mutableRefHoleCount;
+            }
             checkParameterArgument(paramType,
                                    normalized.checked[i],
                                    normalized.spans[i],
@@ -4033,6 +4162,8 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                                        ? QStringLiteral("default value for constructor parameter '%1'").arg(param.name)
                                        : QStringLiteral("constructor parameter '%1'").arg(param.name));
         }
+        if (mutableRefHoleCount > 1)
+            return errorExpr(call.span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
         if (info.decl->templateParams.empty() == false) {
             checkConstructor(*info.decl, *ctor, &resultType);
         }
@@ -4051,7 +4182,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
         if (!ctor)
             continue;
         considered.push_back(ctor);
-        NormalizedCallArgs normalized = normalizeCallArgsForParams(*info.decl, displayName, ctor->params, call, checked, false);
+        NormalizedCallArgs normalized = normalizeCallArgsForParams(*info.decl, displayName, ctor->params, call, checked, false, rawPipeHoles);
         if (!normalized.ok)
             continue;
 
@@ -4093,7 +4224,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
             const qsizetype before = m_diagnostics.size();
             for (const ConstructorDeclNode* ctor : considered) {
                 if (ctor) {
-                    normalizeCallArgsForParams(*info.decl, displayName, ctor->params, call, checked, true);
+                    normalizeCallArgsForParams(*info.decl, displayName, ctor->params, call, checked, true, rawPipeHoles);
                     if (m_diagnostics.size() != before)
                         return unknownExprType();
                 }
@@ -4119,14 +4250,21 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
     const ConstructorDeclNode* ctor = matches.front().ctor;
     if (ctor->isPrivate && m_currentStruct != structTypeName(*info.decl))
         return errorExpr(call.span, QStringLiteral("constructor '%1' is private").arg(displayName));
-    NormalizedCallArgs normalized = normalizeCallArgsForParams(*info.decl, displayName, ctor->params, call, checked, true);
+    NormalizedCallArgs normalized = normalizeCallArgsForParams(*info.decl, displayName, ctor->params, call, checked, true, rawPipeHoles);
     if (!normalized.ok)
         return unknownExprType();
     const bool variadic = !ctor->params.empty() && ctor->params.back()->variadic;
     const size_t fixedCount = variadic ? ctor->params.size() - 1 : ctor->params.size();
+    int mutableRefHoleCount = 0;
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& param = *ctor->params[i];
         AbelType paramType = typeFromAstForDecl(*param.type, *info.decl);
+        if (i < normalized.pipeHoles.size()
+            && normalized.pipeHoles[i]
+            && paramType.isReference()
+            && !(paramType.pointee && paramType.pointee->isConst)) {
+            ++mutableRefHoleCount;
+        }
         checkParameterArgument(paramType,
                                normalized.checked[i],
                                normalized.spans[i],
@@ -4134,25 +4272,34 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                                    ? QStringLiteral("default value for constructor parameter '%1'").arg(param.name)
                                    : QStringLiteral("constructor parameter '%1'").arg(param.name));
     }
+    if (mutableRefHoleCount > 1)
+        return errorExpr(call.span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
     if (info.decl->templateParams.empty() == false) {
         checkConstructor(*info.decl, *ctor, &resultType);
     }
     return {resultType, ValueCategory::PRValue, false};
 }
 
-ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee, const CallExprNode& call)
+ExprType TypeChecker::checkBackendCall(const StaticAccessExprNode& callee,
+                                       const CallExprNode& call,
+                                       const std::vector<ExprType>* precheckedArgs,
+                                       const std::vector<bool>* rawPipeHoles)
 {
     auto* backendName = dynamic_cast<NameExprNode*>(callee.base.get());
     if (!backendName)
         return errorExpr(callee.span, QStringLiteral("backend call receiver must be a backend name"));
-    return checkBackendCallByName(backendName->name, backendName->span, callee.member, call);
+    return checkBackendCallByName(backendName->name, backendName->span, callee.member, call, precheckedArgs, rawPipeHoles);
 }
 
 ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
                                              const SourceSpan& backendSpan,
                                              const QString& member,
-                                             const CallExprNode& call)
+                                             const CallExprNode& call,
+                                             const std::vector<ExprType>* precheckedArgs,
+                                             const std::vector<bool>* rawPipeHoles)
 {
+    Q_ASSERT(!precheckedArgs || precheckedArgs->size() == call.args.size());
+    Q_ASSERT(!rawPipeHoles || rawPipeHoles->size() == call.args.size());
     const int qualifiedSep = backendName.lastIndexOf(QStringLiteral("::"));
     const BackendInfo* backend = qualifiedSep >= 0
         ? resolveBackendInModule(backendName.left(qualifiedSep).replace(QStringLiteral("::"), QStringLiteral(".")),
@@ -4162,15 +4309,19 @@ ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
     if (!backend) {
         const QString simpleBackendName = qualifiedSep >= 0 ? backendName.mid(qualifiedSep + 2) : backendName;
         if (m_backends.contains(simpleBackendName)) {
-            for (const auto& argExpr : call.args)
-                checkExpr(*argExpr);
+            if (!precheckedArgs) {
+                for (const auto& argExpr : call.args)
+                    checkExpr(*argExpr);
+            }
             return unknownExprType();
         }
         return errorExpr(backendSpan, QStringLiteral("unknown backend '%1'").arg(backendName));
     }
     if (!isBackendVisible(*backend->decl)) {
-        for (const auto& argExpr : call.args)
-            checkExpr(*argExpr);
+        if (!precheckedArgs) {
+            for (const auto& argExpr : call.args)
+                checkExpr(*argExpr);
+        }
         return unknownExprType();
     }
     const FunctionDeclNode* fn = backend->functions.value(member, nullptr);
@@ -4179,8 +4330,12 @@ ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
 
     std::vector<ExprType> rawArgs;
     rawArgs.reserve(call.args.size());
-    for (const auto& argExpr : call.args)
-        rawArgs.push_back(checkExpr(*argExpr));
+    if (precheckedArgs) {
+        rawArgs = *precheckedArgs;
+    } else {
+        for (const auto& argExpr : call.args)
+            rawArgs.push_back(checkExpr(*argExpr));
+    }
     for (const ExprType& arg : rawArgs) {
         if (isUnknownType(arg.type))
             return unknownExprType();
@@ -4191,15 +4346,23 @@ ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
                                                                fn->params,
                                                                call,
                                                                rawArgs,
-                                                               true);
+                                                               true,
+                                                               rawPipeHoles);
     if (!normalized.ok)
         return unknownExprType();
 
     const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
     const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
+    int mutableRefHoleCount = 0;
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& param = *fn->params[i];
         const AbelType paramType = typeFromAstForDecl(*param.type, *fn);
+        if (i < normalized.pipeHoles.size()
+            && normalized.pipeHoles[i]
+            && paramType.isReference()
+            && !(paramType.pointee && paramType.pointee->isConst)) {
+            ++mutableRefHoleCount;
+        }
         checkParameterArgument(paramType,
                                normalized.checked[i],
                                normalized.spans[i],
@@ -4207,6 +4370,8 @@ ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
                                    ? QStringLiteral("default value for backend parameter '%1'").arg(param.name)
                                    : QStringLiteral("backend parameter '%1'").arg(param.name));
     }
+    if (mutableRefHoleCount > 1)
+        return errorExpr(call.span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
 
     const AbelType returnType = typeFromAstForDecl(*fn->returnType, *fn);
     return callReturnExprType(returnType);
@@ -4215,11 +4380,19 @@ ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
 ExprType TypeChecker::checkQualifiedFunctionCall(const QString& moduleName,
                                                  const SourceSpan& moduleSpan,
                                                  const QString& name,
-                                                 const CallExprNode& call)
+                                                 const CallExprNode& call,
+                                                 const std::vector<ExprType>* precheckedArgs,
+                                                 const std::vector<bool>* rawPipeHoles)
 {
     const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidatesInModule(moduleName, name, moduleSpan);
     if (candidates.isEmpty())
         return unknownExprType();
+    if (precheckedArgs)
+        return checkStructuredFunctionOverloadCallWithArgs(moduleName + QStringLiteral("::") + name,
+                                                           candidates,
+                                                           call,
+                                                           *precheckedArgs,
+                                                           rawPipeHoles);
     return checkStructuredFunctionOverloadCall(moduleName + QStringLiteral("::") + name, candidates, call);
 }
 

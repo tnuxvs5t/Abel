@@ -53,6 +53,7 @@ private:
         bool ok = true;
         std::vector<PreparedCallArg> args;
         std::vector<bool> defaulted;
+        std::vector<bool> pipeHoles;
     };
 
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
@@ -132,7 +133,8 @@ private:
                                                                   const CallExprNode& call,
                                                                   const std::vector<PreparedCallArg>& rawArgs,
                                                                   bool diagnose,
-                                                                  bool evaluateDefaults);
+                                                                  bool evaluateDefaults,
+                                                                  const std::vector<bool>* rawPipeHoles = nullptr);
     PreparedCallArg prepareDefaultArgument(const DeclNode& decl,
                                            const std::vector<std::unique_ptr<ParameterNode>>& params,
                                            const std::vector<PreparedCallArg>& previousArgs,
@@ -161,7 +163,8 @@ private:
     ExecResult callStructuredFunctionOverloadPrepared(const QString& displayName,
                                                       const QList<const FunctionDeclNode*>& candidates,
                                                       const CallExprNode& call,
-                                                      const std::vector<PreparedCallArg>& rawArgs);
+                                                      const std::vector<PreparedCallArg>& rawArgs,
+                                                      const std::vector<bool>* rawPipeHoles = nullptr);
     ExecResult callFunctionOverloadPipeExpr(const QString& displayName,
                                             const QList<const FunctionDeclNode*>& candidates,
                                             const ExprNode& firstArg,
@@ -201,25 +204,39 @@ private:
     AbelValue evalCast(const CastExprNode& expr);
     AbelValue evalPipe(const BinaryExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);
-    AbelValue evalStaticCall(const StaticAccessExprNode& callee, const CallExprNode& call);
-    AbelValue evalBackendCall(const StaticAccessExprNode& callee, const CallExprNode& call);
+    AbelValue evalStaticCall(const StaticAccessExprNode& callee,
+                             const CallExprNode& call,
+                             const std::vector<PreparedCallArg>* preparedArgs = nullptr,
+                             const std::vector<bool>* rawPipeHoles = nullptr);
+    AbelValue evalBackendCall(const StaticAccessExprNode& callee,
+                              const CallExprNode& call,
+                              const std::vector<PreparedCallArg>* preparedArgs = nullptr,
+                              const std::vector<bool>* rawPipeHoles = nullptr);
     AbelValue evalBackendCallByName(const QString& backendName,
                                     const SourceSpan& backendSpan,
                                     const QString& member,
-                                    const CallExprNode& call);
+                                    const CallExprNode& call,
+                                    const std::vector<PreparedCallArg>* preparedArgs = nullptr,
+                                    const std::vector<bool>* rawPipeHoles = nullptr);
     AbelValue evalQualifiedFunctionCall(const QString& moduleName,
                                         const QString& name,
-                                        const CallExprNode& call);
+                                        const CallExprNode& call,
+                                        const std::vector<PreparedCallArg>* preparedArgs = nullptr,
+                                        const std::vector<bool>* rawPipeHoles = nullptr);
     AbelValue evalQualifiedStructConstructor(const QString& moduleName,
                                              const QString& name,
-                                             const CallExprNode& call);
+                                             const CallExprNode& call,
+                                             const std::vector<PreparedCallArg>* preparedArgs = nullptr,
+                                             const std::vector<bool>* rawPipeHoles = nullptr);
     AbelValue evalLambda(const LambdaExprNode& expr);
     AbelValue makeFunctionValue(const FunctionDeclNode& fn);
     AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     AbelValue evalStructConstructor(const QString& name,
                                     const StructRuntimeInfo& info,
                                     const CallExprNode& call,
-                                    const AbelType* constructedType = nullptr);
+                                    const AbelType* constructedType = nullptr,
+                                    const std::vector<PreparedCallArg>* preparedArgs = nullptr,
+                                    const std::vector<bool>* rawPipeHoles = nullptr);
     AbelValue evalStructConstructorPrepared(const QString& name,
                                             const StructRuntimeInfo& info,
                                             const ConstructorDeclNode* ctor,

@@ -1933,19 +1933,21 @@ private slots:
                 vector<any> tail = {2, "z"};
                 Point p = Point(x: 3);
                 Point q = Point(y: 4, x: 1);
+                Point r = 3 |> Point(x: _, y: 4);
                 int calls = 0;
                 int a = p.sum(add: 5);      // 18
                 int b = q.count("a", ...tail); // 3
                 int c = p.side(calls);      // 2, calls becomes 1
                 int d = p.side(calls, value: 9); // 10, default not evaluated
-                return a + b + c + d + q.sum();
+                Point s = next(calls) |> Point(x: _, y: _); // lhs evaluated once, calls becomes 2
+                return a + b + c + d + q.sum() + r.sum() + s.sum() + calls;
             }
         )");
         auto result = runSource(src);
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 38);
+        QCOMPARE(result.exitCode, 51);
     }
 
     void rejectsBadStructuredOrdinaryFunctionCallsAtRuntime()

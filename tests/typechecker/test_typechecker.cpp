@@ -277,12 +277,17 @@ private slots:
                 vector<any> tail = {1, "x", true};
                 Point p = Point(x: 3);
                 Point q = Point(y: 4, x: 2);
+                Point r = 3 |> Point(x: _, y: 4);
                 int out = 1;
                 MathSystem::touch(x: out);
+                out |> MathSystem::touch(x: _, by: 3);
                 return p.sum(add: 5)
                     + q.count("prefix", ...tail)
+                    + r.sum()
                     + MathSystem::fast_add(b: 2, a: 1)
+                    + (3 |> MathSystem::fast_add(a: _, b: 4))
                     + MathSystem::count("prefix", ...tail)
+                    + (tail |> MathSystem::count("prefix", ..._))
                     + out;
             }
         )");
@@ -392,6 +397,20 @@ private slots:
             }
         )"));
         QVERIFY(countMessagesContaining(functionValueNamedPipe, QStringLiteral("function value calls only accept positional")) >= 1);
+
+        auto backendDuplicateMutableRefPipe = checkSource(QStringLiteral(R"(
+            backend MathSystem {
+                fn void two_refs(int& a, int& b);
+            }
+
+            fn int main() {
+                int x = 1;
+                x |> MathSystem::two_refs(_, _);
+                return x;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(backendDuplicateMutableRefPipe,
+                                        QStringLiteral("multiple mutable reference parameters")) >= 1);
     }
 
     void rejectsBadStructuredConstructorMethodAndBackendCalls()
@@ -457,6 +476,24 @@ private slots:
             }
         )"));
         QVERIFY(countMessagesContaining(backendSpreadNonAnyVector, QStringLiteral("spread argument expects vector<any>")) >= 1);
+
+        auto constructorDuplicateMutableRefPipe = checkSource(QStringLiteral(R"(
+            struct RefBox {
+                int x;
+
+                init(int& a, int& b) {
+                    x = a + b;
+                }
+            }
+
+            fn int main() {
+                int x = 1;
+                RefBox b = x |> RefBox(_, _);
+                return b.x;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(constructorDuplicateMutableRefPipe,
+                                        QStringLiteral("multiple mutable reference parameters")) >= 1);
     }
 
     void rejectsBadOrdinaryFunctionOverloads()

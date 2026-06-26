@@ -91,6 +91,14 @@ private:
     QHash<QString, QString> m_currentImportAliases;
     int m_loopDepth = 0;
 
+    struct BuiltPipeArgs {
+        std::vector<ExprType> checked;
+        std::vector<SourceSpan> spans;
+        std::vector<bool> holes;
+        std::vector<QString> names;
+        std::vector<bool> spreads;
+    };
+
     void collectStructs(const ProgramNode& program);
     void collectEnums(const ProgramNode& program);
     void collectTypeAliases(const ProgramNode& program);
@@ -185,6 +193,14 @@ private:
                              const std::vector<std::unique_ptr<ExprNode>>& args,
                              const SourceSpan& span,
                              const CallExprNode* sourceCall = nullptr);
+    BuiltPipeArgs buildPipeArgs(const ExprType& lhs,
+                                const std::vector<std::unique_ptr<ExprNode>>& args,
+                                const SourceSpan& span,
+                                const CallExprNode* sourceCall);
+    CallExprNode makeSyntheticPipeCall(const ExprNode* callee,
+                                       const CallExprNode* source,
+                                       const BuiltPipeArgs& built,
+                                       const SourceSpan& span);
     ExprType checkFunctionCallShape(const QString& name,
                                     const FunctionDeclNode& fn,
                                     const ExprType& firstArg,
@@ -217,20 +233,32 @@ private:
                                          const SourceSpan& span);
     ExprType checkAssignment(const AssignExprNode& expr);
     ExprType checkCall(const CallExprNode& expr);
-    ExprType checkStaticCall(const StaticAccessExprNode& callee, const CallExprNode& call);
-    ExprType checkBackendCall(const StaticAccessExprNode& callee, const CallExprNode& call);
+    ExprType checkStaticCall(const StaticAccessExprNode& callee,
+                             const CallExprNode& call,
+                             const std::vector<ExprType>* precheckedArgs = nullptr,
+                             const std::vector<bool>* rawPipeHoles = nullptr);
+    ExprType checkBackendCall(const StaticAccessExprNode& callee,
+                              const CallExprNode& call,
+                              const std::vector<ExprType>* precheckedArgs = nullptr,
+                              const std::vector<bool>* rawPipeHoles = nullptr);
     ExprType checkBackendCallByName(const QString& backendName,
                                     const SourceSpan& backendSpan,
                                     const QString& member,
-                                    const CallExprNode& call);
+                                    const CallExprNode& call,
+                                    const std::vector<ExprType>* precheckedArgs = nullptr,
+                                    const std::vector<bool>* rawPipeHoles = nullptr);
     ExprType checkQualifiedFunctionCall(const QString& moduleName,
                                         const SourceSpan& moduleSpan,
                                         const QString& name,
-                                        const CallExprNode& call);
+                                        const CallExprNode& call,
+                                        const std::vector<ExprType>* precheckedArgs = nullptr,
+                                        const std::vector<bool>* rawPipeHoles = nullptr);
     ExprType checkStructConstructorCall(const QString& displayName,
                                         const StructInfo& info,
                                         const CallExprNode& call,
-                                        const AbelType* constructedType = nullptr);
+                                        const AbelType* constructedType = nullptr,
+                                        const std::vector<ExprType>* precheckedArgs = nullptr,
+                                        const std::vector<bool>* rawPipeHoles = nullptr);
     ExprType checkFunctionValueCall(const AbelType& functionType, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExprType checkLambda(const LambdaExprNode& expr);
     ExprType checkFieldAccess(const FieldAccessExprNode& expr);

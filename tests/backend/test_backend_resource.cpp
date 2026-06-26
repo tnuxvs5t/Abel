@@ -620,6 +620,9 @@ private slots:
                 int named_fast = MathSystem::fast_add(b: 4, a: 5);
                 int default_fast = MathSystem::fast_add(a: 5);
                 int variadic_spread = MathSystem::count_variadic("prefix", ...tail);
+                int pipe_fast = 3 |> MathSystem::fast_add(a: _, b: 4);
+                int pipe_default_fast = 5 |> MathSystem::fast_add(a: _);
+                int pipe_variadic_spread = tail |> MathSystem::count_variadic("prefix", ..._);
                 int joined_bonus = 0;
                 if (joined == "A7true") {
                     joined_bonus = 6;
@@ -633,7 +636,7 @@ private slots:
                     refs_bonus = 1000;
                 }
                 return MathSystem::fast_add(xs[0], xs[2]) + n + c + d + ok + bonus + joined_bonus + variadic_count + refs_bonus
-                    + named_fast + default_fast + variadic_spread;
+                    + named_fast + default_fast + variadic_spread + pipe_fast + pipe_default_fast + pipe_variadic_spread;
             }
         )");
 
@@ -652,7 +655,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 145);
+        QCOMPARE(result.exitCode, 166);
     }
 };
 

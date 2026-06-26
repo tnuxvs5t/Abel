@@ -107,6 +107,45 @@ bool callArgSpread(const CallExprNode& call, size_t index)
     return index < call.argSpreads.size() && call.argSpreads[index];
 }
 
+std::unique_ptr<TypeNode> cloneTypeNode(const TypeNode& node)
+{
+    auto out = std::make_unique<TypeNode>();
+    out->span = node.span;
+    out->name = node.name;
+    out->isConst = node.isConst;
+    out->pointerDepth = node.pointerDepth;
+    out->isReference = node.isReference;
+    if (node.elementType)
+        out->elementType = cloneTypeNode(*node.elementType);
+    out->functionParamTypes.reserve(node.functionParamTypes.size());
+    for (const auto& param : node.functionParamTypes)
+        out->functionParamTypes.push_back(cloneTypeNode(*param));
+    out->typeArguments.reserve(node.typeArguments.size());
+    for (const auto& arg : node.typeArguments)
+        out->typeArguments.push_back(cloneTypeNode(*arg));
+    return out;
+}
+
+std::unique_ptr<ExprNode> cloneCallableExprNode(const ExprNode& node)
+{
+    if (auto* name = dynamic_cast<const NameExprNode*>(&node)) {
+        auto out = std::make_unique<NameExprNode>();
+        out->span = name->span;
+        out->name = name->name;
+        return out;
+    }
+    if (auto* access = dynamic_cast<const StaticAccessExprNode*>(&node)) {
+        auto out = std::make_unique<StaticAccessExprNode>();
+        out->span = access->span;
+        out->member = access->member;
+        out->base = cloneCallableExprNode(*access->base);
+        return out;
+    }
+    auto out = std::make_unique<NameExprNode>();
+    out->span = node.span;
+    return out;
+}
+
 bool callHasNamedArgs(const CallExprNode& call)
 {
     for (size_t i = 0; i < call.args.size(); ++i) {
@@ -1868,10 +1907,12 @@ Interpreter::NormalizedPreparedCallArgs Interpreter::normalizePreparedCallArgsFo
     const CallExprNode& call,
     const std::vector<PreparedCallArg>& rawArgs,
     bool diagnose,
-    bool evaluateDefaults)
+    bool evaluateDefaults,
+    const std::vector<bool>* rawPipeHoles)
 {
     NormalizedPreparedCallArgs out;
     Q_ASSERT(rawArgs.size() == call.args.size());
+    Q_ASSERT(!rawPipeHoles || rawPipeHoles->size() == rawArgs.size());
 
     auto fail = [&](const SourceSpan& span, const QString& message) {
         out.ok = false;
@@ -1949,12 +1990,15 @@ Interpreter::NormalizedPreparedCallArgs Interpreter::normalizePreparedCallArgsFo
 
     out.args.reserve(fixedCount + variadicTail.size());
     out.defaulted.reserve(fixedCount + variadicTail.size());
+    out.pipeHoles.reserve(fixedCount + variadicTail.size());
 
     DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, decl);
     for (size_t i = 0; i < fixedCount; ++i) {
         if (fixedArgIndex[i].has_value()) {
-            out.args.push_back(rawArgs[*fixedArgIndex[i]]);
+            const size_t argIndex = *fixedArgIndex[i];
+            out.args.push_back(rawArgs[argIndex]);
             out.defaulted.push_back(false);
+            out.pipeHoles.push_back(rawPipeHoles && (*rawPipeHoles)[argIndex]);
             continue;
         }
         const ParameterNode& param = *params[i];
@@ -1962,6 +2006,7 @@ Interpreter::NormalizedPreparedCallArgs Interpreter::normalizePreparedCallArgsFo
             fail(call.span, QStringLiteral("missing argument for parameter '%1' in call to '%2'").arg(param.name, displayName));
             out.args.push_back(PreparedCallArg{});
             out.defaulted.push_back(false);
+            out.pipeHoles.push_back(false);
             continue;
         }
         if (evaluateDefaults) {
@@ -1973,11 +2018,13 @@ Interpreter::NormalizedPreparedCallArgs Interpreter::normalizePreparedCallArgsFo
             out.args.push_back(std::move(placeholder));
         }
         out.defaulted.push_back(true);
+        out.pipeHoles.push_back(false);
     }
 
     for (PreparedCallArg& arg : variadicTail) {
         out.args.push_back(std::move(arg));
         out.defaulted.push_back(false);
+        out.pipeHoles.push_back(false);
     }
 
     return out;
@@ -2369,8 +2416,32 @@ ExecResult Interpreter::callStructuredFunctionOverloadExpr(const QString& displa
 ExecResult Interpreter::callStructuredFunctionOverloadPrepared(const QString& displayName,
                                                                const QList<const FunctionDeclNode*>& candidates,
                                                                const CallExprNode& call,
-                                                               const std::vector<PreparedCallArg>& rawArgs)
+                                                               const std::vector<PreparedCallArg>& rawArgs,
+                                                               const std::vector<bool>* rawPipeHoles)
 {
+    Q_ASSERT(!rawPipeHoles || rawPipeHoles->size() == rawArgs.size());
+    auto rejectMultipleMutableRefHoles = [&](const FunctionDeclNode& fn, const NormalizedPreparedCallArgs& normalized) -> bool {
+        const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
+        const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
+        int mutableRefHoleCount = 0;
+        for (size_t i = 0; i < fixedCount; ++i) {
+            const AbelType paramType = typeFromAstForDecl(*fn.params[i]->type, fn);
+            if (i < normalized.pipeHoles.size()
+                && normalized.pipeHoles[i]
+                && paramType.isReference()
+                && !(paramType.pointee && paramType.pointee->isConst)) {
+                ++mutableRefHoleCount;
+            }
+        }
+        if (mutableRefHoleCount > 1) {
+            error(QStringLiteral("E0583"),
+                  QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"),
+                  call.span);
+            return true;
+        }
+        return false;
+    };
+
     const FunctionDeclNode* singleNonTemplate = nullptr;
     int nonTemplateCount = 0;
     for (const FunctionDeclNode* fn : candidates) {
@@ -2386,8 +2457,11 @@ ExecResult Interpreter::callStructuredFunctionOverloadPrepared(const QString& di
                                                                                    call,
                                                                                    rawArgs,
                                                                                    true,
-                                                                                   true);
+                                                                                   true,
+                                                                                   rawPipeHoles);
         if (!normalized.ok || m_ctx->hasError())
+            return ExecResult::returned(AbelValue::makeUnknown());
+        if (rejectMultipleMutableRefHoles(*singleNonTemplate, normalized))
             return ExecResult::returned(AbelValue::makeUnknown());
         return callFunctionPrepared(*singleNonTemplate, normalized.args, call.span);
     }
@@ -2413,7 +2487,8 @@ ExecResult Interpreter::callStructuredFunctionOverloadPrepared(const QString& di
                                                                                    call,
                                                                                    rawArgs,
                                                                                    false,
-                                                                                   false);
+                                                                                   false,
+                                                                                   rawPipeHoles);
         if (!normalized.ok)
             continue;
 
@@ -2474,7 +2549,7 @@ ExecResult Interpreter::callStructuredFunctionOverloadPrepared(const QString& di
             for (const FunctionDeclNode* fn : candidates) {
                 if (!fn || fn->isOperator)
                     continue;
-                normalizePreparedCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true, false);
+                normalizePreparedCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true, false, rawPipeHoles);
                 if (m_ctx->hasError())
                     return ExecResult::returned(AbelValue::makeUnknown());
             }
@@ -2502,8 +2577,11 @@ ExecResult Interpreter::callStructuredFunctionOverloadPrepared(const QString& di
                                                                                call,
                                                                                rawArgs,
                                                                                true,
-                                                                               true);
+                                                                               true,
+                                                                               rawPipeHoles);
     if (!normalized.ok || m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
+    if (rejectMultipleMutableRefHoles(*fn, normalized))
         return ExecResult::returned(AbelValue::makeUnknown());
     const QHash<QString, AbelType>* bindings = fn->templateParams.empty() ? nullptr : &match.bindings;
     return callFunctionPrepared(*fn, normalized.args, call.span, bindings);
@@ -3902,16 +3980,21 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
     QString targetName;
     const std::vector<std::unique_ptr<ExprNode>>* restArgs = nullptr;
     const CallExprNode* sourceCall = nullptr;
+    const StaticAccessExprNode* staticTarget = nullptr;
 
     if (auto* name = dynamic_cast<NameExprNode*>(expr.rhs.get())) {
         targetName = name->name;
     } else if (auto* call = dynamic_cast<CallExprNode*>(expr.rhs.get())) {
-        auto* name = dynamic_cast<NameExprNode*>(call->callee.get());
-        if (!name) {
-            error(QStringLiteral("E0592"), QStringLiteral("pipe target call must use a named function"), call->callee->span);
+        if (auto* name = dynamic_cast<NameExprNode*>(call->callee.get())) {
+            targetName = name->name;
+        } else if (auto* access = dynamic_cast<StaticAccessExprNode*>(call->callee.get())) {
+            staticTarget = access;
+        } else {
+            error(QStringLiteral("E0592"),
+                  QStringLiteral("pipe target call must use a named function or static/backend function"),
+                  call->callee->span);
             return AbelValue::makeUnknown();
         }
-        targetName = name->name;
         restArgs = &call->args;
         sourceCall = call;
     } else {
@@ -3922,13 +4005,61 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
     static const std::vector<std::unique_ptr<ExprNode>> emptyArgs;
     const auto& args = restArgs ? *restArgs : emptyArgs;
 
-    auto makeSyntheticPipeCall = [&](const std::vector<PreparedCallArg>& prepared) {
+    auto buildPipeArgs = [&]() {
+        const bool holes = hasPipeHole(args);
+        PreparedCallArg lhs = preparePipeHoleArg();
+        std::vector<PreparedCallArg> prepared;
+        std::vector<bool> holeFlags;
+        prepared.reserve(args.size() + (holes ? 0 : 1));
+        holeFlags.reserve(args.size() + (holes ? 0 : 1));
+        if (!holes) {
+            prepared.push_back(lhs);
+            holeFlags.push_back(false);
+        }
+        for (const auto& arg : args) {
+            if (isPipeHoleExpr(*arg)) {
+                PreparedCallArg hole = lhs;
+                hole.span = arg->span;
+                prepared.push_back(hole);
+                holeFlags.push_back(true);
+            } else {
+                PreparedCallArg out;
+                out.span = arg->span;
+                if (exprCanHaveRuntimeLocation(*arg)) {
+                    if (AbelLocation* loc = evalLocation(*arg)) {
+                        out.location = loc;
+                        out.isReadOnly = loc->isReadOnly;
+                        out.value = loc->read();
+                    } else {
+                        out.value = AbelValue::makeUnknown();
+                    }
+                } else {
+                    out.value = evalExpr(*arg);
+                }
+                prepared.push_back(std::move(out));
+                holeFlags.push_back(false);
+            }
+        }
+        return std::pair<std::vector<PreparedCallArg>, std::vector<bool>>(std::move(prepared), std::move(holeFlags));
+    };
+
+    auto makeSyntheticPipeCall = [&](const ExprNode* callee, const std::vector<PreparedCallArg>& prepared) {
         CallExprNode call;
         call.span = expr.span;
-        auto callee = std::make_unique<NameExprNode>();
-        callee->name = targetName;
-        callee->span = expr.rhs->span;
-        call.callee = std::move(callee);
+        if (sourceCall) {
+            call.hasExplicitTypeArgs = sourceCall->hasExplicitTypeArgs;
+            call.explicitTypeArgs.reserve(sourceCall->explicitTypeArgs.size());
+            for (const auto& typeArg : sourceCall->explicitTypeArgs)
+                call.explicitTypeArgs.push_back(cloneTypeNode(*typeArg));
+        }
+        if (callee) {
+            call.callee = cloneCallableExprNode(*callee);
+        } else {
+            auto dummy = std::make_unique<NameExprNode>();
+            dummy->name = targetName;
+            dummy->span = expr.rhs->span;
+            call.callee = std::move(dummy);
+        }
         call.args.reserve(prepared.size());
         call.argNames.reserve(prepared.size());
         call.argSpreads.reserve(prepared.size());
@@ -3950,6 +4081,14 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
         return call;
     };
 
+    if (staticTarget) {
+        auto [prepared, holeFlags] = buildPipeArgs();
+        if (m_ctx->hasError())
+            return AbelValue::makeUnknown();
+        CallExprNode call = makeSyntheticPipeCall(sourceCall ? sourceCall->callee.get() : staticTarget, prepared);
+        return evalStaticCall(*staticTarget, call, &prepared, &holeFlags);
+    }
+
     if (const VariableSlot* slot = m_ctx->lookupVariable(targetName)) {
         if (sourceCall && callHasStructuredArgs(*sourceCall)) {
             error(QStringLiteral("E0586"), QStringLiteral("function value calls only accept positional arguments"), expr.rhs->span);
@@ -3965,11 +4104,78 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
     if (m_functions.contains(targetName)) {
         const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(targetName);
         if (!candidates.isEmpty()) {
-            std::vector<PreparedCallArg> prepared = prepareFunctionPipeArgs(*expr.lhs, args);
+            auto [prepared, holeFlags] = buildPipeArgs();
             if (m_ctx->hasError())
                 return AbelValue::makeUnknown();
-            CallExprNode call = makeSyntheticPipeCall(prepared);
-            return callStructuredFunctionOverloadPrepared(targetName, candidates, call, prepared).value;
+            CallExprNode call = makeSyntheticPipeCall(sourceCall ? sourceCall->callee.get() : nullptr, prepared);
+            return callStructuredFunctionOverloadPrepared(targetName, candidates, call, prepared, &holeFlags).value;
+        }
+    }
+
+    if (sourceCall) {
+        if (const TypeAliasDeclNode* alias = resolveTypeAlias(targetName, m_currentPackage)) {
+            AbelType aliased = makeType(TypeKind::Unknown);
+            if (!alias->templateParams.empty()) {
+                if (!sourceCall->hasExplicitTypeArgs) {
+                    error(QStringLiteral("E0544"),
+                          QStringLiteral("template type alias '%1' construction requires type arguments").arg(targetName),
+                          expr.span);
+                    return AbelValue::makeUnknown();
+                }
+                auto bindings = bindTypeTemplateParams(alias->templateParams, sourceCall->explicitTypeArgs, *alias, expr.span);
+                if (!bindings)
+                    return AbelValue::makeUnknown();
+                TemplateTypeGuard guard(m_templateTypes, *bindings);
+                aliased = typeFromAstForDecl(*alias->targetType, *alias);
+            } else {
+                if (sourceCall->hasExplicitTypeArgs) {
+                    error(QStringLiteral("E0544"), QStringLiteral("type alias '%1' is not a template").arg(targetName), expr.span);
+                    return AbelValue::makeUnknown();
+                }
+                aliased = typeFromAstForDecl(*alias->targetType, *alias);
+            }
+            if (aliased.kind != TypeKind::Struct) {
+                error(QStringLiteral("E0544"),
+                      QStringLiteral("type alias '%1' does not name a constructible struct").arg(targetName),
+                      expr.span);
+                return AbelValue::makeUnknown();
+            }
+            const StructRuntimeInfo* info = structInfoForType(aliased);
+            if (!info) {
+                error(QStringLiteral("E0544"), QStringLiteral("unknown struct type '%1'").arg(aliased.displayName()), expr.span);
+                return AbelValue::makeUnknown();
+            }
+            auto [prepared, holeFlags] = buildPipeArgs();
+            if (m_ctx->hasError())
+                return AbelValue::makeUnknown();
+            CallExprNode call = makeSyntheticPipeCall(sourceCall->callee.get(), prepared);
+            return evalStructConstructor(targetName, *info, call, &aliased, &prepared, &holeFlags);
+        }
+
+        if (const StructRuntimeInfo* info = resolveStruct(targetName)) {
+            auto [prepared, holeFlags] = buildPipeArgs();
+            if (m_ctx->hasError())
+                return AbelValue::makeUnknown();
+            CallExprNode call = makeSyntheticPipeCall(sourceCall->callee.get(), prepared);
+            if (sourceCall->hasExplicitTypeArgs) {
+                if (!info->decl || info->decl->templateParams.empty()) {
+                    error(QStringLiteral("E0544"), QStringLiteral("struct '%1' is not a template").arg(targetName), expr.span);
+                    return AbelValue::makeUnknown();
+                }
+                auto bindings = bindTypeTemplateParams(info->decl->templateParams, sourceCall->explicitTypeArgs, *info->decl, expr.span);
+                if (!bindings)
+                    return AbelValue::makeUnknown();
+                const QString instantiatedName = templateTypeInstantiationName(*info->decl, info->decl->name, info->decl->templateParams, *bindings);
+                m_structTemplateInstantiations.insert(instantiatedName, *bindings);
+                TemplateTypeGuard guard(m_templateTypes, *bindings);
+                AbelType resultType = makeStructType(instantiatedName);
+                return evalStructConstructor(targetName, *info, call, &resultType, &prepared, &holeFlags);
+            }
+            if (info->decl && !info->decl->templateParams.empty()) {
+                error(QStringLiteral("E0544"), QStringLiteral("template struct '%1' construction requires explicit type arguments").arg(targetName), expr.span);
+                return AbelValue::makeUnknown();
+            }
+            return evalStructConstructor(targetName, *info, call, nullptr, &prepared, &holeFlags);
         }
     }
 
@@ -4204,7 +4410,10 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
     return AbelValue::makeUnknown();
 }
 
-AbelValue Interpreter::evalStaticCall(const StaticAccessExprNode& callee, const CallExprNode& call)
+AbelValue Interpreter::evalStaticCall(const StaticAccessExprNode& callee,
+                                      const CallExprNode& call,
+                                      const std::vector<PreparedCallArg>* preparedArgs,
+                                      const std::vector<bool>* rawPipeHoles)
 {
     if (auto* nested = dynamic_cast<StaticAccessExprNode*>(callee.base.get())) {
         const QString moduleName = staticAccessModuleName(*nested);
@@ -4217,7 +4426,9 @@ AbelValue Interpreter::evalStaticCall(const StaticAccessExprNode& callee, const 
                     return evalBackendCallByName(moduleName + QStringLiteral("::") + backendName,
                                                  nested->span,
                                                  callee.member,
-                                                 call);
+                                                 call,
+                                                 preparedArgs,
+                                                 rawPipeHoles);
             }
         }
     }
@@ -4233,32 +4444,39 @@ AbelValue Interpreter::evalStaticCall(const StaticAccessExprNode& callee, const 
     const QString resolvedModuleName = resolveModuleName(moduleName);
 
     if (resolveStructInModule(moduleName, callee.member))
-        return evalQualifiedStructConstructor(moduleName, callee.member, call);
+        return evalQualifiedStructConstructor(moduleName, callee.member, call, preparedArgs, rawPipeHoles);
 
     const auto functions = m_functions.value(callee.member);
     for (const FunctionDeclNode* fn : functions) {
         if (fn->moduleName == resolvedModuleName)
-            return evalQualifiedFunctionCall(moduleName, callee.member, call);
+            return evalQualifiedFunctionCall(moduleName, callee.member, call, preparedArgs, rawPipeHoles);
     }
 
-    return evalBackendCallByName(baseName, callee.base->span, callee.member, call);
+    return evalBackendCallByName(baseName, callee.base->span, callee.member, call, preparedArgs, rawPipeHoles);
 }
 
-AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee, const CallExprNode& call)
+AbelValue Interpreter::evalBackendCall(const StaticAccessExprNode& callee,
+                                       const CallExprNode& call,
+                                       const std::vector<PreparedCallArg>* preparedArgs,
+                                       const std::vector<bool>* rawPipeHoles)
 {
     auto* backendName = dynamic_cast<NameExprNode*>(callee.base.get());
     if (!backendName) {
         error(QStringLiteral("E0603"), QStringLiteral("backend call receiver must be a backend name"), callee.span);
         return AbelValue::makeUnknown();
     }
-    return evalBackendCallByName(backendName->name, backendName->span, callee.member, call);
+    return evalBackendCallByName(backendName->name, backendName->span, callee.member, call, preparedArgs, rawPipeHoles);
 }
 
 AbelValue Interpreter::evalBackendCallByName(const QString& backendName,
                                              const SourceSpan& backendSpan,
                                              const QString& member,
-                                             const CallExprNode& call)
+                                             const CallExprNode& call,
+                                             const std::vector<PreparedCallArg>* preparedArgs,
+                                             const std::vector<bool>* rawPipeHoles)
 {
+    Q_ASSERT(!preparedArgs || preparedArgs->size() == call.args.size());
+    Q_ASSERT(!rawPipeHoles || rawPipeHoles->size() == call.args.size());
     const int qualifiedSep = backendName.lastIndexOf(QStringLiteral("::"));
     const QString simpleBackendName = qualifiedSep >= 0 ? backendName.mid(qualifiedSep + 2) : backendName;
     QString moduleName;
@@ -4280,7 +4498,12 @@ AbelValue Interpreter::evalBackendCallByName(const QString& backendName,
         error(QStringLiteral("E0605"), QStringLiteral("unknown backend function '%1::%2'").arg(backendName, member), backendSpan);
         return AbelValue::makeUnknown();
     }
-    std::vector<PreparedCallArg> rawArgs = prepareFunctionArgs(call.args);
+    std::vector<PreparedCallArg> rawArgs;
+    if (preparedArgs) {
+        rawArgs = *preparedArgs;
+    } else {
+        rawArgs = prepareFunctionArgs(call.args);
+    }
     if (m_ctx->hasError())
         return AbelValue::makeUnknown();
     NormalizedPreparedCallArgs normalized = normalizePreparedCallArgsForParams(*fn,
@@ -4289,7 +4512,8 @@ AbelValue Interpreter::evalBackendCallByName(const QString& backendName,
                                                                                call,
                                                                                rawArgs,
                                                                                true,
-                                                                               true);
+                                                                               true,
+                                                                               rawPipeHoles);
     if (!normalized.ok || m_ctx->hasError())
         return AbelValue::makeUnknown();
 
@@ -4300,11 +4524,17 @@ AbelValue Interpreter::evalBackendCallByName(const QString& backendName,
     std::vector<AbelLocation*> locations;
     values.reserve(normalized.args.size());
     locations.reserve(normalized.args.size());
+    int mutableRefHoleCount = 0;
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& param = *fn->params[i];
         const AbelType target = typeFromAstInCurrentPackage(*param.type);
         const PreparedCallArg& arg = normalized.args[i];
         if (target.isReference()) {
+            if (i < normalized.pipeHoles.size()
+                && normalized.pipeHoles[i]
+                && !(target.pointee && target.pointee->isConst)) {
+                ++mutableRefHoleCount;
+            }
             AbelLocation* loc = arg.location;
             if (!loc) {
                 error(QStringLiteral("E0609"), QStringLiteral("backend parameter '%1' requires lvalue").arg(param.name), arg.span);
@@ -4338,6 +4568,10 @@ AbelValue Interpreter::evalBackendCallByName(const QString& backendName,
             locations.push_back(nullptr);
         }
     }
+    if (mutableRefHoleCount > 1)
+        error(QStringLiteral("E0609"),
+              QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"),
+              call.span);
     if (variadic) {
         for (size_t i = fixedCount; i < normalized.args.size(); ++i) {
             values.push_back(AbelValue::makeAny(normalized.args[i].value));
@@ -4357,26 +4591,37 @@ AbelValue Interpreter::evalBackendCallByName(const QString& backendName,
 
 AbelValue Interpreter::evalQualifiedFunctionCall(const QString& moduleName,
                                                  const QString& name,
-                                                 const CallExprNode& call)
+                                                 const CallExprNode& call,
+                                                 const std::vector<PreparedCallArg>* preparedArgs,
+                                                 const std::vector<bool>* rawPipeHoles)
 {
     const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidatesInModule(moduleName, name);
     if (candidates.isEmpty()) {
         error(QStringLiteral("E0525"), QStringLiteral("unknown function '%1::%2'").arg(moduleName, name), call.span);
         return AbelValue::makeUnknown();
     }
+    if (preparedArgs)
+        return callStructuredFunctionOverloadPrepared(moduleName + QStringLiteral("::") + name,
+                                                      candidates,
+                                                      call,
+                                                      *preparedArgs,
+                                                      rawPipeHoles)
+            .value;
     return callStructuredFunctionOverloadExpr(moduleName + QStringLiteral("::") + name, candidates, call).value;
 }
 
 AbelValue Interpreter::evalQualifiedStructConstructor(const QString& moduleName,
                                                       const QString& name,
-                                                      const CallExprNode& call)
+                                                      const CallExprNode& call,
+                                                      const std::vector<PreparedCallArg>* preparedArgs,
+                                                      const std::vector<bool>* rawPipeHoles)
 {
     const StructRuntimeInfo* info = resolveStructInModule(moduleName, name);
     if (!info) {
         error(QStringLiteral("E0580"), QStringLiteral("unknown struct '%1::%2'").arg(moduleName, name), call.span);
         return AbelValue::makeUnknown();
     }
-    return evalStructConstructor(moduleName + QStringLiteral("::") + name, *info, call);
+    return evalStructConstructor(moduleName + QStringLiteral("::") + name, *info, call, nullptr, preparedArgs, rawPipeHoles);
 }
 
 AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)
@@ -4477,8 +4722,12 @@ AbelValue Interpreter::makeFunctionValue(const FunctionDeclNode& fn)
 AbelValue Interpreter::evalStructConstructor(const QString& name,
                                              const StructRuntimeInfo& info,
                                              const CallExprNode& call,
-                                             const AbelType* constructedType)
+                                             const AbelType* constructedType,
+                                             const std::vector<PreparedCallArg>* preparedArgs,
+                                             const std::vector<bool>* rawPipeHoles)
 {
+    Q_ASSERT(!preparedArgs || preparedArgs->size() == call.args.size());
+    Q_ASSERT(!rawPipeHoles || rawPipeHoles->size() == call.args.size());
     DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, *info.decl);
     const AbelType resultType = constructedType ? *constructedType : makeStructType(structTypeName(*info.decl));
     std::unique_ptr<TemplateTypeGuard> structTemplateGuard;
@@ -4509,7 +4758,8 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
                 continue;
             }
             order.push_back(field->name);
-            AbelValue value = convertOrError(evalExpr(*call.args[i]), typeFromAstInCurrentPackage(*field->type), call.args[i]->span);
+            const AbelValue raw = preparedArgs ? (*preparedArgs)[i].value : evalExpr(*call.args[i]);
+            AbelValue value = convertOrError(raw, typeFromAstInCurrentPackage(*field->type), call.args[i]->span);
             fields.insert(field->name, value);
         }
         if (m_ctx->hasError())
@@ -4517,9 +4767,36 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
         return AbelValue::makeStruct(resultType.spelling, order, std::move(fields));
     }
 
-    std::vector<PreparedCallArg> rawArgs = prepareFunctionArgs(call.args);
+    std::vector<PreparedCallArg> rawArgs;
+    if (preparedArgs) {
+        rawArgs = *preparedArgs;
+    } else {
+        rawArgs = prepareFunctionArgs(call.args);
+    }
     if (m_ctx->hasError())
         return AbelValue::makeUnknown();
+
+    auto rejectMultipleMutableRefHoles = [&](const ConstructorDeclNode& ctor, const NormalizedPreparedCallArgs& normalized) -> bool {
+        const bool variadic = !ctor.params.empty() && ctor.params.back()->variadic;
+        const size_t fixedCount = variadic ? ctor.params.size() - 1 : ctor.params.size();
+        int mutableRefHoleCount = 0;
+        for (size_t i = 0; i < fixedCount; ++i) {
+            const AbelType paramType = typeFromAstForDecl(*ctor.params[i]->type, *info.decl);
+            if (i < normalized.pipeHoles.size()
+                && normalized.pipeHoles[i]
+                && paramType.isReference()
+                && !(paramType.pointee && paramType.pointee->isConst)) {
+                ++mutableRefHoleCount;
+            }
+        }
+        if (mutableRefHoleCount > 1) {
+            error(QStringLiteral("E0576"),
+                  QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"),
+                  call.span);
+            return true;
+        }
+        return false;
+    };
 
     if (info.constructors.size() == 1) {
         const ConstructorDeclNode* ctor = info.constructors.front();
@@ -4531,8 +4808,11 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
                                                                                    call,
                                                                                    rawArgs,
                                                                                    true,
-                                                                                   true);
+                                                                                   true,
+                                                                                   rawPipeHoles);
         if (!normalized.ok || m_ctx->hasError())
+            return AbelValue::makeUnknown();
+        if (rejectMultipleMutableRefHoles(*ctor, normalized))
             return AbelValue::makeUnknown();
         return evalStructConstructorPrepared(name, info, ctor, normalized.args, call.span, &resultType);
     }
@@ -4553,7 +4833,8 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
                                                                                    call,
                                                                                    rawArgs,
                                                                                    false,
-                                                                                   false);
+                                                                                   false,
+                                                                                   rawPipeHoles);
         if (!normalized.ok)
             continue;
         const bool variadic = !ctor->params.empty() && ctor->params.back()->variadic;
@@ -4594,7 +4875,7 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
             for (const ConstructorDeclNode* ctor : info.constructors) {
                 if (!ctor)
                     continue;
-                normalizePreparedCallArgsForParams(*info.decl, name, ctor->params, call, rawArgs, true, false);
+                normalizePreparedCallArgsForParams(*info.decl, name, ctor->params, call, rawArgs, true, false, rawPipeHoles);
                 if (m_ctx->hasError())
                     return AbelValue::makeUnknown();
             }
@@ -4618,8 +4899,11 @@ AbelValue Interpreter::evalStructConstructor(const QString& name,
                                                                                call,
                                                                                rawArgs,
                                                                                true,
-                                                                               true);
+                                                                               true,
+                                                                               rawPipeHoles);
     if (!normalized.ok || m_ctx->hasError())
+        return AbelValue::makeUnknown();
+    if (rejectMultipleMutableRefHoles(*ctor, normalized))
         return AbelValue::makeUnknown();
     return evalStructConstructorPrepared(name, info, ctor, normalized.args, call.span, &resultType);
 }
