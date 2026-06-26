@@ -169,6 +169,178 @@ spread 第一片只允许展开到 any... tail；不展开固定参数，不做 
 不因为 v1.1-a 引入动态调用、动态字段、匿名对象或 runtime-only 类型错误。
 ```
 
+v1.1-a 规划示例必须按下面边界理解；它们不是当前 CLI 行为。
+
+Named/default args：
+
+```abel
+fn int inc(int x, int by = 1) {
+    return x + by;
+}
+
+struct Point {
+    int x;
+    int y;
+
+    init(int x, int y = 0) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+backend Fs {
+    fn int run(str cmd, str& out, bool check = true);
+}
+
+fn int main() {
+    int a = inc(1);
+    int b = inc(x: 1, by: 2);
+    Point p = Point(x: 3, y: 4);
+    str out = "";
+    return a + b + p.x + Fs::run(cmd: "status", out: out);
+}
+```
+
+归一化后等价于：
+
+```text
+inc(1)                         -> inc(1, 1)
+inc(x: 1, by: 2)               -> inc(1, 2)
+Point(x: 3, y: 4)              -> Point(3, 4)
+Fs::run(cmd: "status", out: out) -> Fs::run("status", out, true)
+```
+
+Named/default 约束：
+
+```text
+positional 参数必须在 named 参数之前。
+named 参数必须匹配声明参数名，且不能重复。
+缺失参数必须有 default，否则 check 报错。
+default expr 在声明上下文 typecheck；第一片不允许 default expr 依赖 this 或后续参数。
+func 类型不携带参数名/default；通过 func 值调用只接受 positional 且不自动补 default。
+```
+
+非法示例：
+
+```abel
+inc(by: 2, 1);          // positional after named
+inc(x: 1, x: 2);        // duplicate named arg
+inc(z: 1);              // unknown parameter name
+
+func int(int, int) f = inc;
+f(x: 1, by: 2);         // func call 不接受 named
+f(1);                   // func call 不补 inc 的 default
+```
+
+Pipe + holes：
+
+```abel
+fn int add(int a, int b) {
+    return a + b;
+}
+
+fn void bump(int& x) {
+    x = x + 1;
+}
+
+fn int main() {
+    int x = 3;
+    int y = x |> add(_, 4);      // add(x, 4)
+    int z = y |> add(10, _);     // add(10, y)
+    x |> bump(_);                // `_` 保留 x 的 lvalue，可绑定 int&
+    str s = " abel " |> _.trim().upper();
+    return x + y + z + s.len();
+}
+```
+
+归一化原则：
+
+```text
+lhs |> f                 -> f(lhs)              # 仅当 f 是 callable value/name
+lhs |> f(_)              -> f(lhs)
+lhs |> f(1, _)           -> f(1, lhs)
+lhs |> _.method(a)       -> lhs.method(a)
+lhs |> _.field.method()  -> lhs.field.method()
+```
+
+Pipe/hole 约束：
+
+```text
+`_` 只在 pipe RHS 内有效。
+lhs 只求值一次。
+hole 继承 lhs 的 value category；prvalue hole 不能绑定 mutable T&。
+同一个 RHS 第一片最多一个 hole；以后若要多 hole，必须另行设计求值/别名规则。
+无 hole 的 pipe 只允许 RHS 是 callable；不把任意表达式变成动态调用。
+```
+
+非法示例：
+
+```abel
+int a = _;              // `_` 不在 pipe RHS
+1 |> bump(_);           // prvalue 不能绑定 int&
+x |> add(_, _);         // 第一片 RHS 最多一个 hole
+x |> f(_, mut_ref: _);  // 同理拒绝多 hole
+```
+
+Limited spread into `any...`：
+
+```abel
+fn str join(any... xs) {
+    return build_string(...xs);
+}
+
+fn int main() {
+    vector<any> xs = {1, "x", true};
+    println("prefix=", ...xs);
+    str s = join(...xs);
+    return s.len();
+}
+```
+
+Spread 约束：
+
+```text
+spread expr 必须是 vector<any> 或 any... 参数本身。
+spread 只能进入 any... tail。
+spread 不参与固定参数匹配，不展开 vector<int> 到 int,int。
+不支持 named spread、object/dict spread、map/object literal spread。
+```
+
+非法示例：
+
+```abel
+fn int add(int a, int b) { return a + b; }
+
+vector<int> xs = {1, 2};
+add(...xs);             // 不展开到固定参数
+
+vector<any> ys = {1, 2};
+add(...ys);             // 即使 vector<any> 也不填固定参数
+
+println(name: ...ys);   // 不做 named spread
+```
+
+完整组合示例：
+
+```abel
+fn int scale(int x, int by = 2) {
+    return x * by;
+}
+
+fn str report(any... xs) {
+    return build_string(...xs);
+}
+
+fn int main() {
+    vector<any> tail = {" units", true};
+    int value = 3 |> scale(x: _, by: 4);
+    str text = report("value=", value, ...tail);
+    return text.len();
+}
+```
+
+这组示例的设计目标是证明：v1.1-a 只是调用层结构化糖，所有东西都能在 check 阶段归一化到现有 callable/overload/backend call 规则，不引入新的动态对象模型。
+
 #### v1.1-b：强化 Abel SDK / Backend 承载复杂度
 
 v1.1-b 不向 Abel 内核加入 `map`、`dict`、`object`、`symbol`、`resource literal` 或 `dynamic backend invoke`。
