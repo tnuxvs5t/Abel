@@ -2703,14 +2703,19 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
     if (m_builtins.hasFunction(name)) {
         if (sourceCall && callHasNamedArgs(*sourceCall))
             return errorExpr(span, QStringLiteral("builtin function calls do not support named arguments"));
-        if (sourceCall && callHasSpreadArgs(*sourceCall))
-            return errorExpr(span, QStringLiteral("spread arguments in pipe builtin calls are not implemented in this v1.1 slice"));
+        const bool spreadBuiltin = name == QStringLiteral("build_string")
+            || name == QStringLiteral("print")
+            || name == QStringLiteral("println");
+        if (sourceCall && callHasSpreadArgs(*sourceCall) && !spreadBuiltin)
+            return errorExpr(span, QStringLiteral("spread arguments are only supported for any... builtin functions"));
         auto built = buildPipeArgs(lhs, args, span, sourceCall);
         const auto& checked = built.checked;
         const auto& spans = built.spans;
+        const auto& spreads = built.spreads;
         const qsizetype argc = static_cast<qsizetype>(checked.size());
         auto arg = [&](qsizetype i) -> const ExprType& { return checked[static_cast<size_t>(i)]; };
         auto argSpan = [&](qsizetype i) -> const SourceSpan& { return spans[static_cast<size_t>(i)]; };
+        auto argSpread = [&](qsizetype i) -> bool { return static_cast<size_t>(i) < spreads.size() && spreads[static_cast<size_t>(i)]; };
         if (name == QStringLiteral("to_str")) {
             if (argc != 1)
                 return errorExpr(span, QStringLiteral("to_str expects one argument"));
@@ -2735,15 +2740,23 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
         }
         if (name == QStringLiteral("build_string")) {
             for (qsizetype i = 0; i < argc; ++i) {
-                if (!isUnknownType(arg(i).type) && !isStringifiable(arg(i).type))
+                if (argSpread(i)) {
+                    if (!isUnknownType(arg(i).type) && !isVectorAnyType(arg(i).type))
+                        error(argSpan(i), QStringLiteral("spread argument expects vector<any>, got %1").arg(arg(i).type.displayName()));
+                } else if (!isUnknownType(arg(i).type) && !isStringifiable(arg(i).type)) {
                     error(argSpan(i), QStringLiteral("cannot stringify %1").arg(arg(i).type.displayName()));
+                }
             }
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("print") || name == QStringLiteral("println")) {
             for (qsizetype i = 0; i < argc; ++i) {
-                if (!isUnknownType(arg(i).type) && !isStringifiable(arg(i).type))
+                if (argSpread(i)) {
+                    if (!isUnknownType(arg(i).type) && !isVectorAnyType(arg(i).type))
+                        error(argSpan(i), QStringLiteral("spread argument expects vector<any>, got %1").arg(arg(i).type.displayName()));
+                } else if (!isUnknownType(arg(i).type) && !isStringifiable(arg(i).type)) {
                     error(argSpan(i), QStringLiteral("cannot stringify %1").arg(arg(i).type.displayName()));
+                }
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }

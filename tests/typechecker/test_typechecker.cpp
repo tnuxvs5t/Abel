@@ -971,13 +971,16 @@ private slots:
 
             fn int main() {
                 any value = 7;
+                vector<any> tail = {"A", 7, true};
                 int counter = 0;
                 int hi = 4 |> max(9, _);
                 int bounded = 7 |> clamp(_, 1, 5);
                 int once = next(counter) |> max(_, _);
                 bool ok = value |> any_is(_, "i32");
                 str text = "x" |> build_string("pre", _, "!");
-                return hi + bounded + once + counter + text.len();
+                str spread = tail |> build_string("pre", ..._);
+                println(...tail);
+                return hi + bounded + once + counter + text.len() + spread.len();
             }
         )");
         auto result = checkSource(src);
@@ -1058,6 +1061,26 @@ private slots:
         )"));
         QVERIFY(countMessagesContaining(receiverWithSecondHole,
                                         QStringLiteral("exactly one '_' hole")) >= 1);
+
+        auto pipeBuiltinSpreadNonAnyVector = checkSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1, 2};
+                str text = xs |> build_string(..._);
+                return text.len();
+            }
+        )"));
+        QVERIFY(countMessagesContaining(pipeBuiltinSpreadNonAnyVector,
+                                        QStringLiteral("spread argument expects vector<any>")) >= 1);
+
+        auto pipeBuiltinSpreadFixed = checkSource(QStringLiteral(R"(
+            fn int main() {
+                vector<any> xs = {1, 2};
+                int x = xs |> max(..._);
+                return x;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(pipeBuiltinSpreadFixed,
+                                        QStringLiteral("spread arguments are only supported for any... builtin functions")) >= 1);
     }
 
     void acceptsPrvalueVectorReceiverAndNumericConversions()
@@ -2447,7 +2470,9 @@ private slots:
                 Box<int> c = a + b;
                 Pair<int, int> p = Pair<int, int>(2, 2);
                 Pair2<int, int> q = Pair2<int, int>(3, 4);
-                return c.value + p.first + p.second + q.first + q.second;
+                Box<int> d = 4 |> Box<int>(_);
+                Pair2<int, int> r = 5 |> Pair2<int, int>(_, 6);
+                return c.value + p.first + p.second + q.first + q.second + d.value + r.first + r.second;
             }
         )");
         auto result = checkSource(src);

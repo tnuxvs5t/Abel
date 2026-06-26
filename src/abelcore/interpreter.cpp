@@ -4184,8 +4184,11 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
             error(QStringLiteral("E0544"), QStringLiteral("builtin function calls do not support named arguments"), expr.rhs->span);
             return AbelValue::makeUnknown();
         }
-        if (sourceCall && callHasSpreadArgs(*sourceCall)) {
-            error(QStringLiteral("E0544"), QStringLiteral("spread arguments in pipe builtin calls are not implemented in this v1.1 slice"), expr.rhs->span);
+        const bool spreadBuiltin = targetName == QStringLiteral("build_string")
+            || targetName == QStringLiteral("print")
+            || targetName == QStringLiteral("println");
+        if (sourceCall && callHasSpreadArgs(*sourceCall) && !spreadBuiltin) {
+            error(QStringLiteral("E0544"), QStringLiteral("spread arguments are only supported for any... builtin functions"), expr.rhs->span);
             return AbelValue::makeUnknown();
         }
         BuiltinFunctionCall call{*m_ctx, targetName, {}, {}, expr.span};
@@ -4194,18 +4197,33 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
         call.args.reserve(args.size() + (holes ? 0 : 1));
         call.argSpans.reserve(args.size() + (holes ? 0 : 1));
         AbelValue lhsValue = evalExpr(*expr.lhs);
-        if (!holes) {
-            call.args.push_back(lhsValue);
-            call.argSpans.push_back(expr.lhs->span);
-        }
-        for (const auto& arg : args) {
-            if (isPipeHoleExpr(*arg)) {
-                call.args.push_back(lhsValue);
-                call.argSpans.push_back(arg->span);
+        auto appendArg = [&](const AbelValue& value, const SourceSpan& argSpan, bool spread) {
+            if (spread) {
+                if (!isVectorAnyType(value.type())) {
+                    error(QStringLiteral("E0544"),
+                          QStringLiteral("spread argument expects vector<any>, got %1").arg(value.type().displayName()),
+                          argSpan);
+                    return;
+                }
+                auto vector = value.asVector();
+                for (const AbelValue& element : vector->elements) {
+                    call.args.push_back(element.type().kind == TypeKind::Any ? element.asAny()->value : element);
+                    call.argSpans.push_back(argSpan);
+                }
             } else {
-                call.args.push_back(evalExpr(*arg));
-                call.argSpans.push_back(arg->span);
+                call.args.push_back(value);
+                call.argSpans.push_back(argSpan);
             }
+        };
+        if (!holes)
+            appendArg(lhsValue, expr.lhs->span, false);
+        for (size_t i = 0; i < args.size(); ++i) {
+            const auto& arg = args[i];
+            const bool spread = sourceCall && callArgSpread(*sourceCall, i);
+            if (isPipeHoleExpr(*arg))
+                appendArg(lhsValue, arg->span, spread);
+            else
+                appendArg(evalExpr(*arg), arg->span, spread);
         }
         if (m_ctx->hasError())
             return AbelValue::makeUnknown();

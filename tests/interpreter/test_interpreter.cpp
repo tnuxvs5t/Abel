@@ -984,14 +984,16 @@ private slots:
 
             fn int main() {
                 any value = 7;
+                vector<any> tail = {"A", 7, true};
                 int counter = 0;
                 int hi = 4 |> max(9, _);              // max(9, 4)
                 int bounded = 7 |> clamp(_, 1, 5);    // clamp(7, 1, 5)
                 int once = next(counter) |> max(_, _); // next(counter) is evaluated once
                 bool ok = value |> any_is(_, "i32");
                 str text = "x" |> build_string("pre", _, "!");
-                if (ok && text == "prex!" && counter == 1) {
-                    return hi + bounded + once + counter + text.len();
+                str spread = tail |> build_string("pre", ..._);
+                if (ok && text == "prex!" && spread == "preA7true" && counter == 1) {
+                    return hi + bounded + once + counter + text.len() + spread.len();
                 }
                 return 0;
             }
@@ -1000,7 +1002,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 21);
+        QCOMPARE(result.exitCode, 30);
     }
 
     void pipeHoleReceiversWorkForMethodsAndFields()
@@ -1998,6 +2000,26 @@ private slots:
         )"));
         QVERIFY(!functionValueNamedPipe.diagnostics.isEmpty());
         QCOMPARE(functionValueNamedPipe.exitCode, 1);
+
+        auto pipeBuiltinSpreadNonAnyVector = runSource(QStringLiteral(R"(
+            fn int main() {
+                vector<int> xs = {1, 2};
+                str text = xs |> build_string(..._);
+                return text.len();
+            }
+        )"));
+        QVERIFY(!pipeBuiltinSpreadNonAnyVector.diagnostics.isEmpty());
+        QCOMPARE(pipeBuiltinSpreadNonAnyVector.exitCode, 1);
+
+        auto pipeBuiltinSpreadFixed = runSource(QStringLiteral(R"(
+            fn int main() {
+                vector<any> xs = {1, 2};
+                int x = xs |> max(..._);
+                return x;
+            }
+        )"));
+        QVERIFY(!pipeBuiltinSpreadFixed.diagnostics.isEmpty());
+        QCOMPARE(pipeBuiltinSpreadFixed.exitCode, 1);
     }
 
     void rejectsBadStructuredConstructorAndMethodCallsAtRuntime()
@@ -2235,14 +2257,16 @@ private slots:
                 Box<int> c = a + b;
                 Pair<int, int> p = Pair<int, int>(2, 2);
                 Pair2<int, int> q = Pair2<int, int>(3, 4);
-                return c.value + p.first + p.second + q.first + q.second;
+                Box<int> d = 4 |> Box<int>(_);
+                Pair2<int, int> r = 5 |> Pair2<int, int>(_, 6);
+                return c.value + p.first + p.second + q.first + q.second + d.value + r.first + r.second;
             }
         )");
         auto result = runSource(src);
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 16);
+        QCOMPARE(result.exitCode, 31);
     }
 
     void runsThisMethodNestedStructAssignmentAndFunctionValues()
