@@ -1003,6 +1003,45 @@ private slots:
         QCOMPARE(result.exitCode, 21);
     }
 
+    void pipeHoleReceiversWorkForMethodsAndFields()
+    {
+        const QString src = QStringLiteral(R"(
+            fn str make_text(int& calls) {
+                calls = calls + 1;
+                return " kappa ";
+            }
+
+            struct Box {
+                str text;
+
+                init(str s) {
+                    text = s;
+                }
+
+                const fn str shout() {
+                    return text.trim().upper();
+                }
+            }
+
+            fn int main() {
+                int calls = 0;
+                Box b = Box(" abel ");
+                str a = make_text(calls) |> _.trim().upper();
+                str b1 = b |> _.shout();
+                str b2 = b |> _.text.trim().upper();
+                if (a == "KAPPA" && b1 == "ABEL" && b2 == "ABEL" && calls == 1) {
+                    return a.len() + b1.len() + b2.len() + calls;
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 14);
+    }
+
     void prvalueVectorReceiverAndNumericConversionsWork()
     {
         const QString src = QStringLiteral(R"(

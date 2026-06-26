@@ -66,6 +66,9 @@ private:
     BackendRegistry* m_activeBackendRegistry = nullptr;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
     AbelRuntimeContext* m_ctx = nullptr;
+    bool m_hasPipeHoleArg = false;
+    PreparedCallArg m_pipeHoleArg;
+    AbelLocation* m_pipeHoleTempLocation = nullptr;
 
     void beginRun(AbelRuntimeContext& ctx, BackendRegistry* backendRegistry);
     void endRun();

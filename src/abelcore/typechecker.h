@@ -75,6 +75,7 @@ private:
     QList<Diagnostic> m_diagnostics;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
     AbelType m_currentReturnType = makeType(TypeKind::Void);
+    std::optional<ExprType> m_pipeHoleExpr;
     QString m_currentStruct;
     QString m_currentPackage;
     QString m_currentModule;

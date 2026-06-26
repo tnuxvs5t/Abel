@@ -32,6 +32,52 @@ bool hasPipeHole(const std::vector<std::unique_ptr<ExprNode>>& args)
     return false;
 }
 
+int countPipeHoles(const ExprNode& expr)
+{
+    if (isPipeHoleExpr(expr))
+        return 1;
+    if (auto* unary = dynamic_cast<const UnaryExprNode*>(&expr))
+        return countPipeHoles(*unary->expr);
+    if (auto* binary = dynamic_cast<const BinaryExprNode*>(&expr))
+        return countPipeHoles(*binary->lhs) + countPipeHoles(*binary->rhs);
+    if (auto* assign = dynamic_cast<const AssignExprNode*>(&expr))
+        return countPipeHoles(*assign->lhs) + countPipeHoles(*assign->rhs);
+    if (auto* cast = dynamic_cast<const CastExprNode*>(&expr))
+        return countPipeHoles(*cast->expr);
+    if (auto* call = dynamic_cast<const CallExprNode*>(&expr)) {
+        int count = countPipeHoles(*call->callee);
+        for (const auto& arg : call->args)
+            count += countPipeHoles(*arg);
+        return count;
+    }
+    if (auto* index = dynamic_cast<const IndexExprNode*>(&expr))
+        return countPipeHoles(*index->base) + countPipeHoles(*index->index);
+    if (auto* field = dynamic_cast<const FieldAccessExprNode*>(&expr))
+        return countPipeHoles(*field->base);
+    if (auto* access = dynamic_cast<const StaticAccessExprNode*>(&expr))
+        return countPipeHoles(*access->base);
+    if (auto* init = dynamic_cast<const InitListExprNode*>(&expr)) {
+        int count = 0;
+        for (const auto& value : init->values)
+            count += countPipeHoles(*value);
+        return count;
+    }
+    return 0;
+}
+
+bool isPipeHoleReceiverExpr(const ExprNode& expr)
+{
+    if (isPipeHoleExpr(expr))
+        return true;
+    if (auto* field = dynamic_cast<const FieldAccessExprNode*>(&expr))
+        return isPipeHoleReceiverExpr(*field->base);
+    if (auto* call = dynamic_cast<const CallExprNode*>(&expr))
+        return isPipeHoleReceiverExpr(*call->callee);
+    if (auto* index = dynamic_cast<const IndexExprNode*>(&expr))
+        return isPipeHoleReceiverExpr(*index->base);
+    return false;
+}
+
 AbelType sourceLocationBuiltinType(const QString& name)
 {
     if (name == QStringLiteral("__FILE__"))
@@ -2183,6 +2229,8 @@ ExprType TypeChecker::checkExpr(const ExprNode& expr)
 
 ExprType TypeChecker::checkName(const NameExprNode& expr)
 {
+    if (expr.name == QStringLiteral("_") && m_pipeHoleExpr.has_value())
+        return *m_pipeHoleExpr;
     if (expr.name == QStringLiteral("_"))
         return errorExpr(expr.span, QStringLiteral("'_' pipe hole is only valid inside the right side of a pipe call"));
 
@@ -2428,6 +2476,19 @@ ExprType TypeChecker::checkCast(const CastExprNode& expr)
 ExprType TypeChecker::checkPipe(const BinaryExprNode& expr)
 {
     ExprType lhs = checkExpr(*expr.lhs);
+    if (isPipeHoleReceiverExpr(*expr.rhs)) {
+        if (isPipeHoleExpr(*expr.rhs))
+            return errorExpr(expr.rhs->span, QStringLiteral("pipe hole receiver must select a field or call a method"));
+        const int holes = countPipeHoles(*expr.rhs);
+        if (holes != 1)
+            return errorExpr(expr.rhs->span,
+                             QStringLiteral("pipe receiver expression currently supports exactly one '_' hole"));
+        const std::optional<ExprType> previous = m_pipeHoleExpr;
+        m_pipeHoleExpr = lhs;
+        ExprType out = checkExpr(*expr.rhs);
+        m_pipeHoleExpr = previous;
+        return out;
+    }
     if (auto* name = dynamic_cast<NameExprNode*>(expr.rhs.get()))
         return checkPipeTarget(name->name, name->span, lhs, {}, expr.span);
 

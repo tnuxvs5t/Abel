@@ -339,6 +339,7 @@ private slots:
                 int y = cast<int>(x);
                 int z = 3 |> add(10, _);
                 str s = "ab" |> str_to_chars |> chars_to_str;
+                str t = " ab " |> _.trim().upper();
                 return (2 ** 3) + (-5 %% 3) + (y <? 10) + (9 >? 4);
             }
         )");

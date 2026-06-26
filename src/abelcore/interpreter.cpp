@@ -51,6 +51,52 @@ bool hasPipeHole(const std::vector<std::unique_ptr<ExprNode>>& args)
     return false;
 }
 
+int countPipeHoles(const ExprNode& expr)
+{
+    if (isPipeHoleExpr(expr))
+        return 1;
+    if (auto* unary = dynamic_cast<const UnaryExprNode*>(&expr))
+        return countPipeHoles(*unary->expr);
+    if (auto* binary = dynamic_cast<const BinaryExprNode*>(&expr))
+        return countPipeHoles(*binary->lhs) + countPipeHoles(*binary->rhs);
+    if (auto* assign = dynamic_cast<const AssignExprNode*>(&expr))
+        return countPipeHoles(*assign->lhs) + countPipeHoles(*assign->rhs);
+    if (auto* cast = dynamic_cast<const CastExprNode*>(&expr))
+        return countPipeHoles(*cast->expr);
+    if (auto* call = dynamic_cast<const CallExprNode*>(&expr)) {
+        int count = countPipeHoles(*call->callee);
+        for (const auto& arg : call->args)
+            count += countPipeHoles(*arg);
+        return count;
+    }
+    if (auto* index = dynamic_cast<const IndexExprNode*>(&expr))
+        return countPipeHoles(*index->base) + countPipeHoles(*index->index);
+    if (auto* field = dynamic_cast<const FieldAccessExprNode*>(&expr))
+        return countPipeHoles(*field->base);
+    if (auto* access = dynamic_cast<const StaticAccessExprNode*>(&expr))
+        return countPipeHoles(*access->base);
+    if (auto* init = dynamic_cast<const InitListExprNode*>(&expr)) {
+        int count = 0;
+        for (const auto& value : init->values)
+            count += countPipeHoles(*value);
+        return count;
+    }
+    return 0;
+}
+
+bool isPipeHoleReceiverExpr(const ExprNode& expr)
+{
+    if (isPipeHoleExpr(expr))
+        return true;
+    if (auto* field = dynamic_cast<const FieldAccessExprNode*>(&expr))
+        return isPipeHoleReceiverExpr(*field->base);
+    if (auto* call = dynamic_cast<const CallExprNode*>(&expr))
+        return isPipeHoleReceiverExpr(*call->callee);
+    if (auto* index = dynamic_cast<const IndexExprNode*>(&expr))
+        return isPipeHoleReceiverExpr(*index->base);
+    return false;
+}
+
 QString backendSignatureText(const AbelType& returnType, const std::vector<AbelType>& params, bool variadic)
 {
     QStringList parts;
@@ -437,12 +483,17 @@ void Interpreter::beginRun(AbelRuntimeContext& ctx, BackendRegistry* backendRegi
     m_currentImportAliases.clear();
     m_backendRegistry = BackendRegistry();
     m_activeBackendRegistry = backendRegistry ? backendRegistry : &m_backendRegistry;
+    m_hasPipeHoleArg = false;
+    m_pipeHoleArg = PreparedCallArg{};
+    m_pipeHoleTempLocation = nullptr;
 }
 
 void Interpreter::endRun()
 {
     m_ctx = nullptr;
     m_activeBackendRegistry = nullptr;
+    m_hasPipeHoleArg = false;
+    m_pipeHoleTempLocation = nullptr;
 }
 
 bool Interpreter::collectProgram(const ProgramNode& program, AbelRuntimeContext& ctx, InterpreterResult& result)
@@ -2858,6 +2909,8 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
         }
     }
     if (auto* e = dynamic_cast<const NameExprNode*>(&expr)) {
+        if (e->name == QStringLiteral("_") && m_hasPipeHoleArg)
+            return m_pipeHoleArg.value;
         if (isSourceLocationBuiltinName(e->name))
             return evalSourceLocationBuiltin(e->name, e->span);
 
@@ -2964,6 +3017,13 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
         return slot->location;
     }
     if (auto* e = dynamic_cast<const NameExprNode*>(&expr)) {
+        if (e->name == QStringLiteral("_") && m_hasPipeHoleArg) {
+            if (m_pipeHoleArg.location)
+                return m_pipeHoleArg.location;
+            if (!m_pipeHoleTempLocation)
+                m_pipeHoleTempLocation = m_ctx->createStorage(m_pipeHoleArg.value, m_pipeHoleArg.value.type().isConst);
+            return m_pipeHoleTempLocation;
+        }
         VariableSlot* slot = m_ctx->lookupVariable(e->name);
         if (!slot || !slot->location) {
             error(QStringLiteral("E0535"), QStringLiteral("unknown variable '%1'").arg(e->name), e->span);
@@ -3382,6 +3442,47 @@ AbelValue Interpreter::evalCast(const CastExprNode& expr)
 
 AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
 {
+    auto preparePipeHoleArg = [&]() {
+        PreparedCallArg out;
+        out.span = expr.lhs->span;
+        if (exprCanHaveRuntimeLocation(*expr.lhs)) {
+            if (AbelLocation* loc = evalLocation(*expr.lhs)) {
+                out.location = loc;
+                out.isReadOnly = loc->isReadOnly;
+                out.value = loc->read();
+            } else {
+                out.value = AbelValue::makeUnknown();
+            }
+        } else {
+            out.value = evalExpr(*expr.lhs);
+        }
+        return out;
+    };
+
+    if (isPipeHoleReceiverExpr(*expr.rhs)) {
+        if (isPipeHoleExpr(*expr.rhs)) {
+            error(QStringLiteral("E0593"), QStringLiteral("pipe hole receiver must select a field or call a method"), expr.rhs->span);
+            return AbelValue::makeUnknown();
+        }
+        const int holes = countPipeHoles(*expr.rhs);
+        if (holes != 1) {
+            error(QStringLiteral("E0593"), QStringLiteral("pipe receiver expression currently supports exactly one '_' hole"), expr.rhs->span);
+            return AbelValue::makeUnknown();
+        }
+
+        const bool previousHasPipeHoleArg = m_hasPipeHoleArg;
+        const PreparedCallArg previousPipeHoleArg = m_pipeHoleArg;
+        AbelLocation* const previousPipeHoleTempLocation = m_pipeHoleTempLocation;
+        m_hasPipeHoleArg = true;
+        m_pipeHoleArg = preparePipeHoleArg();
+        m_pipeHoleTempLocation = nullptr;
+        AbelValue out = evalExpr(*expr.rhs);
+        m_hasPipeHoleArg = previousHasPipeHoleArg;
+        m_pipeHoleArg = previousPipeHoleArg;
+        m_pipeHoleTempLocation = previousPipeHoleTempLocation;
+        return out;
+    }
+
     QString targetName;
     const std::vector<std::unique_ptr<ExprNode>>* restArgs = nullptr;
 

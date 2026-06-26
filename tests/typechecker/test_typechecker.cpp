@@ -699,6 +699,35 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsPipeHoleReceiversForMethodsAndFields()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                str text;
+
+                init(str s) {
+                    text = s;
+                }
+
+                const fn str shout() {
+                    return text.trim().upper();
+                }
+            }
+
+            fn int main() {
+                Box b = Box(" abel ");
+                str a = " kappa " |> _.trim().upper();
+                str b1 = b |> _.shout();
+                str b2 = b |> _.text.trim().upper();
+                return a.len() + b1.len() + b2.len();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void rejectsInvalidPipeHoles()
     {
         auto outsidePipe = checkSource(QStringLiteral(R"(
@@ -724,6 +753,24 @@ private slots:
         )"));
         QVERIFY(countMessagesContaining(duplicateMutableRef,
                                         QStringLiteral("multiple mutable reference parameters")) >= 1);
+
+        auto bareReceiver = checkSource(QStringLiteral(R"(
+            fn int main() {
+                int x = 1 |> _;
+                return x;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(bareReceiver,
+                                        QStringLiteral("pipe hole receiver must select a field or call a method")) >= 1);
+
+        auto receiverWithSecondHole = checkSource(QStringLiteral(R"(
+            fn int main() {
+                bool ok = "ab" |> _.contains(_);
+                return 0;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(receiverWithSecondHole,
+                                        QStringLiteral("exactly one '_' hole")) >= 1);
     }
 
     void acceptsPrvalueVectorReceiverAndNumericConversions()
