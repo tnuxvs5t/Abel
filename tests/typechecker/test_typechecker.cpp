@@ -1002,6 +1002,10 @@ private slots:
                 const fn str shout() {
                     return text.trim().upper();
                 }
+
+                const fn bool same(const Box& other) {
+                    return text == other.text;
+                }
             }
 
             fn int main() {
@@ -1009,6 +1013,8 @@ private slots:
                 str a = " kappa " |> _.trim().upper();
                 str b1 = b |> _.shout();
                 str b2 = b |> _.text.trim().upper();
+                bool c = "ab" |> _.contains(_);
+                bool d = b |> _.same(_);
                 return a.len() + b1.len() + b2.len();
             }
         )");
@@ -1053,14 +1059,38 @@ private slots:
         QVERIFY(countMessagesContaining(bareReceiver,
                                         QStringLiteral("pipe hole receiver must select a field or call a method")) >= 1);
 
-        auto receiverWithSecondHole = checkSource(QStringLiteral(R"(
+        auto mutableReceiverWithSecondHole = checkSource(QStringLiteral(R"(
             fn int main() {
-                bool ok = "ab" |> _.contains(_);
+                vector<int> xs = {1, 2};
+                xs |> _.push(_);
                 return 0;
             }
         )"));
-        QVERIFY(countMessagesContaining(receiverWithSecondHole,
-                                        QStringLiteral("exactly one '_' hole")) >= 1);
+        QVERIFY(countMessagesContaining(mutableReceiverWithSecondHole,
+                                        QStringLiteral("same hole multiple times")) >= 1);
+
+        auto mutableMethodArgWithSecondHole = checkSource(QStringLiteral(R"(
+            struct Box {
+                int value;
+
+                init(int x) {
+                    value = x;
+                }
+
+                const fn int touch(Box& other) {
+                    other.value = other.value + 1;
+                    return other.value;
+                }
+            }
+
+            fn int main() {
+                Box b = Box(1);
+                int y = b |> _.touch(_);
+                return y;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(mutableMethodArgWithSecondHole,
+                                        QStringLiteral("same hole multiple times")) >= 1);
 
         auto pipeBuiltinSpreadNonAnyVector = checkSource(QStringLiteral(R"(
             fn int main() {

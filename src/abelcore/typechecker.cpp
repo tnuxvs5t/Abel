@@ -2566,10 +2566,6 @@ ExprType TypeChecker::checkPipe(const BinaryExprNode& expr)
     if (isPipeHoleReceiverExpr(*expr.rhs)) {
         if (isPipeHoleExpr(*expr.rhs))
             return errorExpr(expr.rhs->span, QStringLiteral("pipe hole receiver must select a field or call a method"));
-        const int holes = countPipeHoles(*expr.rhs);
-        if (holes != 1)
-            return errorExpr(expr.rhs->span,
-                             QStringLiteral("pipe receiver expression currently supports exactly one '_' hole"));
         const std::optional<ExprType> previous = m_pipeHoleExpr;
         m_pipeHoleExpr = lhs;
         ExprType out = checkExpr(*expr.rhs);
@@ -3469,7 +3465,10 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
                                               const QList<const FunctionDeclNode*>& candidates,
                                               const ExprType& receiver,
                                               const CallExprNode& call,
-                                              const SourceSpan& span)
+                                              const SourceSpan& span,
+                                              bool receiverPipeHole,
+                                              const std::vector<bool>* rawPipeHoles,
+                                              int totalPipeHoles)
 {
     if (call.hasExplicitTypeArgs)
         return errorExpr(span, QStringLiteral("method calls do not support explicit template arguments"));
@@ -3486,6 +3485,27 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
     const auto methodUsableByReceiver = [&](const FunctionDeclNode& fn) {
         return !(receiver.category == ValueCategory::LValue && !receiver.isMutable && !fn.isConstMethod);
     };
+    const auto pipeWriteConflict = [&](const FunctionDeclNode& fn,
+                                       const NormalizedCallArgs& normalized,
+                                       bool diagnose) {
+        if (totalPipeHoles <= 1)
+            return false;
+        int writeHoleCount = receiverPipeHole && !fn.isConstMethod ? 1 : 0;
+        const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
+        const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
+        for (size_t i = 0; i < fixedCount; ++i) {
+            const AbelType paramType = typeFromAstForDecl(*fn.params[i]->type, fn);
+            if (i < normalized.pipeHoles.size()
+                && normalized.pipeHoles[i]
+                && paramType.isReference()
+                && !(paramType.pointee && paramType.pointee->isConst)) {
+                ++writeHoleCount;
+            }
+        }
+        if (writeHoleCount > 0 && diagnose)
+            error(call.span, QStringLiteral("pipe RHS cannot use the same hole multiple times when any use is mutable"));
+        return writeHoleCount > 0;
+    };
 
     if (candidates.size() == 1) {
         const FunctionDeclNode* method = candidates.front();
@@ -3495,8 +3515,10 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
             return errorExpr(span, QStringLiteral("method '%1' is private").arg(displayName));
         if (!methodUsableByReceiver(*method))
             return errorExpr(span, QStringLiteral("method '%1' requires mutable receiver").arg(displayName));
-        NormalizedCallArgs normalized = normalizeCallArgsForParams(*method, displayName, method->params, call, checked, true);
+        NormalizedCallArgs normalized = normalizeCallArgsForParams(*method, displayName, method->params, call, checked, true, rawPipeHoles);
         if (!normalized.ok)
+            return unknownExprType();
+        if (pipeWriteConflict(*method, normalized, true))
             return unknownExprType();
         const bool variadic = !method->params.empty() && method->params.back()->variadic;
         const size_t fixedCount = variadic ? method->params.size() - 1 : method->params.size();
@@ -3537,8 +3559,10 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
         if (!methodUsableByReceiver(*method))
             continue;
 
-        NormalizedCallArgs normalized = normalizeCallArgsForParams(*method, displayName, method->params, call, checked, false);
+        NormalizedCallArgs normalized = normalizeCallArgsForParams(*method, displayName, method->params, call, checked, false, rawPipeHoles);
         if (!normalized.ok)
+            continue;
+        if (pipeWriteConflict(*method, normalized, false))
             continue;
 
         const bool variadic = !method->params.empty() && method->params.back()->variadic;
@@ -3584,7 +3608,7 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
             const qsizetype before = m_diagnostics.size();
             for (const FunctionDeclNode* method : considered) {
                 if (method && methodUsableByReceiver(*method)) {
-                    normalizeCallArgsForParams(*method, displayName, method->params, call, checked, true);
+                    normalizeCallArgsForParams(*method, displayName, method->params, call, checked, true, rawPipeHoles);
                     if (m_diagnostics.size() != before)
                         return unknownExprType();
                 }
@@ -3611,8 +3635,10 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
     const FunctionDeclNode* method = matches.front().method;
     if (method->isPrivate && m_currentStruct != receiver.type.spelling)
         return errorExpr(span, QStringLiteral("method '%1' is private").arg(displayName));
-    NormalizedCallArgs normalized = normalizeCallArgsForParams(*method, displayName, method->params, call, checked, true);
+    NormalizedCallArgs normalized = normalizeCallArgsForParams(*method, displayName, method->params, call, checked, true, rawPipeHoles);
     if (!normalized.ok)
+        return unknownExprType();
+    if (pipeWriteConflict(*method, normalized, true))
         return unknownExprType();
     const bool variadic = !method->params.empty() && method->params.back()->variadic;
     const size_t fixedCount = variadic ? method->params.size() - 1 : method->params.size();
@@ -3688,6 +3714,17 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get())) {
+        const bool inPipeHoleReceiver = m_pipeHoleExpr.has_value() && isPipeHoleReceiverExpr(*field->base);
+        std::vector<bool> rawPipeHoles;
+        const std::vector<bool>* rawPipeHolesPtr = nullptr;
+        int totalPipeHoles = 0;
+        if (inPipeHoleReceiver) {
+            rawPipeHoles.reserve(expr.args.size());
+            for (const auto& arg : expr.args)
+                rawPipeHoles.push_back(isPipeHoleExpr(*arg));
+            rawPipeHolesPtr = &rawPipeHoles;
+            totalPipeHoles = countPipeHoles(expr);
+        }
         ExprType receiver = checkExpr(*field->base);
         if (isUnknownType(receiver.type)) {
             for (const auto& argExpr : expr.args)
@@ -3708,11 +3745,18 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
                     return errorExpr(field->span, QStringLiteral("unknown struct template instantiation '%1'").arg(receiver.type.displayName()));
                 guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
             }
-            return checkMethodOverloadCall(field->field, methods, receiver, expr, expr.span);
+            return checkMethodOverloadCall(field->field,
+                                           methods,
+                                           receiver,
+                                           expr,
+                                           expr.span,
+                                           inPipeHoleReceiver,
+                                           rawPipeHolesPtr,
+                                           totalPipeHoles);
         }
         if (callHasStructuredArgs(expr))
             return errorExpr(expr.span, QStringLiteral("builtin method calls do not support named, default, or spread arguments"));
-        return checkBuiltinMethodCall(*field, expr.args);
+        return checkBuiltinMethodCall(*field, expr.args, inPipeHoleReceiver, totalPipeHoles);
     }
 
     auto* name = dynamic_cast<NameExprNode*>(expr.callee.get());
@@ -4528,7 +4572,10 @@ ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
     return {makeFunctionType(returnType, std::move(params)), ValueCategory::PRValue, false};
 }
 
-ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args)
+ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee,
+                                             const std::vector<std::unique_ptr<ExprNode>>& args,
+                                             bool receiverPipeHole,
+                                             int totalPipeHoles)
 {
     ExprType receiver = checkExpr(*callee.base);
     if (isUnknownType(receiver.type)) {
@@ -4544,6 +4591,12 @@ ExprType TypeChecker::checkBuiltinMethodCall(const FieldAccessExprNode& callee, 
     }
     if (!m_builtins.hasMethod(receiver.type, callee.field))
         return errorExpr(callee.span, QStringLiteral("unknown builtin method '%1'").arg(callee.field));
+    if (receiverPipeHole && totalPipeHoles > 1) {
+        if (const BuiltinMethodDesc* method = m_builtins.methodDescriptor(receiver.type, callee.field)) {
+            if (method->mutatesReceiver)
+                return errorExpr(callee.span, QStringLiteral("pipe RHS cannot use the same hole multiple times when any use is mutable"));
+        }
+    }
 
     if (receiver.type.kind == TypeKind::Str) {
         if (callee.field == QStringLiteral("len")) {

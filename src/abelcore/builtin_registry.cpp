@@ -1731,7 +1731,16 @@ bool BuiltinRegistry::hasFunction(const QString& name) const
 
 bool BuiltinRegistry::hasMethod(const AbelType& receiverType, const QString& name) const
 {
-    return findMethod(receiverType, name) != nullptr;
+    return methodDescriptor(receiverType, name) != nullptr;
+}
+
+const BuiltinMethodDesc* BuiltinRegistry::methodDescriptor(const AbelType& receiverType, const QString& name) const
+{
+    for (const auto& method : m_methods) {
+        if (method.receiverKind == receiverType.kind && method.name == name)
+            return &method;
+    }
+    return nullptr;
 }
 
 AbelValue BuiltinRegistry::callFunction(BuiltinFunctionCall call) const
@@ -1759,7 +1768,7 @@ AbelValue BuiltinRegistry::callFunction(BuiltinFunctionCall call) const
 
 AbelValue BuiltinRegistry::callMethod(BuiltinMethodCall call) const
 {
-    const BuiltinMethodDesc* desc = findMethod(call.receiver.type(), call.name);
+    const BuiltinMethodDesc* desc = methodDescriptor(call.receiver.type(), call.name);
     if (!desc) {
         call.ctx.error(QStringLiteral("E0401"),
                        QStringLiteral("unknown builtin method '%1' for receiver type %2")
@@ -1794,15 +1803,6 @@ const BuiltinFunctionDesc* BuiltinRegistry::findFunction(const QString& name) co
     for (const auto& function : m_functions) {
         if (function.name == name)
             return &function;
-    }
-    return nullptr;
-}
-
-const BuiltinMethodDesc* BuiltinRegistry::findMethod(const AbelType& receiverType, const QString& name) const
-{
-    for (const auto& method : m_methods) {
-        if (method.receiverKind == receiverType.kind && method.name == name)
-            return &method;
     }
     return nullptr;
 }

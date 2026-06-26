@@ -1023,6 +1023,10 @@ private slots:
                 const fn str shout() {
                     return text.trim().upper();
                 }
+
+                const fn bool same(const Box& other) {
+                    return text == other.text;
+                }
             }
 
             fn int main() {
@@ -1031,8 +1035,11 @@ private slots:
                 str a = make_text(calls) |> _.trim().upper();
                 str b1 = b |> _.shout();
                 str b2 = b |> _.text.trim().upper();
-                if (a == "KAPPA" && b1 == "ABEL" && b2 == "ABEL" && calls == 1) {
-                    return a.len() + b1.len() + b2.len() + calls;
+                bool c = a |> _.contains(_);
+                bool d = a |> _.trim().contains(_);
+                bool e = b |> _.same(_);
+                if (a == "KAPPA" && b1 == "ABEL" && b2 == "ABEL" && c && d && e && calls == 1) {
+                    return a.len() + b1.len() + b2.len() + calls + 3;
                 }
                 return 0;
             }
@@ -1041,7 +1048,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 14);
+        QCOMPARE(result.exitCode, 17);
     }
 
     void prvalueVectorReceiverAndNumericConversionsWork()

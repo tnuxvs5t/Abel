@@ -226,7 +226,10 @@ private:
                                      const QList<const FunctionDeclNode*>& candidates,
                                      const ExprType& receiver,
                                      const CallExprNode& call,
-                                     const SourceSpan& span);
+                                     const SourceSpan& span,
+                                     bool receiverPipeHole = false,
+                                     const std::vector<bool>* rawPipeHoles = nullptr,
+                                     int totalPipeHoles = 0);
     ExprType checkFunctionValueCallShape(const AbelType& functionType,
                                          const ExprType& firstArg,
                                          const std::vector<std::unique_ptr<ExprNode>>& restArgs,
@@ -262,7 +265,10 @@ private:
     ExprType checkFunctionValueCall(const AbelType& functionType, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExprType checkLambda(const LambdaExprNode& expr);
     ExprType checkFieldAccess(const FieldAccessExprNode& expr);
-    ExprType checkBuiltinMethodCall(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
+    ExprType checkBuiltinMethodCall(const FieldAccessExprNode& callee,
+                                    const std::vector<std::unique_ptr<ExprNode>>& args,
+                                    bool receiverPipeHole = false,
+                                    int totalPipeHoles = 0);
     ExprType checkIndex(const IndexExprNode& expr);
     ExprType checkInitListAgainst(const InitListExprNode& init, const AbelType& target);
     void checkParameterArgument(const AbelType& paramType,

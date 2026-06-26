@@ -57,6 +57,7 @@ public:
 
     bool hasFunction(const QString& name) const;
     bool hasMethod(const AbelType& receiverType, const QString& name) const;
+    const BuiltinMethodDesc* methodDescriptor(const AbelType& receiverType, const QString& name) const;
 
     AbelValue callFunction(BuiltinFunctionCall call) const;
     AbelValue callMethod(BuiltinMethodCall call) const;
@@ -66,7 +67,6 @@ private:
     std::vector<BuiltinMethodDesc> m_methods;
 
     const BuiltinFunctionDesc* findFunction(const QString& name) const;
-    const BuiltinMethodDesc* findMethod(const AbelType& receiverType, const QString& name) const;
 };
 
 } // namespace abel

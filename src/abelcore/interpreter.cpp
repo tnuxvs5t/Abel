@@ -2727,7 +2727,10 @@ ExecResult Interpreter::callStructFunctionOverloadExpr(const QString& displayNam
                                                        const QList<const FunctionDeclNode*>& candidates,
                                                        AbelLocation* self,
                                                        const CallExprNode& call,
-                                                       const SourceSpan& span)
+                                                       const SourceSpan& span,
+                                                       bool receiverPipeHole,
+                                                       const std::vector<bool>* rawPipeHoles,
+                                                       int totalPipeHoles)
 {
     if (!self) {
         error(QStringLiteral("E0566"), QStringLiteral("missing struct receiver for '%1'").arg(displayName), span);
@@ -2746,6 +2749,31 @@ ExecResult Interpreter::callStructFunctionOverloadExpr(const QString& displayNam
 
     const auto methodUsableByReceiver = [&](const FunctionDeclNode& fn) {
         return !(self->isReadOnly && !fn.isConstMethod);
+    };
+    const auto rejectPipeWriteConflict = [&](const FunctionDeclNode& fn,
+                                             const NormalizedPreparedCallArgs& normalized,
+                                             bool diagnose) -> bool {
+        if (totalPipeHoles <= 1)
+            return false;
+        int writeHoleCount = receiverPipeHole && !fn.isConstMethod ? 1 : 0;
+        const bool variadic = !fn.params.empty() && fn.params.back()->variadic;
+        const size_t fixedCount = variadic ? fn.params.size() - 1 : fn.params.size();
+        for (size_t i = 0; i < fixedCount; ++i) {
+            const AbelType paramType = typeFromAstForDecl(*fn.params[i]->type, fn);
+            if (i < normalized.pipeHoles.size()
+                && normalized.pipeHoles[i]
+                && paramType.isReference()
+                && !(paramType.pointee && paramType.pointee->isConst)) {
+                ++writeHoleCount;
+            }
+        }
+        if (writeHoleCount > 0 && diagnose) {
+            error(QStringLiteral("E0579"),
+                  QStringLiteral("pipe RHS cannot use the same hole multiple times when any use is mutable"),
+                  call.span);
+            return true;
+        }
+        return writeHoleCount > 0;
     };
 
     const FunctionDeclNode* onlyOrdinary = nullptr;
@@ -2767,8 +2795,11 @@ ExecResult Interpreter::callStructFunctionOverloadExpr(const QString& displayNam
                                                                                    call,
                                                                                    rawArgs,
                                                                                    true,
-                                                                                   true);
+                                                                                   true,
+                                                                                   rawPipeHoles);
         if (!normalized.ok || m_ctx->hasError())
+            return ExecResult::returned(AbelValue::makeUnknown());
+        if (rejectPipeWriteConflict(*onlyOrdinary, normalized, true))
             return ExecResult::returned(AbelValue::makeUnknown());
         return callStructFunctionPrepared(*onlyOrdinary, self, normalized.args, span);
     }
@@ -2794,8 +2825,11 @@ ExecResult Interpreter::callStructFunctionOverloadExpr(const QString& displayNam
                                                                                    call,
                                                                                    rawArgs,
                                                                                    false,
-                                                                                   false);
+                                                                                   false,
+                                                                                   rawPipeHoles);
         if (!normalized.ok)
+            continue;
+        if (rejectPipeWriteConflict(*fn, normalized, false))
             continue;
 
         const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
@@ -2841,7 +2875,7 @@ ExecResult Interpreter::callStructFunctionOverloadExpr(const QString& displayNam
             for (const FunctionDeclNode* fn : considered) {
                 if (!fn || !methodUsableByReceiver(*fn))
                     continue;
-                normalizePreparedCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true, false);
+                normalizePreparedCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true, false, rawPipeHoles);
                 if (m_ctx->hasError())
                     return ExecResult::returned(AbelValue::makeUnknown());
             }
@@ -2865,8 +2899,11 @@ ExecResult Interpreter::callStructFunctionOverloadExpr(const QString& displayNam
                                                                                call,
                                                                                rawArgs,
                                                                                true,
-                                                                               true);
+                                                                               true,
+                                                                               rawPipeHoles);
     if (!normalized.ok || m_ctx->hasError())
+        return ExecResult::returned(AbelValue::makeUnknown());
+    if (rejectPipeWriteConflict(*fn, normalized, true))
         return ExecResult::returned(AbelValue::makeUnknown());
     return callStructFunctionPrepared(*fn, self, normalized.args, span);
 }
@@ -3958,11 +3995,6 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
             error(QStringLiteral("E0593"), QStringLiteral("pipe hole receiver must select a field or call a method"), expr.rhs->span);
             return AbelValue::makeUnknown();
         }
-        const int holes = countPipeHoles(*expr.rhs);
-        if (holes != 1) {
-            error(QStringLiteral("E0593"), QStringLiteral("pipe receiver expression currently supports exactly one '_' hole"), expr.rhs->span);
-            return AbelValue::makeUnknown();
-        }
 
         const bool previousHasPipeHoleArg = m_hasPipeHoleArg;
         const PreparedCallArg previousPipeHoleArg = m_pipeHoleArg;
@@ -4281,14 +4313,25 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
     }
 
     if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get())) {
+        const bool inPipeHoleReceiver = m_hasPipeHoleArg && isPipeHoleReceiverExpr(*field->base);
+        std::vector<bool> rawPipeHoles;
+        const std::vector<bool>* rawPipeHolesPtr = nullptr;
+        int totalPipeHoles = 0;
+        if (inPipeHoleReceiver) {
+            rawPipeHoles.reserve(expr.args.size());
+            for (const auto& arg : expr.args)
+                rawPipeHoles.push_back(isPipeHoleExpr(*arg));
+            rawPipeHolesPtr = &rawPipeHoles;
+            totalPipeHoles = countPipeHoles(expr);
+        }
         AbelValue receiver = evalExpr(*field->base);
         if (receiver.type().kind == TypeKind::Struct)
-            return evalStructMethod(*field, expr);
+            return evalStructMethod(*field, expr, inPipeHoleReceiver, rawPipeHolesPtr, totalPipeHoles);
         if (callHasStructuredArgs(expr)) {
             error(QStringLiteral("E0524"), QStringLiteral("builtin method calls do not support named, default, or spread arguments"), expr.span);
             return AbelValue::makeUnknown();
         }
-        return evalBuiltinMethod(*field, expr.args);
+        return evalBuiltinMethod(*field, expr.args, inPipeHoleReceiver, totalPipeHoles);
     }
 
     auto* name = dynamic_cast<NameExprNode*>(expr.callee.get());
@@ -5057,7 +5100,11 @@ AbelValue Interpreter::evalStructConstructorPrepared(const QString& name,
     return m_ctx->hasError() ? AbelValue::makeUnknown() : self->read();
 }
 
-AbelValue Interpreter::evalStructMethod(const FieldAccessExprNode& callee, const CallExprNode& call)
+AbelValue Interpreter::evalStructMethod(const FieldAccessExprNode& callee,
+                                        const CallExprNode& call,
+                                        bool receiverPipeHole,
+                                        const std::vector<bool>* rawPipeHoles,
+                                        int totalPipeHoles)
 {
     AbelLocation* self = evalLocation(*callee.base);
     if (!self)
@@ -5098,10 +5145,20 @@ AbelValue Interpreter::evalStructMethod(const FieldAccessExprNode& callee, const
         }
         guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, *bindings);
     }
-    return callStructFunctionOverloadExpr(callee.field, visible, self, call, call.span).value;
+    return callStructFunctionOverloadExpr(callee.field,
+                                          visible,
+                                          self,
+                                          call,
+                                          call.span,
+                                          receiverPipeHole,
+                                          rawPipeHoles,
+                                          totalPipeHoles).value;
 }
 
-AbelValue Interpreter::evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args)
+AbelValue Interpreter::evalBuiltinMethod(const FieldAccessExprNode& callee,
+                                         const std::vector<std::unique_ptr<ExprNode>>& args,
+                                         bool receiverPipeHole,
+                                         int totalPipeHoles)
 {
     AbelValue receiver;
     AbelLocation* baseLoc = nullptr;
@@ -5115,6 +5172,16 @@ AbelValue Interpreter::evalBuiltinMethod(const FieldAccessExprNode& callee, cons
     }
     if (receiver.type().kind == TypeKind::Unknown)
         return AbelValue::makeUnknown();
+    if (receiverPipeHole && totalPipeHoles > 1) {
+        if (const BuiltinMethodDesc* method = m_builtins.methodDescriptor(receiver.type(), callee.field)) {
+            if (method->mutatesReceiver) {
+                error(QStringLiteral("E0401"),
+                      QStringLiteral("pipe RHS cannot use the same hole multiple times when any use is mutable"),
+                      callee.span);
+                return AbelValue::makeUnknown();
+            }
+        }
+    }
     if (!baseLoc)
         baseLoc = m_ctx->createStorage(receiver, receiver.type().isConst);
     BuiltinMethodCall call{

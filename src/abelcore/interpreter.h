@@ -178,7 +178,10 @@ private:
                                               const QList<const FunctionDeclNode*>& candidates,
                                               AbelLocation* self,
                                               const CallExprNode& call,
-                                              const SourceSpan& span);
+                                              const SourceSpan& span,
+                                              bool receiverPipeHole = false,
+                                              const std::vector<bool>* rawPipeHoles = nullptr,
+                                              int totalPipeHoles = 0);
     const ConstructorDeclNode* selectConstructorOverload(const QString& displayName,
                                                         const StructRuntimeInfo& info,
                                                         const std::vector<PreparedCallArg>& args,
@@ -230,7 +233,10 @@ private:
                                              const std::vector<bool>* rawPipeHoles = nullptr);
     AbelValue evalLambda(const LambdaExprNode& expr);
     AbelValue makeFunctionValue(const FunctionDeclNode& fn);
-    AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
+    AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee,
+                                const std::vector<std::unique_ptr<ExprNode>>& args,
+                                bool receiverPipeHole = false,
+                                int totalPipeHoles = 0);
     AbelValue evalStructConstructor(const QString& name,
                                     const StructRuntimeInfo& info,
                                     const CallExprNode& call,
@@ -243,7 +249,11 @@ private:
                                             const std::vector<PreparedCallArg>& args,
                                             const SourceSpan& span,
                                             const AbelType* constructedType = nullptr);
-    AbelValue evalStructMethod(const FieldAccessExprNode& callee, const CallExprNode& call);
+    AbelValue evalStructMethod(const FieldAccessExprNode& callee,
+                               const CallExprNode& call,
+                               bool receiverPipeHole = false,
+                               const std::vector<bool>* rawPipeHoles = nullptr,
+                               int totalPipeHoles = 0);
     AbelValue evalAssignment(const AssignExprNode& expr);
     AbelValue defaultConstructValue(const AbelType& type, const SourceSpan& span);
     AbelValue defaultConstructValue(const AbelType& type, const SourceSpan& span, QSet<QString>& visiting);
