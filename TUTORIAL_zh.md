@@ -14,6 +14,8 @@ C/C++ 值模型
 + vector<T> 内建容器
 + struct / lambda / any / any...
 + builtin 标准库切片
++ v1.1-a structured calls：named/default args、pipe holes、limited spread
++ v1.1-b backend-backed ADT：复杂对象放进 SDK/Backend，不进核心类型系统
 + backend block 调 Qt/C++ plugin
 + package project / lockfile / local registry
 + tree-run interpreter
@@ -26,6 +28,8 @@ C/C++ 值模型
 - `T&` 是别名，必须初始化，不可重绑。
 - `T*` 是地址值，空指针风险不由语言兜底。
 - `vector` 扩容后旧引用/指针是否失效，按 C++ 风险模型理解。
+- structured calls 只是调用层糖，会归一化回静态可检查的函数/方法/构造/backend 调用。
+- `map/object/dict`、对象字面量、动态字段、dynamic backend invoke 不属于 v1.1 核心；复杂能力由 backend-backed library 承载。
 - TypeChecker 和 Interpreter 正在持续收敛语义一致性；遇到 check/run 分裂要当作编译器问题修。
 
 ---
@@ -366,7 +370,10 @@ fn int main() {
 - positional 参数必须在 named 参数之前。
 - named 参数必须匹配声明参数名，不能重复。
 - 缺失参数必须有 default。
+- default expr 在声明上下文检查；运行期只在选中的 overload 缺参时求值。
+- 普通函数、module-qualified 普通函数、普通构造器、alias constructor、struct method、static-qualified/backend call 支持这套归一化。
 - function value 调用不接收 named args，也不会自动补声明处 default。
+- builtin method 不接收 named/default/spread；builtin function 不接收 named，只有 `build_string`/`print`/`println` 接收 limited spread。
 
 ### pipe holes
 
@@ -391,7 +398,18 @@ fn int main() {
 }
 ```
 
-如果同一个 pipe hole 在 RHS 中出现多次，只允许读用。只要任一用法是 mutable receiver 或 mutable reference 参数，TypeChecker/Interpreter 都会拒绝。
+可用形态包括：
+
+```text
+lhs |> f                 -> f(lhs)
+lhs |> f(_)              -> f(lhs)
+lhs |> f(1, _)           -> f(1, lhs)
+lhs |> f(_, _)           -> f(lhs, lhs)，只读多 hole
+lhs |> _.method(a)       -> lhs.method(a)
+lhs |> _.field.method()  -> lhs.field.method()
+```
+
+如果同一个 pipe hole 在 RHS 中出现多次，只允许读用。只要任一用法是 mutable receiver 或 mutable reference 参数，TypeChecker/Interpreter 都会拒绝。`_` 只在 pipe RHS 内有效；`lhs` 运行期只求值一次。
 
 ### limited spread into `any...`
 
@@ -408,7 +426,23 @@ fn int main() {
 }
 ```
 
-spread 只展开 `vector<any>` / `any...` 到 `any...` tail；不会把 `vector<int>` 或 `vector<any>` 展开成固定参数。
+spread 只展开 `vector<any>` / `any...` 到 `any...` tail；不会把 `vector<int>` 或 `vector<any>` 展开成固定参数，也不支持 named spread / object spread。
+
+组合示例：
+
+```abel
+backend MathSystem {
+    fn int fast_add(int a, int b = 0);
+    fn str join(any... xs);
+}
+
+fn int main() {
+    vector<any> tail = {" units", true};
+    str text = 3 |> MathSystem::join("value=", ...tail);
+    int n = 4 |> MathSystem::fast_add(a: _, b: text.len());
+    return n;
+}
+```
 
 ---
 
@@ -640,6 +674,7 @@ C++ plugin 侧理想形态：
 ```cpp
 #include <abelcore/backend_plugin_base.h>
 #include <abelcore/backend_handle_store.h>
+#include <abelcore/value.h>
 
 class MathBackend final : public abel::AbelBackendPluginBase {
     Q_OBJECT
@@ -665,6 +700,40 @@ public:
 - `abel::AbelBackendHandleStore<T>`：header-only 的 `long -> T` 后端对象表，带 missing-handle 诊断 helper。
 
 这条路线不会新增 `map/object/dict` 内建类型、对象字面量、动态字段或 dynamic backend invoke。
+
+Abel surface 包装模式：
+
+```abel
+backend MapRuntime {
+    fn long create();
+    fn bool contains(long h, any key);
+    fn void set(long h, any key, any value);
+    fn any get(long h, any key);
+}
+
+template <type K, type V>
+struct Map {
+    long h;
+
+    init() {
+        h = MapRuntime::create();
+    }
+
+    const fn bool contains(K key) {
+        return MapRuntime::contains(h, key);
+    }
+
+    fn void set(K key, V value) {
+        MapRuntime::set(h, key, value);
+    }
+
+    const fn V get(K key) {
+        return cast<V>(MapRuntime::get(h, key));
+    }
+}
+```
+
+这里 `Map<K,V>` 是普通模板 struct，不是 Abel 内建 `map` 类型。赋值默认只复制 handle；如果需要值语义，应由 surface 显式提供 `clone()`，backend 实现深拷贝。
 
 安装 SDK：
 

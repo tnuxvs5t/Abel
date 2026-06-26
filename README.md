@@ -11,12 +11,15 @@ Abel is designed around:
 - C/C++-style value semantics: storage, lvalues/prvalues, pointers, references, structs, and vectors.
 - A tree-run interpreter with a static type checker.
 - Qt-native `str` / `char` values (`QString` / `QChar`).
-- Builtin standard-library slices for strings, vectors, math, file/path/env, debug, and tests.
-- v1.1 structured calls: named/default arguments, pipe holes, and limited spread into `any...`.
+- Builtin standard-library slices for strings, vectors, math, file/path/env, char/any, debug, and tests.
+- v1.1-a structured calls: named/default arguments, pipe holes, and limited spread into `any...`, normalized back into statically checked calls.
 - `backend` blocks that call Qt/C++ plugins through `libabelcore.so`.
+- v1.1-b SDK helpers that let backend plugins carry complex objects behind ordinary Abel handles/`any` boundaries.
 - Package projects with `abel.package.json`, local dependencies, local registries, lockfiles, backend artifact caching, and project tests.
 
 Abel intentionally does **not** pretend to be a safe scripting language. Pointer/null/reference/container invalidation risks follow the C/C++ capability model unless a specific diagnostic is implemented.
+
+Abel also intentionally does **not** turn v1.1 into a dynamic object language: there is no built-in `map`/`dict`/`object` type, object literal, dynamic field access, or dynamic backend invoke in the core language. Put complex state in backend-backed libraries and expose it through ordinary modules, structs, templates, methods, `long` handles, and `any` escape hatches.
 
 ## Current command surface
 
@@ -120,6 +123,16 @@ fn int scale(int x, int by = 2) {
     return x * by;
 }
 
+struct Point {
+    int x;
+    int y;
+
+    init(int x, int y = 0) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
 fn str report(any... xs) {
     return build_string(...xs);
 }
@@ -127,12 +140,47 @@ fn str report(any... xs) {
 fn int main() {
     vector<any> tail = {" units", true};
     int value = 3 |> scale(x: _, by: 4);
-    str text = report("value=", value, ...tail);
-    return text.len();
+    Point p = Point(x: value);
+    str text = report("value=", p.x, ...tail);
+    return text.len() + p.y;
 }
 ```
 
-Structured calls are syntax sugar over statically checked calls. Function values and builtin methods remain positional-only ABI boundaries.
+Structured calls are syntax sugar over statically checked calls:
+
+- `inc(1)` may use declaration defaults, while `inc(x: 1, by: 2)` is normalized to positional order before overload/type checking.
+- `lhs |> f(_)`, `lhs |> f(1, _)`, `lhs |> _.method()`, and read-only multi-hole uses reuse one evaluated LHS; mutable/ref multi-hole writes are rejected.
+- `...xs` only expands `vector<any>` or `any...` into an `any...` tail. It does not fill fixed parameters.
+- Function value calls and builtin methods remain positional-only ABI boundaries; builtin `build_string`/`print`/`println` accept limited spread.
+
+Backend complexity pattern:
+
+```abel
+backend StoreRuntime {
+    fn long create();
+    fn void set(long h, any key, any value);
+    fn any get(long h, any key);
+}
+
+template <type V>
+struct Store {
+    long h;
+
+    init() {
+        h = StoreRuntime::create();
+    }
+
+    fn void set(str key, V value) {
+        StoreRuntime::set(h, key, value);
+    }
+
+    const fn V get(str key) {
+        return cast<V>(StoreRuntime::get(h, key));
+    }
+}
+```
+
+The Abel core only sees a normal `backend` block, `long`, `any`, and a template `struct`. A C++ backend may use SDK helpers such as `abel::AbelValueKey` and `abel::AbelBackendHandleStore<T>` internally.
 
 ## Smoke commands
 
