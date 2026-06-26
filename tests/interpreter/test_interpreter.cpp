@@ -943,6 +943,37 @@ private slots:
         QCOMPARE(result.exitCode, 25);
     }
 
+    void pipeHolesWorkForFunctionsAndFunctionValues()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int add(int a, int b) {
+                return a + b;
+            }
+
+            fn int bump(int& x) {
+                x = x + 1;
+                return x;
+            }
+
+            fn int main() {
+                func int(int, int) sub = lambda [] int(int a, int b) {
+                    return a - b;
+                };
+                int x = 3;
+                int a = x |> add(10, _);  // 13
+                int b = x |> add(_, _);   // 6, lhs evaluated once then reused
+                int c = x |> sub(20, _);  // 17 through function value
+                int d = x |> bump(_);     // 4, hole preserves lvalue
+                return a + b + c + d + x;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 44);
+    }
+
     void prvalueVectorReceiverAndNumericConversionsWork()
     {
         const QString src = QStringLiteral(R"(

@@ -644,6 +644,63 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsPipeHolesForFunctionsAndFunctionValues()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int add(int a, int b) {
+                return a + b;
+            }
+
+            fn int bump(int& x) {
+                x = x + 1;
+                return x;
+            }
+
+            fn int main() {
+                func int(int, int) sub = lambda [] int(int a, int b) {
+                    return a - b;
+                };
+                int x = 3;
+                int a = x |> add(10, _);
+                int b = x |> add(_, _);
+                int c = x |> sub(20, _);
+                int d = x |> bump(_);
+                return a + b + c + d;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsInvalidPipeHoles()
+    {
+        auto outsidePipe = checkSource(QStringLiteral(R"(
+            fn int main() {
+                int x = _;
+                return x;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(outsidePipe, QStringLiteral("'_' pipe hole is only valid")) >= 1);
+
+        auto duplicateMutableRef = checkSource(QStringLiteral(R"(
+            fn void swap_like(int& a, int& b) {
+                int t = a;
+                a = b;
+                b = t;
+            }
+
+            fn int main() {
+                int x = 1;
+                x |> swap_like(_, _);
+                return x;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(duplicateMutableRef,
+                                        QStringLiteral("multiple mutable reference parameters")) >= 1);
+    }
+
     void acceptsPrvalueVectorReceiverAndNumericConversions()
     {
         const QString src = QStringLiteral(R"(

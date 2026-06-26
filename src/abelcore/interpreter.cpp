@@ -36,6 +36,21 @@ QString backendFrameSymbol(const QString& backendId, const QString& symbol)
     return QStringLiteral("backend %1::%2").arg(backendId, symbol);
 }
 
+bool isPipeHoleExpr(const ExprNode& expr)
+{
+    auto* name = dynamic_cast<const NameExprNode*>(&expr);
+    return name && name->name == QStringLiteral("_");
+}
+
+bool hasPipeHole(const std::vector<std::unique_ptr<ExprNode>>& args)
+{
+    for (const auto& arg : args) {
+        if (isPipeHoleExpr(*arg))
+            return true;
+    }
+    return false;
+}
+
 QString backendSignatureText(const AbelType& returnType, const std::vector<AbelType>& params, bool variadic)
 {
     QStringList parts;
@@ -1668,8 +1683,6 @@ std::vector<Interpreter::PreparedCallArg> Interpreter::prepareFunctionPipeArgs(
     const ExprNode& firstArg,
     const std::vector<std::unique_ptr<ExprNode>>& restArgs)
 {
-    std::vector<PreparedCallArg> prepared;
-    prepared.reserve(restArgs.size() + 1);
     auto prepareOne = [&](const ExprNode& arg) {
         PreparedCallArg out;
         out.span = arg.span;
@@ -1679,8 +1692,7 @@ std::vector<Interpreter::PreparedCallArg> Interpreter::prepareFunctionPipeArgs(
             if (!enumName.isEmpty() && !shadowedByVariable) {
                 if (const EnumRuntimeInfo* info = resolveEnum(enumName); info && info->values.contains(field->field)) {
                     out.value = evalExpr(arg);
-                    prepared.push_back(std::move(out));
-                    return;
+                    return out;
                 }
             }
         }
@@ -1695,11 +1707,24 @@ std::vector<Interpreter::PreparedCallArg> Interpreter::prepareFunctionPipeArgs(
         } else {
             out.value = evalExpr(arg);
         }
-        prepared.push_back(std::move(out));
+        return out;
     };
-    prepareOne(firstArg);
-    for (const auto& arg : restArgs)
-        prepareOne(*arg);
+
+    const PreparedCallArg lhs = prepareOne(firstArg);
+    std::vector<PreparedCallArg> prepared;
+    const bool holes = hasPipeHole(restArgs);
+    prepared.reserve(restArgs.size() + (holes ? 0 : 1));
+    if (!holes)
+        prepared.push_back(lhs);
+    for (const auto& arg : restArgs) {
+        if (isPipeHoleExpr(*arg)) {
+            PreparedCallArg hole = lhs;
+            hole.span = arg->span;
+            prepared.push_back(hole);
+        } else {
+            prepared.push_back(prepareOne(*arg));
+        }
+    }
     return prepared;
 }
 
@@ -2488,31 +2513,43 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
         return AbelValue::makeUnknown();
     }
 
-    const size_t argc = restArgs.size() + 1;
+    std::vector<bool> holeFlags;
+    const bool holes = hasPipeHole(restArgs);
+    holeFlags.reserve(restArgs.size() + (holes ? 0 : 1));
+    if (!holes)
+        holeFlags.push_back(false);
+    for (const auto& arg : restArgs)
+        holeFlags.push_back(isPipeHoleExpr(*arg));
+
+    std::vector<PreparedCallArg> prepared = prepareFunctionPipeArgs(firstArg, restArgs);
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
+
+    const size_t argc = prepared.size();
     if (argc != fnValue.type().params.size()) {
         error(QStringLiteral("E0582"), QStringLiteral("function value called with wrong argument count"), span);
         return AbelValue::makeUnknown();
     }
 
-    auto argAt = [&](size_t index) -> const ExprNode& {
-        return index == 0 ? firstArg : *restArgs[index - 1];
-    };
-
     std::vector<AbelValue> values(argc);
     std::vector<AbelLocation*> locations(argc, nullptr);
     std::vector<bool> byReference(argc, false);
     std::vector<bool> paramConst(argc, false);
+    int mutableRefHoleCount = 0;
     for (size_t i = 0; i < argc; ++i) {
         const AbelType& target = fnValue.type().params[i];
-        const ExprNode& arg = argAt(i);
         paramConst[i] = isReadOnlyBinding(target, target.isConst);
         if (target.isReference()) {
+            if (i < holeFlags.size() && holeFlags[i] && !(target.pointee && target.pointee->isConst))
+                ++mutableRefHoleCount;
             byReference[i] = true;
-            AbelLocation* loc = evalLocation(arg);
-            if (!loc)
+            AbelLocation* loc = prepared[i].location;
+            if (!loc) {
+                error(QStringLiteral("E0583"), QStringLiteral("function parameter requires lvalue"), prepared[i].span);
                 continue;
+            }
             if (!paramConst[i] && loc->isReadOnly) {
-                error(QStringLiteral("E0583"), QStringLiteral("non-const function parameter cannot bind to const lvalue"), arg.span);
+                error(QStringLiteral("E0583"), QStringLiteral("non-const function parameter cannot bind to const lvalue"), prepared[i].span);
                 continue;
             }
             AbelValue current = loc->read();
@@ -2520,14 +2557,16 @@ AbelValue Interpreter::callFunctionValuePipe(const AbelValue& fnValue,
                 error(QStringLiteral("E0583"),
                       QStringLiteral("cannot bind function parameter %1 to %2 lvalue")
                           .arg(target.displayName(), current.type().displayName()),
-                      arg.span);
+                      prepared[i].span);
                 continue;
             }
             locations[i] = loc;
         } else {
-            values[i] = convertOrError(evalExpr(arg), target, arg.span);
+            values[i] = convertOrError(prepared[i].value, target, prepared[i].span);
         }
     }
+    if (mutableRefHoleCount > 1)
+        error(QStringLiteral("E0583"), QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"), span);
     if (m_ctx->hasError())
         return AbelValue::makeUnknown();
 
@@ -3379,6 +3418,10 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
     }
 
     if (m_builtins.hasFunction(targetName)) {
+        if (hasPipeHole(args)) {
+            error(QStringLiteral("E0596"), QStringLiteral("pipe holes for builtin functions are not implemented yet"), expr.rhs->span);
+            return AbelValue::makeUnknown();
+        }
         BuiltinFunctionCall call{*m_ctx, targetName, {}, {}, expr.span};
         attachStringifier(call);
         call.args.reserve(args.size() + 1);

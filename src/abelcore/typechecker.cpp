@@ -17,6 +17,21 @@ bool isSourceLocationBuiltinName(const QString& name)
         || name == QStringLiteral("__COLUMN__");
 }
 
+bool isPipeHoleExpr(const ExprNode& expr)
+{
+    auto* name = dynamic_cast<const NameExprNode*>(&expr);
+    return name && name->name == QStringLiteral("_");
+}
+
+bool hasPipeHole(const std::vector<std::unique_ptr<ExprNode>>& args)
+{
+    for (const auto& arg : args) {
+        if (isPipeHoleExpr(*arg))
+            return true;
+    }
+    return false;
+}
+
 AbelType sourceLocationBuiltinType(const QString& name)
 {
     if (name == QStringLiteral("__FILE__"))
@@ -2168,6 +2183,9 @@ ExprType TypeChecker::checkExpr(const ExprNode& expr)
 
 ExprType TypeChecker::checkName(const NameExprNode& expr)
 {
+    if (expr.name == QStringLiteral("_"))
+        return errorExpr(expr.span, QStringLiteral("'_' pipe hole is only valid inside the right side of a pipe call"));
+
     if (isSourceLocationBuiltinName(expr.name))
         return {sourceLocationBuiltinType(expr.name), ValueCategory::PRValue, false};
 
@@ -2429,39 +2447,85 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
                                       const SourceSpan& span)
 {
     auto checkRestArgs = [&]() {
-        for (const auto& argExpr : args)
+        for (const auto& argExpr : args) {
+            if (isPipeHoleExpr(*argExpr))
+                continue;
             checkExpr(*argExpr);
+        }
+    };
+
+    auto buildPipeArgs = [&]() {
+        std::vector<ExprType> checked;
+        std::vector<SourceSpan> spans;
+        std::vector<bool> holeFlags;
+        const bool hasHoles = hasPipeHole(args);
+        checked.reserve(args.size() + (hasHoles ? 0 : 1));
+        spans.reserve(args.size() + (hasHoles ? 0 : 1));
+        holeFlags.reserve(args.size() + (hasHoles ? 0 : 1));
+        if (!hasHoles) {
+            checked.push_back(lhs);
+            spans.push_back(span);
+            holeFlags.push_back(false);
+        }
+        for (const auto& argExpr : args) {
+            if (isPipeHoleExpr(*argExpr)) {
+                checked.push_back(lhs);
+                spans.push_back(argExpr->span);
+                holeFlags.push_back(true);
+            } else {
+                checked.push_back(checkExpr(*argExpr));
+                spans.push_back(argExpr->span);
+                holeFlags.push_back(false);
+            }
+        }
+        struct BuiltPipeArgs {
+            std::vector<ExprType> checked;
+            std::vector<SourceSpan> spans;
+            std::vector<bool> holes;
+        };
+        return BuiltPipeArgs{std::move(checked), std::move(spans), std::move(holeFlags)};
     };
 
     if (const VariableInfo* variable = lookupVariable(name)) {
         const AbelType calleeType = valueTypeOfVariable(variable->type);
         if (calleeType.kind != TypeKind::Function)
             return errorExpr(nameSpan, QStringLiteral("pipe target variable '%1' is not a function value").arg(name));
+        if (!calleeType.pointee)
+            return errorExpr(nameSpan, QStringLiteral("pipe target variable '%1' has invalid function type").arg(name));
         if (isUnknownType(lhs.type)) {
             checkRestArgs();
             return unknownExprType();
         }
-        return checkFunctionValueCallShape(calleeType, lhs, args, span);
+        auto built = buildPipeArgs();
+        const auto& checked = built.checked;
+        const auto& spans = built.spans;
+        if (checked.size() != calleeType.params.size())
+            return errorExpr(span, QStringLiteral("function value called with wrong argument count"));
+        int mutableRefHoleCount = 0;
+        for (size_t i = 0; i < checked.size(); ++i) {
+            if (isUnknownType(checked[i].type))
+                continue;
+            const AbelType& paramType = calleeType.params[i];
+            if (built.holes[i] && paramType.isReference() && !(paramType.pointee && paramType.pointee->isConst))
+                ++mutableRefHoleCount;
+            checkParameterArgument(calleeType.params[i], checked[i], spans[i], QStringLiteral("function parameter"));
+        }
+        if (mutableRefHoleCount > 1)
+            return errorExpr(span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
+        return callReturnExprType(*calleeType.pointee);
     }
 
     if (m_functions.contains(name)) {
-        std::vector<ExprType> checked;
-        std::vector<SourceSpan> spans;
-        checked.reserve(args.size() + 1);
-        spans.reserve(args.size() + 1);
-        checked.push_back(lhs);
-        spans.push_back(span);
-        for (const auto& argExpr : args) {
-            checked.push_back(checkExpr(*argExpr));
-            spans.push_back(argExpr->span);
-        }
+        auto built = buildPipeArgs();
         const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name, nameSpan);
         if (candidates.isEmpty())
             return unknownExprType();
-        return checkFunctionOverloadCall(name, candidates, checked, spans, span);
+        return checkFunctionOverloadCall(name, candidates, built.checked, built.spans, span, nullptr, false, &built.holes);
     }
 
     if (m_builtins.hasFunction(name)) {
+        if (hasPipeHole(args))
+            return errorExpr(span, QStringLiteral("pipe holes for builtin functions are not implemented yet"));
         if (isUnknownType(lhs.type)) {
             checkRestArgs();
             return unknownExprType();
@@ -2738,9 +2802,11 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
                                                 const std::vector<SourceSpan>& argSpans,
                                                 const SourceSpan& span,
                                                 const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
-                                                bool hasExplicitTypeArgs)
+                                                bool hasExplicitTypeArgs,
+                                                const std::vector<bool>* pipeHoleArgs)
 {
     Q_ASSERT(args.size() == argSpans.size());
+    Q_ASSERT(!pipeHoleArgs || pipeHoleArgs->size() == args.size());
     for (const ExprType& arg : args) {
         if (isUnknownType(arg.type))
             return unknownExprType();
@@ -2843,14 +2909,19 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
         guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, match.bindings);
     const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
     const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
+    int mutableRefHoleCount = 0;
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& param = *fn->params[i];
         const AbelType paramType = typeFromAstForDecl(*param.type, *fn);
+        if (pipeHoleArgs && (*pipeHoleArgs)[i] && paramType.isReference() && !(paramType.pointee && paramType.pointee->isConst))
+            ++mutableRefHoleCount;
         checkParameterArgument(paramType,
                                args[i],
                                argSpans[i],
                                QStringLiteral("parameter '%1'").arg(param.name));
     }
+    if (mutableRefHoleCount > 1)
+        return errorExpr(span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
     if (match.isTemplate)
         checkTemplateInstantiation(*fn, match.bindings);
     return callReturnExprType(typeFromAstForDecl(*fn->returnType, *fn));
