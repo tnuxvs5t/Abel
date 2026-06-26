@@ -247,9 +247,10 @@ fn int main() {
     int x = 3;
     int y = x |> add(_, 4);      // add(x, 4)
     int z = y |> add(10, _);     // add(10, y)
+    int twice = x |> add(_, _);  // add(x, x)，lhs 仍只求值一次
     x |> bump(_);                // `_` 保留 x 的 lvalue，可绑定 int&
     str s = " abel " |> _.trim().upper();
-    return x + y + z + s.len();
+    return x + y + z + twice + s.len();
 }
 ```
 
@@ -259,6 +260,7 @@ fn int main() {
 lhs |> f                 -> f(lhs)              # 仅当 f 是 callable value/name
 lhs |> f(_)              -> f(lhs)
 lhs |> f(1, _)           -> f(1, lhs)
+lhs |> f(_, _)           -> f(lhs, lhs)         # lhs 只求值一次，两个 hole 读同一个 pipe 临时
 lhs |> _.method(a)       -> lhs.method(a)
 lhs |> _.field.method()  -> lhs.field.method()
 ```
@@ -268,8 +270,10 @@ Pipe/hole 约束：
 ```text
 `_` 只在 pipe RHS 内有效。
 lhs 只求值一次。
-hole 继承 lhs 的 value category；prvalue hole 不能绑定 mutable T&。
-同一个 RHS 第一片最多一个 hole；以后若要多 hole，必须另行设计求值/别名规则。
+所有 holes 指向同一个隐藏 pipe 临时，不是重复求值 lhs。
+每个 hole 继承 lhs 的 value category；prvalue hole 不能绑定 mutable T&。
+多 holes 支持读用法：by-value 参数、const ref 参数、const receiver、普通字段/方法读取。
+如果任一 hole 会绑定 mutable ref、作为 mutable receiver、或触发写入语义，则该 pipe RHS 只能有一个 hole。
 无 hole 的 pipe 只允许 RHS 是 callable；不把任意表达式变成动态调用。
 ```
 
@@ -278,8 +282,8 @@ hole 继承 lhs 的 value category；prvalue hole 不能绑定 mutable T&。
 ```abel
 int a = _;              // `_` 不在 pipe RHS
 1 |> bump(_);           // prvalue 不能绑定 int&
-x |> add(_, _);         // 第一片 RHS 最多一个 hole
-x |> f(_, mut_ref: _);  // 同理拒绝多 hole
+x |> swap(_, _);        // 假设 swap(int&, int&)，多 mutable ref hole 必须拒绝
+x |> f(_, mut_ref: _);  // 只要某个 hole 是 mutable/ref 写入语义，多 hole 必须拒绝
 ```
 
 Limited spread into `any...`：
