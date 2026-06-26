@@ -9,6 +9,28 @@ class AbelInterpreterTests final : public QObject {
     Q_OBJECT
 
 private:
+    static void tagInlineModules(abel::ProgramNode& program)
+    {
+        QString moduleName;
+        QList<QString> importedModules;
+        QHash<QString, QString> importedModuleAliases;
+        for (const auto& decl : program.declarations) {
+            if (auto* module = dynamic_cast<abel::ModuleDeclNode*>(decl.get())) {
+                moduleName = module->name;
+                importedModules.clear();
+                importedModuleAliases.clear();
+            } else if (auto* use = dynamic_cast<abel::UseDeclNode*>(decl.get())) {
+                if (!importedModules.contains(use->name))
+                    importedModules.push_back(use->name);
+                if (!use->alias.isEmpty())
+                    importedModuleAliases.insert(use->alias, use->name);
+            }
+            decl->moduleName = moduleName;
+            decl->importedModules = importedModules;
+            decl->importedModuleAliases = importedModuleAliases;
+        }
+    }
+
     static abel::InterpreterResult runSource(const QString& src)
     {
         abel::Lexer lexer;
@@ -33,6 +55,7 @@ private:
             return result;
         }
 
+        tagInlineModules(*parsed.program);
         abel::Interpreter interpreter;
         return interpreter.run(*parsed.program);
     }
@@ -1957,6 +1980,38 @@ private slots:
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
         QCOMPARE(result.exitCode, 51);
+    }
+
+    void runsModuleQualifiedStructuredPipeCalls()
+    {
+        const QString src = QStringLiteral(R"(
+            module lib.math;
+
+            export fn int scale(int x, int by = 2) {
+                return x * by;
+            }
+
+            export fn int count(any... xs) {
+                return xs.len();
+            }
+
+            module app.main;
+
+            use lib.math;
+
+            fn int main() {
+                vector<any> tail = {"A", 7, true};
+                int a = lib.math::scale(x: 1);
+                int b = 3 |> lib.math::scale(x: _, by: 4);
+                int c = tail |> lib.math::count("prefix", ..._);
+                return a + b + c;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 18);
     }
 
     void rejectsBadStructuredOrdinaryFunctionCallsAtRuntime()
