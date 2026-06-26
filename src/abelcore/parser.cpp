@@ -517,6 +517,10 @@ std::unique_ptr<ParameterNode> Parser::parseParameter()
     const Token name = consume(TokenKind::Identifier, QStringLiteral("expected parameter name"));
     p->name = name.text;
     p->span = mergeSpans(p->type->span, name.span);
+    if (match(TokenKind::Equal)) {
+        p->defaultValue = parseExpression();
+        p->span = mergeSpans(p->span, p->defaultValue->span);
+    }
     return p;
 }
 
@@ -924,11 +928,7 @@ std::unique_ptr<ExprNode> Parser::parsePostfix()
             auto call = std::make_unique<CallExprNode>();
             const SourceSpan startSpan = expr->span;
             call->callee = std::move(expr);
-            if (!check(TokenKind::RParen)) {
-                do {
-                    call->args.push_back(parseExpression());
-                } while (match(TokenKind::Comma));
-            }
+            parseCallArguments(*call);
             const Token close = consume(TokenKind::RParen, QStringLiteral("expected ')'"));
             call->span = mergeSpans(startSpan, close.span);
             expr = std::move(call);
@@ -945,11 +945,7 @@ std::unique_ptr<ExprNode> Parser::parsePostfix()
             }
             consume(TokenKind::Greater, QStringLiteral("expected '>' after explicit template arguments"));
             consume(TokenKind::LParen, QStringLiteral("expected '(' after explicit template arguments"));
-            if (!check(TokenKind::RParen)) {
-                do {
-                    call->args.push_back(parseExpression());
-                } while (match(TokenKind::Comma));
-            }
+            parseCallArguments(*call);
             const Token close = consume(TokenKind::RParen, QStringLiteral("expected ')'"));
             call->span = mergeSpans(startSpan, close.span);
             expr = std::move(call);
@@ -983,6 +979,25 @@ std::unique_ptr<ExprNode> Parser::parsePostfix()
         }
     }
     return expr;
+}
+
+void Parser::parseCallArguments(CallExprNode& call)
+{
+    if (check(TokenKind::RParen))
+        return;
+    do {
+        QString name;
+        bool spread = false;
+        if (match(TokenKind::Ellipsis)) {
+            spread = true;
+        } else if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::Colon) {
+            name = consume(TokenKind::Identifier, QStringLiteral("expected argument name")).text;
+            consume(TokenKind::Colon, QStringLiteral("expected ':' after argument name"));
+        }
+        call.args.push_back(parseExpression());
+        call.argNames.push_back(std::move(name));
+        call.argSpreads.push_back(spread);
+    } while (match(TokenKind::Comma));
 }
 
 std::unique_ptr<ExprNode> Parser::parsePrimary()

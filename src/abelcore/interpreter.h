@@ -49,6 +49,12 @@ private:
         SourceSpan span;
     };
 
+    struct NormalizedPreparedCallArgs {
+        bool ok = true;
+        std::vector<PreparedCallArg> args;
+        std::vector<bool> defaulted;
+    };
+
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
     QString m_currentPackage;
     QString m_currentModule;
@@ -120,6 +126,17 @@ private:
     std::vector<PreparedCallArg> prepareFunctionArgs(const std::vector<std::unique_ptr<ExprNode>>& args);
     std::vector<PreparedCallArg> prepareFunctionPipeArgs(const ExprNode& firstArg,
                                                          const std::vector<std::unique_ptr<ExprNode>>& restArgs);
+    NormalizedPreparedCallArgs normalizePreparedCallArgsForParams(const DeclNode& decl,
+                                                                  const QString& displayName,
+                                                                  const std::vector<std::unique_ptr<ParameterNode>>& params,
+                                                                  const CallExprNode& call,
+                                                                  const std::vector<PreparedCallArg>& rawArgs,
+                                                                  bool diagnose,
+                                                                  bool evaluateDefaults);
+    PreparedCallArg prepareDefaultArgument(const DeclNode& decl,
+                                           const std::vector<std::unique_ptr<ParameterNode>>& params,
+                                           const std::vector<PreparedCallArg>& previousArgs,
+                                           size_t index);
     std::optional<int> scorePreparedArgument(const AbelType& paramType, const PreparedCallArg& arg) const;
     const FunctionDeclNode* selectFunctionOverload(const QString& displayName,
                                                    const QList<const FunctionDeclNode*>& candidates,
@@ -138,6 +155,9 @@ private:
                                         const SourceSpan& span,
                                         const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs = nullptr,
                                         bool hasExplicitTypeArgs = false);
+    ExecResult callStructuredFunctionOverloadExpr(const QString& displayName,
+                                                  const QList<const FunctionDeclNode*>& candidates,
+                                                  const CallExprNode& call);
     ExecResult callFunctionOverloadPipeExpr(const QString& displayName,
                                             const QList<const FunctionDeclNode*>& candidates,
                                             const ExprNode& firstArg,

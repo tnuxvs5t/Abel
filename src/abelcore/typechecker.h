@@ -60,6 +60,13 @@ private:
         QHash<QString, int> values;
     };
 
+    struct NormalizedCallArgs {
+        bool ok = true;
+        std::vector<ExprType> checked;
+        std::vector<SourceSpan> spans;
+        std::vector<bool> defaulted;
+    };
+
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
     QList<const FunctionDeclNode*> m_functionDecls;
     QHash<QString, QList<StructInfo>> m_structs;
@@ -189,6 +196,9 @@ private:
                                        const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs = nullptr,
                                        bool hasExplicitTypeArgs = false,
                                        const std::vector<bool>* pipeHoleArgs = nullptr);
+    ExprType checkStructuredFunctionOverloadCall(const QString& displayName,
+                                                 const QList<const FunctionDeclNode*>& candidates,
+                                                 const CallExprNode& call);
     ExprType checkMethodOverloadCall(const QString& displayName,
                                      const QList<const FunctionDeclNode*>& candidates,
                                      const ExprType& receiver,
@@ -228,6 +238,16 @@ private:
                                 const SourceSpan& argSpan,
                                 const QString& label);
     std::optional<int> scoreParameterArgument(const AbelType& paramType, const ExprType& arg) const;
+    NormalizedCallArgs normalizeCallArgsForParams(const DeclNode& decl,
+                                                  const QString& displayName,
+                                                  const std::vector<std::unique_ptr<ParameterNode>>& params,
+                                                  const CallExprNode& call,
+                                                  const std::vector<ExprType>& rawArgs,
+                                                  bool diagnose);
+    void checkParameterDefault(const DeclNode& decl,
+                               const std::vector<std::unique_ptr<ParameterNode>>& params,
+                               size_t index,
+                               const AbelType& paramType);
     std::optional<QHash<QString, AbelType>> bindFunctionTemplate(const FunctionDeclNode& fn,
                                                                  const std::vector<ExprType>& args,
                                                                  const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,

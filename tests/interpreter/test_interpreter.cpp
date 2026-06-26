@@ -1846,6 +1846,94 @@ private slots:
         QCOMPARE(result.exitCode, 138);
     }
 
+    void runsStructuredOrdinaryFunctionCalls()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int next(int& calls) {
+                calls = calls + 1;
+                return calls;
+            }
+
+            fn int inc(int x, int by = 1) {
+                return x + by;
+            }
+
+            fn int mix(int a, int b, int c = 30) {
+                return a + b + c;
+            }
+
+            fn int count(any... xs) {
+                return xs.len();
+            }
+
+            fn int first_int(any... xs) {
+                return cast<int>(xs[0]);
+            }
+
+            fn int with_default_side_effect(int& calls, int x = next(calls)) {
+                return x + calls;
+            }
+
+            fn int main() {
+                vector<any> tail = {2, "x", true};
+                int a = inc(1);              // 2
+                int b = inc(x: 1, by: 2);   // 3
+                int c = mix(1, c: 3, b: 2); // 6
+                int calls = 0;
+                int d = with_default_side_effect(calls);
+                int e = with_default_side_effect(calls, x: 9);
+                int f = count(1, ...tail);  // 4
+                int g = first_int(...tail); // 2, spread unwraps vector<any> elements once
+                str s = build_string("prefix=", ...tail);
+                return a + b + c + d + e + calls + f + g + s.len();
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 43);
+    }
+
+    void rejectsBadStructuredOrdinaryFunctionCallsAtRuntime()
+    {
+        auto bad = runSource(QStringLiteral(R"(
+            fn int add(int a, int b) {
+                return a + b;
+            }
+
+            fn int main() {
+                return add(a: 1, 2);
+            }
+        )"));
+        QVERIFY(!bad.diagnostics.isEmpty());
+        QCOMPARE(bad.exitCode, 1);
+
+        auto functionValueNamed = runSource(QStringLiteral(R"(
+            fn int main() {
+                func int(int, int) f = lambda [] int(int a, int b) {
+                    return a + b;
+                };
+                return f(a: 1, b: 2);
+            }
+        )"));
+        QVERIFY(!functionValueNamed.diagnostics.isEmpty());
+        QCOMPARE(functionValueNamed.exitCode, 1);
+
+        auto spreadIntoFixed = runSource(QStringLiteral(R"(
+            fn int add(int a, int b) {
+                return a + b;
+            }
+
+            fn int main() {
+                vector<any> xs = {1, 2};
+                return add(...xs);
+            }
+        )"));
+        QVERIFY(!spreadIntoFixed.diagnostics.isEmpty());
+        QCOMPARE(spreadIntoFixed.exitCode, 1);
+    }
+
     void runsStructConstructorAndMethodOverloads()
     {
         const QString src = QStringLiteral(R"(

@@ -68,6 +68,8 @@ struct CallExprNode final : ExprNode {
     bool hasExplicitTypeArgs = false;
     std::vector<std::unique_ptr<TypeNode>> explicitTypeArgs;
     std::vector<std::unique_ptr<ExprNode>> args;
+    std::vector<QString> argNames; // empty for positional
+    std::vector<bool> argSpreads;
 };
 
 struct IndexExprNode final : ExprNode {
@@ -161,6 +163,7 @@ struct ParameterNode : AstNode {
     std::unique_ptr<TypeNode> type;
     QString name;
     bool variadic = false;
+    std::unique_ptr<ExprNode> defaultValue;
 };
 
 struct DeclNode : AstNode {

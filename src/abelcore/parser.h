@@ -69,6 +69,7 @@ private:
     std::unique_ptr<ExprNode> parseBinary(int minPrec = 1);
     std::unique_ptr<ExprNode> parseUnary();
     std::unique_ptr<ExprNode> parsePostfix();
+    void parseCallArguments(CallExprNode& call);
     std::unique_ptr<ExprNode> parsePrimary();
     std::unique_ptr<ExprNode> parseLambda();
 

@@ -209,6 +209,131 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsStructuredOrdinaryFunctionCalls()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int inc(int x, int by = 1) {
+                return x + by;
+            }
+
+            fn int mix(int a, int b, int c = 30) {
+                return a + b + c;
+            }
+
+            fn int sum(any... xs) {
+                return xs.len();
+            }
+
+            fn int main() {
+                vector<any> tail = {2, "x", true};
+                int a = inc(1);
+                int b = inc(x: 1, by: 2);
+                int c = mix(1, c: 3, b: 2);
+                int d = sum(1, "x", true);
+                int e = sum(1, ...tail);
+                str s = build_string("prefix=", ...tail);
+                println("debug=", ...tail);
+                return a + b + c + d + e + s.len();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsBadStructuredOrdinaryFunctionCalls()
+    {
+        auto positionalAfterNamed = checkSource(QStringLiteral(R"(
+            fn int add(int a, int b) {
+                return a + b;
+            }
+
+            fn int main() {
+                return add(a: 1, 2);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(positionalAfterNamed, QStringLiteral("positional argument cannot appear after named")) >= 1);
+
+        auto duplicateNamed = checkSource(QStringLiteral(R"(
+            fn int add(int a, int b) {
+                return a + b;
+            }
+
+            fn int main() {
+                return add(a: 1, a: 2);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(duplicateNamed, QStringLiteral("duplicate named argument")) >= 1);
+
+        auto unknownNamed = checkSource(QStringLiteral(R"(
+            fn int add(int a, int b) {
+                return a + b;
+            }
+
+            fn int main() {
+                return add(a: 1, z: 2);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(unknownNamed, QStringLiteral("unknown parameter name")) >= 1);
+
+        auto missingRequired = checkSource(QStringLiteral(R"(
+            fn int add(int a, int b) {
+                return a + b;
+            }
+
+            fn int main() {
+                return add(a: 1);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(missingRequired, QStringLiteral("missing argument for parameter 'b'")) >= 1);
+
+        auto badDefault = checkSource(QStringLiteral(R"(
+            fn int inc(int x, int by = "bad") {
+                return x + by;
+            }
+
+            fn int main() {
+                return inc(1);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(badDefault, QStringLiteral("default value for parameter 'by'")) >= 1);
+
+        auto functionValueNamed = checkSource(QStringLiteral(R"(
+            fn int main() {
+                func int(int, int) f = lambda [] int(int a, int b) {
+                    return a + b;
+                };
+                return f(a: 1, b: 2);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(functionValueNamed, QStringLiteral("function value calls only accept positional")) >= 1);
+
+        auto spreadIntoFixed = checkSource(QStringLiteral(R"(
+            fn int add(int a, int b) {
+                return a + b;
+            }
+
+            fn int main() {
+                vector<any> xs = {1, 2};
+                return add(...xs);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(spreadIntoFixed, QStringLiteral("spread argument can only expand into an any... tail")) >= 1);
+
+        auto spreadNonAnyVector = checkSource(QStringLiteral(R"(
+            fn int count(any... xs) {
+                return xs.len();
+            }
+
+            fn int main() {
+                vector<int> xs = {1, 2};
+                return count(...xs);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(spreadNonAnyVector, QStringLiteral("spread argument expects vector<any>")) >= 1);
+    }
+
     void rejectsBadOrdinaryFunctionOverloads()
     {
         auto duplicateSignature = checkSource(QStringLiteral(R"(

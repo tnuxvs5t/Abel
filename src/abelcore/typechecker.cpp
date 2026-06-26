@@ -78,6 +78,44 @@ bool isPipeHoleReceiverExpr(const ExprNode& expr)
     return false;
 }
 
+QString callArgName(const CallExprNode& call, size_t index)
+{
+    return index < call.argNames.size() ? call.argNames[index] : QString();
+}
+
+bool callArgSpread(const CallExprNode& call, size_t index)
+{
+    return index < call.argSpreads.size() && call.argSpreads[index];
+}
+
+bool callHasNamedArgs(const CallExprNode& call)
+{
+    for (size_t i = 0; i < call.args.size(); ++i) {
+        if (!callArgName(call, i).isEmpty())
+            return true;
+    }
+    return false;
+}
+
+bool callHasSpreadArgs(const CallExprNode& call)
+{
+    for (size_t i = 0; i < call.args.size(); ++i) {
+        if (callArgSpread(call, i))
+            return true;
+    }
+    return false;
+}
+
+bool callHasStructuredArgs(const CallExprNode& call)
+{
+    return callHasNamedArgs(call) || callHasSpreadArgs(call);
+}
+
+bool isVectorAnyType(const AbelType& type)
+{
+    return type.kind == TypeKind::Vector && type.pointee && type.pointee->kind == TypeKind::Any;
+}
+
 AbelType sourceLocationBuiltinType(const QString& name)
 {
     if (name == QStringLiteral("__FILE__"))
@@ -1815,6 +1853,7 @@ void TypeChecker::checkBackend(const BackendBlockNode& backend)
             const AbelType paramType = typeFromAstInCurrentPackage(*param.type);
             if (!isSupportedType(paramType))
                 error(param.span, QStringLiteral("unsupported backend parameter type '%1'").arg(param.type->displayName()));
+            checkParameterDefault(*fn, fn->params, i, paramType);
             if (!param.variadic)
                 continue;
             if (seenVariadic)
@@ -1857,10 +1896,12 @@ void TypeChecker::checkConstructor(const StructDeclNode& owner, const Constructo
         }
         defineVariable(field->name, fieldType, fieldConst, field->span);
     }
-    for (const auto& param : ctor.params) {
+    for (size_t i = 0; i < ctor.params.size(); ++i) {
+        const auto& param = ctor.params[i];
         AbelType paramType = typeFromAstInCurrentPackage(*param->type);
         if (!isSupportedType(paramType))
             error(param->span, QStringLiteral("unsupported parameter type '%1'").arg(param->type->displayName()));
+        checkParameterDefault(owner, ctor.params, i, paramType);
         defineVariable(param->name,
                        param->variadic ? makeVectorType(makeType(TypeKind::Any)) : paramType,
                        !param->variadic && isReadOnlyBinding(paramType, param->type->isConst),
@@ -1909,10 +1950,12 @@ void TypeChecker::checkMethod(const StructDeclNode& owner, const FunctionDeclNod
         }
         defineVariable(field->name, fieldType, method.isConstMethod || fieldConst, field->span);
     }
-    for (const auto& param : method.params) {
+    for (size_t i = 0; i < method.params.size(); ++i) {
+        const auto& param = method.params[i];
         AbelType paramType = typeFromAstInCurrentPackage(*param->type);
         if (!isSupportedType(paramType))
             error(param->span, QStringLiteral("unsupported parameter type '%1'").arg(param->type->displayName()));
+        checkParameterDefault(method, method.params, i, paramType);
         defineVariable(param->name,
                        param->variadic ? makeVectorType(makeType(TypeKind::Any)) : paramType,
                        !param->variadic && isReadOnlyBinding(paramType, param->type->isConst),
@@ -1962,6 +2005,7 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
             error(param.span, QStringLiteral("unsupported parameter type '%1'").arg(param.type->displayName()));
             continue;
         }
+        checkParameterDefault(fn, fn.params, i, paramType);
         if (fn.isOperator && param.variadic)
             error(param.span, QStringLiteral("operator '%1' overload cannot be variadic").arg(fn.operatorSymbol));
         if (param.variadic) {
@@ -2493,6 +2537,9 @@ ExprType TypeChecker::checkPipe(const BinaryExprNode& expr)
         return checkPipeTarget(name->name, name->span, lhs, {}, expr.span);
 
     if (auto* call = dynamic_cast<CallExprNode*>(expr.rhs.get())) {
+        if (callHasStructuredArgs(*call))
+            return errorExpr(call->span,
+                             QStringLiteral("structured pipe call arguments are not implemented in this v1.1 slice"));
         if (auto* name = dynamic_cast<NameExprNode*>(call->callee.get()))
             return checkPipeTarget(name->name, name->span, lhs, call->args, expr.span);
         return errorExpr(call->callee->span, QStringLiteral("pipe target call must use a named function"));
@@ -2947,6 +2994,298 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
     return callReturnExprType(typeFromAstForDecl(*fn->returnType, *fn));
 }
 
+TypeChecker::NormalizedCallArgs TypeChecker::normalizeCallArgsForParams(
+    const DeclNode& decl,
+    const QString& displayName,
+    const std::vector<std::unique_ptr<ParameterNode>>& params,
+    const CallExprNode& call,
+    const std::vector<ExprType>& rawArgs,
+    bool diagnose)
+{
+    NormalizedCallArgs out;
+    Q_ASSERT(rawArgs.size() == call.args.size());
+
+    auto fail = [&](const SourceSpan& span, const QString& message) {
+        out.ok = false;
+        if (diagnose)
+            error(span, message);
+    };
+
+    const bool variadic = !params.empty() && params.back()->variadic;
+    const size_t fixedCount = variadic ? params.size() - 1 : params.size();
+    std::vector<std::optional<size_t>> fixedArgIndex(fixedCount);
+    std::vector<size_t> variadicArgIndexes;
+    bool seenNamed = false;
+    size_t nextPositional = 0;
+    QSet<QString> namedSeen;
+
+    for (size_t i = 0; i < call.args.size(); ++i) {
+        if (callArgSpread(call, i)) {
+            if (!variadic || nextPositional < fixedCount || seenNamed) {
+                fail(call.args[i]->span, QStringLiteral("spread argument can only expand into an any... tail"));
+                continue;
+            }
+            if (!isUnknownType(rawArgs[i].type) && !isVectorAnyType(rawArgs[i].type))
+                fail(call.args[i]->span,
+                     QStringLiteral("spread argument expects vector<any>, got %1").arg(rawArgs[i].type.displayName()));
+            variadicArgIndexes.push_back(i);
+            continue;
+        }
+        const QString name = callArgName(call, i);
+        if (!name.isEmpty()) {
+            seenNamed = true;
+            if (namedSeen.contains(name)) {
+                fail(call.args[i]->span, QStringLiteral("duplicate named argument '%1'").arg(name));
+                continue;
+            }
+            namedSeen.insert(name);
+            std::optional<size_t> paramIndex;
+            for (size_t j = 0; j < fixedCount; ++j) {
+                if (params[j]->name == name) {
+                    paramIndex = j;
+                    break;
+                }
+            }
+            if (!paramIndex) {
+                fail(call.args[i]->span, QStringLiteral("unknown parameter name '%1' in call to '%2'").arg(name, displayName));
+                continue;
+            }
+            if (fixedArgIndex[*paramIndex].has_value()) {
+                fail(call.args[i]->span, QStringLiteral("parameter '%1' is already supplied").arg(name));
+                continue;
+            }
+            fixedArgIndex[*paramIndex] = i;
+            continue;
+        }
+
+        if (seenNamed) {
+            fail(call.args[i]->span, QStringLiteral("positional argument cannot appear after named arguments"));
+            continue;
+        }
+        if (nextPositional < fixedCount) {
+            fixedArgIndex[nextPositional++] = i;
+        } else if (variadic) {
+            variadicArgIndexes.push_back(i);
+        } else {
+            fail(call.args[i]->span, QStringLiteral("too many arguments in call to '%1'").arg(displayName));
+        }
+    }
+
+    out.checked.reserve(fixedCount + variadicArgIndexes.size());
+    out.spans.reserve(fixedCount + variadicArgIndexes.size());
+    out.defaulted.reserve(fixedCount + variadicArgIndexes.size());
+
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, decl);
+    for (size_t i = 0; i < fixedCount; ++i) {
+        if (fixedArgIndex[i].has_value()) {
+            const size_t argIndex = *fixedArgIndex[i];
+            out.checked.push_back(rawArgs[argIndex]);
+            out.spans.push_back(call.args[argIndex]->span);
+            out.defaulted.push_back(false);
+            continue;
+        }
+        const ParameterNode& param = *params[i];
+        if (!param.defaultValue) {
+            fail(call.span, QStringLiteral("missing argument for parameter '%1' in call to '%2'").arg(param.name, displayName));
+            out.checked.push_back(unknownExprType());
+            out.spans.push_back(param.span);
+            out.defaulted.push_back(false);
+            continue;
+        }
+        const AbelType paramType = typeFromAstForDecl(*param.type, decl);
+        out.checked.push_back({paramType, ValueCategory::PRValue, false});
+        out.spans.push_back(param.defaultValue->span);
+        out.defaulted.push_back(true);
+    }
+
+    for (const size_t argIndex : variadicArgIndexes) {
+        out.checked.push_back(rawArgs[argIndex]);
+        out.spans.push_back(call.args[argIndex]->span);
+        out.defaulted.push_back(false);
+    }
+
+    return out;
+}
+
+void TypeChecker::checkParameterDefault(const DeclNode& decl,
+                                        const std::vector<std::unique_ptr<ParameterNode>>& params,
+                                        size_t index,
+                                        const AbelType& paramType)
+{
+    const ParameterNode& param = *params[index];
+    if (!param.defaultValue)
+        return;
+    if (param.variadic) {
+        error(param.defaultValue->span, QStringLiteral("variadic parameter '%1' cannot have a default value").arg(param.name));
+        return;
+    }
+
+    DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, decl);
+    const AbelType previousReturnType = m_currentReturnType;
+    const QString previousStruct = m_currentStruct;
+    const int previousLoopDepth = m_loopDepth;
+    const QList<QHash<QString, VariableInfo>> previousScopes = m_scopes;
+    m_currentReturnType = makeType(TypeKind::Void);
+    m_currentStruct.clear();
+    m_loopDepth = 0;
+    m_scopes.clear();
+    pushScope();
+    for (size_t i = 0; i < index; ++i) {
+        const ParameterNode& earlier = *params[i];
+        AbelType earlierType = typeFromAstForDecl(*earlier.type, decl);
+        defineVariable(earlier.name,
+                       earlier.variadic ? makeVectorType(makeType(TypeKind::Any)) : earlierType,
+                       !earlier.variadic && isReadOnlyBinding(earlierType, earlier.type->isConst),
+                       earlier.span);
+    }
+    ExprType value = checkExpr(*param.defaultValue);
+    if (!isUnknownType(value.type))
+        checkParameterArgument(paramType, value, param.defaultValue->span, QStringLiteral("default value for parameter '%1'").arg(param.name));
+    popScope();
+    m_scopes = previousScopes;
+    m_loopDepth = previousLoopDepth;
+    m_currentStruct = previousStruct;
+    m_currentReturnType = previousReturnType;
+}
+
+ExprType TypeChecker::checkStructuredFunctionOverloadCall(const QString& displayName,
+                                                          const QList<const FunctionDeclNode*>& candidates,
+                                                          const CallExprNode& call)
+{
+    std::vector<ExprType> rawArgs;
+    rawArgs.reserve(call.args.size());
+    for (const auto& argExpr : call.args)
+        rawArgs.push_back(checkExpr(*argExpr));
+    for (const ExprType& arg : rawArgs) {
+        if (isUnknownType(arg.type))
+            return unknownExprType();
+    }
+
+    struct Match {
+        const FunctionDeclNode* fn = nullptr;
+        QHash<QString, AbelType> bindings;
+        bool isTemplate = false;
+        NormalizedCallArgs args;
+    };
+
+    QList<Match> matches;
+    QList<const FunctionDeclNode*> considered;
+    int bestScore = 1'000'000;
+    for (const FunctionDeclNode* fn : candidates) {
+        if (!fn || fn->isOperator)
+            continue;
+        considered.push_back(fn);
+
+        NormalizedCallArgs normalized = normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, false);
+        if (!normalized.ok)
+            continue;
+
+        QHash<QString, AbelType> bindings;
+        const bool isTemplate = !fn->templateParams.empty();
+        if (isTemplate) {
+            auto maybeBindings = bindFunctionTemplate(*fn, normalized.checked, &call.explicitTypeArgs, call.hasExplicitTypeArgs);
+            if (!maybeBindings)
+                continue;
+            bindings = std::move(*maybeBindings);
+        } else if (call.hasExplicitTypeArgs) {
+            continue;
+        }
+
+        std::unique_ptr<TemplateTypeGuard> guard;
+        if (isTemplate)
+            guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, bindings);
+
+        const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
+        const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
+        int score = (variadic ? 4 : 0) + (isTemplate ? 1 : 0);
+        bool ok = true;
+        for (size_t i = 0; i < fixedCount; ++i) {
+            const AbelType paramType = typeFromAstForDecl(*fn->params[i]->type, *fn);
+            const auto argScore = scoreParameterArgument(paramType, normalized.checked[i]);
+            if (!argScore) {
+                ok = false;
+                break;
+            }
+            score += *argScore + (normalized.defaulted[i] ? 2 : 0);
+        }
+        if (!ok)
+            continue;
+
+        if (variadic) {
+            const AbelType variadicType = typeFromAstForDecl(*fn->params.back()->type, *fn);
+            if (variadicType.kind != TypeKind::Any)
+                continue;
+            score += static_cast<int>(normalized.checked.size() - fixedCount) * 4;
+        }
+
+        if (score < bestScore) {
+            bestScore = score;
+            matches.clear();
+            matches.push_back(Match{fn, bindings, isTemplate, std::move(normalized)});
+        } else if (score == bestScore) {
+            matches.push_back(Match{fn, bindings, isTemplate, std::move(normalized)});
+        }
+    }
+
+    if (considered.isEmpty())
+        return errorExpr(call.span, QStringLiteral("function '%1' has no ordinary overloads").arg(displayName));
+    if (matches.isEmpty()) {
+        const qsizetype before = m_diagnostics.size();
+        for (const FunctionDeclNode* fn : considered) {
+            normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true);
+            if (m_diagnostics.size() != before)
+                return unknownExprType();
+        }
+        return errorExpr(call.span,
+                         QStringLiteral("no matching function '%1' overload for %2 argument(s)")
+                             .arg(displayName)
+                             .arg(call.args.size()));
+    }
+    if (matches.size() > 1) {
+        QList<const FunctionDeclNode*> ambiguous;
+        for (const Match& match : matches)
+            ambiguous.push_back(match.fn);
+        const QStringList origins = declOriginList(ambiguous, [](const FunctionDeclNode& fn) { return fn.name; });
+        bool sameSignatureAmbiguity = true;
+        for (qsizetype i = 1; i < ambiguous.size(); ++i)
+            sameSignatureAmbiguity = sameSignatureAmbiguity && sameFunctionSignature(*ambiguous.front(), *ambiguous[i]);
+        errorDetailed(call.span,
+                      sameSignatureAmbiguity
+                          ? QStringLiteral("function '%1' is ambiguous across imported modules").arg(displayName)
+                          : QStringLiteral("function '%1' overload is ambiguous").arg(displayName),
+                      declSpanList(ambiguous),
+                      ambiguityExplanation(QStringLiteral("function"), origins),
+                      qualifySuggestions(QStringLiteral("function"), origins));
+        return unknownExprType();
+    }
+
+    Match match = std::move(matches.front());
+    const FunctionDeclNode* fn = match.fn;
+    std::unique_ptr<TemplateTypeGuard> guard;
+    if (match.isTemplate)
+        guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, match.bindings);
+
+    NormalizedCallArgs normalized = normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true);
+    if (!normalized.ok)
+        return unknownExprType();
+
+    const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
+    const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
+    for (size_t i = 0; i < fixedCount; ++i) {
+        const ParameterNode& param = *fn->params[i];
+        const AbelType paramType = typeFromAstForDecl(*param.type, *fn);
+        checkParameterArgument(paramType,
+                               normalized.checked[i],
+                               normalized.spans[i],
+                               normalized.defaulted[i]
+                                   ? QStringLiteral("default value for parameter '%1'").arg(param.name)
+                                   : QStringLiteral("parameter '%1'").arg(param.name));
+    }
+    if (match.isTemplate)
+        checkTemplateInstantiation(*fn, match.bindings);
+    return callReturnExprType(typeFromAstForDecl(*fn->returnType, *fn));
+}
+
 ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
                                               const QList<const FunctionDeclNode*>& candidates,
                                               const ExprType& receiver,
@@ -3133,10 +3472,15 @@ ExprType TypeChecker::checkAssignment(const AssignExprNode& expr)
 
 ExprType TypeChecker::checkCall(const CallExprNode& expr)
 {
-    if (auto* access = dynamic_cast<StaticAccessExprNode*>(expr.callee.get()))
+    if (auto* access = dynamic_cast<StaticAccessExprNode*>(expr.callee.get())) {
+        if (callHasStructuredArgs(expr))
+            return errorExpr(expr.span, QStringLiteral("structured static/backend call arguments are not implemented in this v1.1 slice"));
         return checkStaticCall(*access, expr.args, expr.span);
+    }
 
     if (auto* field = dynamic_cast<FieldAccessExprNode*>(expr.callee.get())) {
+        if (callHasStructuredArgs(expr))
+            return errorExpr(expr.span, QStringLiteral("structured method call arguments are not implemented in this v1.1 slice"));
         ExprType receiver = checkExpr(*field->base);
         if (isUnknownType(receiver.type)) {
             for (const auto& argExpr : expr.args)
@@ -3163,12 +3507,17 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     auto* name = dynamic_cast<NameExprNode*>(expr.callee.get());
-    if (!name)
+    if (!name) {
+        if (callHasStructuredArgs(expr))
+            return errorExpr(expr.span, QStringLiteral("function value calls only accept positional arguments"));
         return checkFunctionValueCall(checkExpr(*expr.callee).type, expr.args, expr.span);
+    }
 
     if (const VariableInfo* variable = lookupVariable(name->name)) {
         if (expr.hasExplicitTypeArgs)
             return errorExpr(expr.span, QStringLiteral("explicit template arguments require a function template"));
+        if (callHasStructuredArgs(expr))
+            return errorExpr(expr.span, QStringLiteral("function value calls only accept positional arguments"));
         const AbelType calleeType = valueTypeOfVariable(variable->type);
         if (calleeType.kind != TypeKind::Function)
             return errorExpr(expr.span, QStringLiteral("variable '%1' is not a function value").arg(name->name));
@@ -3176,6 +3525,8 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (const TypeAliasDeclNode* alias = resolveTypeAlias(name->name, m_currentPackage, name->span, false)) {
+        if (callHasStructuredArgs(expr))
+            return errorExpr(expr.span, QStringLiteral("structured constructor arguments are not implemented in this v1.1 slice"));
         AbelType aliased = makeType(TypeKind::Unknown);
         if (!alias->templateParams.empty()) {
             if (!expr.hasExplicitTypeArgs)
@@ -3199,6 +3550,8 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (const StructInfo* info = resolveStruct(name->name, name->span)) {
+        if (callHasStructuredArgs(expr))
+            return errorExpr(expr.span, QStringLiteral("structured constructor arguments are not implemented in this v1.1 slice"));
         if (expr.hasExplicitTypeArgs) {
             if (!info->decl || info->decl->templateParams.empty())
                 return errorExpr(expr.span, QStringLiteral("struct '%1' is not a template").arg(name->name));
@@ -3222,23 +3575,22 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (m_functions.contains(name->name)) {
-        std::vector<ExprType> checked;
-        std::vector<SourceSpan> spans;
-        checked.reserve(expr.args.size());
-        spans.reserve(expr.args.size());
-        for (const auto& argExpr : expr.args) {
-            checked.push_back(checkExpr(*argExpr));
-            spans.push_back(argExpr->span);
-        }
         const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name->name, name->span);
         if (candidates.isEmpty())
             return unknownExprType();
-        return checkFunctionOverloadCall(name->name, candidates, checked, spans, expr.span, &expr.explicitTypeArgs, expr.hasExplicitTypeArgs);
+        return checkStructuredFunctionOverloadCall(name->name, candidates, expr);
     }
 
     if (m_builtins.hasFunction(name->name)) {
         if (expr.hasExplicitTypeArgs)
             return errorExpr(expr.span, QStringLiteral("builtin function '%1' is not a function template").arg(name->name));
+        if (callHasNamedArgs(expr))
+            return errorExpr(expr.span, QStringLiteral("builtin function calls do not support named arguments"));
+        const bool spreadBuiltin = name->name == QStringLiteral("build_string")
+            || name->name == QStringLiteral("print")
+            || name->name == QStringLiteral("println");
+        if (callHasSpreadArgs(expr) && !spreadBuiltin)
+            return errorExpr(expr.span, QStringLiteral("spread arguments are only supported for any... builtin functions"));
         const qsizetype argc = static_cast<qsizetype>(expr.args.size());
         if (name->name == QStringLiteral("to_str")) {
             if (argc != 1)
@@ -3266,18 +3618,28 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name->name == QStringLiteral("build_string")) {
-            for (const auto& argExpr : expr.args) {
+            for (size_t i = 0; i < expr.args.size(); ++i) {
+                const auto& argExpr = expr.args[i];
                 ExprType arg = checkExpr(*argExpr);
-                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
+                if (callArgSpread(expr, i)) {
+                    if (!isUnknownType(arg.type) && !isVectorAnyType(arg.type))
+                        error(argExpr->span, QStringLiteral("spread argument expects vector<any>, got %1").arg(arg.type.displayName()));
+                } else if (!isUnknownType(arg.type) && !isStringifiable(arg.type)) {
                     error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+                }
             }
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name->name == QStringLiteral("print") || name->name == QStringLiteral("println")) {
-            for (const auto& argExpr : expr.args) {
+            for (size_t i = 0; i < expr.args.size(); ++i) {
+                const auto& argExpr = expr.args[i];
                 ExprType arg = checkExpr(*argExpr);
-                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
+                if (callArgSpread(expr, i)) {
+                    if (!isUnknownType(arg.type) && !isVectorAnyType(arg.type))
+                        error(argExpr->span, QStringLiteral("spread argument expects vector<any>, got %1").arg(arg.type.displayName()));
+                } else if (!isUnknownType(arg.type) && !isStringifiable(arg.type)) {
                     error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+                }
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }

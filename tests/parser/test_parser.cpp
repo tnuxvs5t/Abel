@@ -355,6 +355,64 @@ private slots:
         QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
     }
 
+    void parsesStructuredCallArguments()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int inc(int x, int by = 1) {
+                return x + by;
+            }
+
+            fn int main() {
+                vector<any> xs = {1, "x", true};
+                int a = inc(1);
+                int b = inc(x: 1, by: 2);
+                int c = 3 |> inc(x: _, by: 4);
+                println("prefix=", ...xs);
+                return a + b + c;
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(2));
+
+        auto* inc = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[0].get());
+        QVERIFY(inc != nullptr);
+        QCOMPARE(inc->params.size(), static_cast<size_t>(2));
+        QVERIFY(inc->params[1]->defaultValue != nullptr);
+
+        auto* mainFn = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[1].get());
+        QVERIFY(mainFn != nullptr);
+        QVERIFY(mainFn->body != nullptr);
+
+        auto* bDecl = dynamic_cast<abel::VarDeclStmtNode*>(mainFn->body->statements[2].get());
+        QVERIFY(bDecl != nullptr);
+        auto* namedCall = dynamic_cast<abel::CallExprNode*>(bDecl->init.get());
+        QVERIFY(namedCall != nullptr);
+        QCOMPARE(namedCall->args.size(), static_cast<size_t>(2));
+        QCOMPARE(namedCall->argNames.size(), static_cast<size_t>(2));
+        QCOMPARE(namedCall->argNames[0], QStringLiteral("x"));
+        QCOMPARE(namedCall->argNames[1], QStringLiteral("by"));
+        QVERIFY(!namedCall->argSpreads[0]);
+        QVERIFY(!namedCall->argSpreads[1]);
+
+        auto* printStmt = dynamic_cast<abel::ExprStmtNode*>(mainFn->body->statements[4].get());
+        QVERIFY(printStmt != nullptr);
+        auto* spreadCall = dynamic_cast<abel::CallExprNode*>(printStmt->expr.get());
+        QVERIFY(spreadCall != nullptr);
+        QCOMPARE(spreadCall->args.size(), static_cast<size_t>(2));
+        QVERIFY(spreadCall->argNames[0].isEmpty());
+        QVERIFY(spreadCall->argNames[1].isEmpty());
+        QVERIFY(!spreadCall->argSpreads[0]);
+        QVERIFY(spreadCall->argSpreads[1]);
+    }
+
     void parsesUserBinaryOperatorDeclaration()
     {
         const QString src = QStringLiteral(R"(
