@@ -2363,7 +2363,14 @@ ExecResult Interpreter::callStructuredFunctionOverloadExpr(const QString& displa
     std::vector<PreparedCallArg> rawArgs = prepareFunctionArgs(call.args);
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
+    return callStructuredFunctionOverloadPrepared(displayName, candidates, call, rawArgs);
+}
 
+ExecResult Interpreter::callStructuredFunctionOverloadPrepared(const QString& displayName,
+                                                               const QList<const FunctionDeclNode*>& candidates,
+                                                               const CallExprNode& call,
+                                                               const std::vector<PreparedCallArg>& rawArgs)
+{
     const FunctionDeclNode* singleNonTemplate = nullptr;
     int nonTemplateCount = 0;
     for (const FunctionDeclNode* fn : candidates) {
@@ -3894,14 +3901,11 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
 
     QString targetName;
     const std::vector<std::unique_ptr<ExprNode>>* restArgs = nullptr;
+    const CallExprNode* sourceCall = nullptr;
 
     if (auto* name = dynamic_cast<NameExprNode*>(expr.rhs.get())) {
         targetName = name->name;
     } else if (auto* call = dynamic_cast<CallExprNode*>(expr.rhs.get())) {
-        if (callHasStructuredArgs(*call)) {
-            error(QStringLiteral("E0592"), QStringLiteral("structured pipe call arguments are not implemented in this v1.1 slice"), call->span);
-            return AbelValue::makeUnknown();
-        }
         auto* name = dynamic_cast<NameExprNode*>(call->callee.get());
         if (!name) {
             error(QStringLiteral("E0592"), QStringLiteral("pipe target call must use a named function"), call->callee->span);
@@ -3909,6 +3913,7 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
         }
         targetName = name->name;
         restArgs = &call->args;
+        sourceCall = call;
     } else {
         error(QStringLiteral("E0593"), QStringLiteral("pipe right side must be f or f(args...)"), expr.rhs->span);
         return AbelValue::makeUnknown();
@@ -3917,7 +3922,39 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
     static const std::vector<std::unique_ptr<ExprNode>> emptyArgs;
     const auto& args = restArgs ? *restArgs : emptyArgs;
 
+    auto makeSyntheticPipeCall = [&](const std::vector<PreparedCallArg>& prepared) {
+        CallExprNode call;
+        call.span = expr.span;
+        auto callee = std::make_unique<NameExprNode>();
+        callee->name = targetName;
+        callee->span = expr.rhs->span;
+        call.callee = std::move(callee);
+        call.args.reserve(prepared.size());
+        call.argNames.reserve(prepared.size());
+        call.argSpreads.reserve(prepared.size());
+        const bool holes = hasPipeHole(args);
+        if (!holes) {
+            auto dummy = std::make_unique<NameExprNode>();
+            dummy->span = expr.lhs->span;
+            call.args.push_back(std::move(dummy));
+            call.argNames.push_back({});
+            call.argSpreads.push_back(false);
+        }
+        for (size_t i = 0; i < args.size(); ++i) {
+            auto dummy = std::make_unique<NameExprNode>();
+            dummy->span = args[i]->span;
+            call.args.push_back(std::move(dummy));
+            call.argNames.push_back(sourceCall ? callArgName(*sourceCall, i) : QString());
+            call.argSpreads.push_back(sourceCall && callArgSpread(*sourceCall, i));
+        }
+        return call;
+    };
+
     if (const VariableSlot* slot = m_ctx->lookupVariable(targetName)) {
+        if (sourceCall && callHasStructuredArgs(*sourceCall)) {
+            error(QStringLiteral("E0586"), QStringLiteral("function value calls only accept positional arguments"), expr.rhs->span);
+            return AbelValue::makeUnknown();
+        }
         AbelValue callee = slot->location ? slot->location->read() : AbelValue::makeUnknown();
         if (callee.type().kind == TypeKind::Function)
             return callFunctionValuePipe(callee, *expr.lhs, args, expr.span);
@@ -3927,11 +3964,24 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
 
     if (m_functions.contains(targetName)) {
         const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(targetName);
-        if (!candidates.isEmpty())
-            return callFunctionOverloadPipeExpr(targetName, candidates, *expr.lhs, args, expr.span).value;
+        if (!candidates.isEmpty()) {
+            std::vector<PreparedCallArg> prepared = prepareFunctionPipeArgs(*expr.lhs, args);
+            if (m_ctx->hasError())
+                return AbelValue::makeUnknown();
+            CallExprNode call = makeSyntheticPipeCall(prepared);
+            return callStructuredFunctionOverloadPrepared(targetName, candidates, call, prepared).value;
+        }
     }
 
     if (m_builtins.hasFunction(targetName)) {
+        if (sourceCall && callHasNamedArgs(*sourceCall)) {
+            error(QStringLiteral("E0544"), QStringLiteral("builtin function calls do not support named arguments"), expr.rhs->span);
+            return AbelValue::makeUnknown();
+        }
+        if (sourceCall && callHasSpreadArgs(*sourceCall)) {
+            error(QStringLiteral("E0544"), QStringLiteral("spread arguments in pipe builtin calls are not implemented in this v1.1 slice"), expr.rhs->span);
+            return AbelValue::makeUnknown();
+        }
         BuiltinFunctionCall call{*m_ctx, targetName, {}, {}, expr.span};
         attachStringifier(call);
         const bool holes = hasPipeHole(args);

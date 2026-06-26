@@ -158,6 +158,10 @@ private:
     ExecResult callStructuredFunctionOverloadExpr(const QString& displayName,
                                                   const QList<const FunctionDeclNode*>& candidates,
                                                   const CallExprNode& call);
+    ExecResult callStructuredFunctionOverloadPrepared(const QString& displayName,
+                                                      const QList<const FunctionDeclNode*>& candidates,
+                                                      const CallExprNode& call,
+                                                      const std::vector<PreparedCallArg>& rawArgs);
     ExecResult callFunctionOverloadPipeExpr(const QString& displayName,
                                             const QList<const FunctionDeclNode*>& candidates,
                                             const ExprNode& firstArg,

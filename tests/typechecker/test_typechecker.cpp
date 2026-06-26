@@ -231,9 +231,13 @@ private slots:
                 int c = mix(1, c: 3, b: 2);
                 int d = sum(1, "x", true);
                 int e = sum(1, ...tail);
+                int f = 3 |> inc(x: _, by: 4);
+                int g = 3 |> inc(by: 4);
+                int h = 3 |> inc;
+                int i = tail |> sum("head", ..._);
                 str s = build_string("prefix=", ...tail);
                 println("debug=", ...tail);
-                return a + b + c + d + e + s.len();
+                return a + b + c + d + e + f + g + h + i + s.len();
             }
         )");
         auto result = checkSource(src);
@@ -378,6 +382,16 @@ private slots:
             }
         )"));
         QVERIFY(countMessagesContaining(spreadNonAnyVector, QStringLiteral("spread argument expects vector<any>")) >= 1);
+
+        auto functionValueNamedPipe = checkSource(QStringLiteral(R"(
+            fn int main() {
+                func int(int, int) f = lambda [] int(int a, int b) {
+                    return a + b;
+                };
+                return 1 |> f(a: _, b: 2);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(functionValueNamedPipe, QStringLiteral("function value calls only accept positional")) >= 1);
     }
 
     void rejectsBadStructuredConstructorMethodAndBackendCalls()

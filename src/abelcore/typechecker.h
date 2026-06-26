@@ -65,6 +65,7 @@ private:
         std::vector<ExprType> checked;
         std::vector<SourceSpan> spans;
         std::vector<bool> defaulted;
+        std::vector<bool> pipeHoles;
     };
 
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
@@ -182,7 +183,8 @@ private:
                              const SourceSpan& nameSpan,
                              const ExprType& lhs,
                              const std::vector<std::unique_ptr<ExprNode>>& args,
-                             const SourceSpan& span);
+                             const SourceSpan& span,
+                             const CallExprNode* sourceCall = nullptr);
     ExprType checkFunctionCallShape(const QString& name,
                                     const FunctionDeclNode& fn,
                                     const ExprType& firstArg,
@@ -199,6 +201,11 @@ private:
     ExprType checkStructuredFunctionOverloadCall(const QString& displayName,
                                                  const QList<const FunctionDeclNode*>& candidates,
                                                  const CallExprNode& call);
+    ExprType checkStructuredFunctionOverloadCallWithArgs(const QString& displayName,
+                                                         const QList<const FunctionDeclNode*>& candidates,
+                                                         const CallExprNode& call,
+                                                         const std::vector<ExprType>& rawArgs,
+                                                         const std::vector<bool>* rawPipeHoles = nullptr);
     ExprType checkMethodOverloadCall(const QString& displayName,
                                      const QList<const FunctionDeclNode*>& candidates,
                                      const ExprType& receiver,
@@ -240,7 +247,8 @@ private:
                                                   const std::vector<std::unique_ptr<ParameterNode>>& params,
                                                   const CallExprNode& call,
                                                   const std::vector<ExprType>& rawArgs,
-                                                  bool diagnose);
+                                                  bool diagnose,
+                                                  const std::vector<bool>* rawPipeHoles = nullptr);
     void checkParameterDefault(const DeclNode& decl,
                                const std::vector<std::unique_ptr<ParameterNode>>& params,
                                size_t index,

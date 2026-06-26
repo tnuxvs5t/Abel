@@ -2541,11 +2541,8 @@ ExprType TypeChecker::checkPipe(const BinaryExprNode& expr)
         return checkPipeTarget(name->name, name->span, lhs, {}, expr.span);
 
     if (auto* call = dynamic_cast<CallExprNode*>(expr.rhs.get())) {
-        if (callHasStructuredArgs(*call))
-            return errorExpr(call->span,
-                             QStringLiteral("structured pipe call arguments are not implemented in this v1.1 slice"));
         if (auto* name = dynamic_cast<NameExprNode*>(call->callee.get()))
-            return checkPipeTarget(name->name, name->span, lhs, call->args, expr.span);
+            return checkPipeTarget(name->name, name->span, lhs, call->args, expr.span, call);
         return errorExpr(call->callee->span, QStringLiteral("pipe target call must use a named function"));
     }
 
@@ -2556,7 +2553,8 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
                                       const SourceSpan& nameSpan,
                                       const ExprType& lhs,
                                       const std::vector<std::unique_ptr<ExprNode>>& args,
-                                      const SourceSpan& span)
+                                      const SourceSpan& span,
+                                      const CallExprNode* sourceCall)
 {
     auto checkRestArgs = [&]() {
         for (const auto& argExpr : args) {
@@ -2570,16 +2568,23 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
         std::vector<ExprType> checked;
         std::vector<SourceSpan> spans;
         std::vector<bool> holeFlags;
+        std::vector<QString> names;
+        std::vector<bool> spreads;
         const bool hasHoles = hasPipeHole(args);
         checked.reserve(args.size() + (hasHoles ? 0 : 1));
         spans.reserve(args.size() + (hasHoles ? 0 : 1));
         holeFlags.reserve(args.size() + (hasHoles ? 0 : 1));
+        names.reserve(args.size() + (hasHoles ? 0 : 1));
+        spreads.reserve(args.size() + (hasHoles ? 0 : 1));
         if (!hasHoles) {
             checked.push_back(lhs);
             spans.push_back(span);
             holeFlags.push_back(false);
+            names.push_back({});
+            spreads.push_back(false);
         }
-        for (const auto& argExpr : args) {
+        for (size_t i = 0; i < args.size(); ++i) {
+            const auto& argExpr = args[i];
             if (isPipeHoleExpr(*argExpr)) {
                 checked.push_back(lhs);
                 spans.push_back(argExpr->span);
@@ -2589,16 +2594,40 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
                 spans.push_back(argExpr->span);
                 holeFlags.push_back(false);
             }
+            names.push_back(sourceCall ? callArgName(*sourceCall, i) : QString());
+            spreads.push_back(sourceCall && callArgSpread(*sourceCall, i));
         }
         struct BuiltPipeArgs {
             std::vector<ExprType> checked;
             std::vector<SourceSpan> spans;
             std::vector<bool> holes;
+            std::vector<QString> names;
+            std::vector<bool> spreads;
         };
-        return BuiltPipeArgs{std::move(checked), std::move(spans), std::move(holeFlags)};
+        return BuiltPipeArgs{std::move(checked), std::move(spans), std::move(holeFlags), std::move(names), std::move(spreads)};
+    };
+
+    auto makeSyntheticCall = [&](const decltype(buildPipeArgs())& built) {
+        CallExprNode call;
+        call.span = span;
+        auto callee = std::make_unique<NameExprNode>();
+        callee->name = name;
+        callee->span = nameSpan;
+        call.callee = std::move(callee);
+        call.argNames = built.names;
+        call.argSpreads = built.spreads;
+        call.args.reserve(built.spans.size());
+        for (const SourceSpan& argSpan : built.spans) {
+            auto dummy = std::make_unique<NameExprNode>();
+            dummy->span = argSpan;
+            call.args.push_back(std::move(dummy));
+        }
+        return call;
     };
 
     if (const VariableInfo* variable = lookupVariable(name)) {
+        if (sourceCall && callHasStructuredArgs(*sourceCall))
+            return errorExpr(span, QStringLiteral("function value calls only accept positional arguments"));
         const AbelType calleeType = valueTypeOfVariable(variable->type);
         if (calleeType.kind != TypeKind::Function)
             return errorExpr(nameSpan, QStringLiteral("pipe target variable '%1' is not a function value").arg(name));
@@ -2632,10 +2661,15 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
         const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name, nameSpan);
         if (candidates.isEmpty())
             return unknownExprType();
-        return checkFunctionOverloadCall(name, candidates, built.checked, built.spans, span, nullptr, false, &built.holes);
+        CallExprNode call = makeSyntheticCall(built);
+        return checkStructuredFunctionOverloadCallWithArgs(name, candidates, call, built.checked, &built.holes);
     }
 
     if (m_builtins.hasFunction(name)) {
+        if (sourceCall && callHasNamedArgs(*sourceCall))
+            return errorExpr(span, QStringLiteral("builtin function calls do not support named arguments"));
+        if (sourceCall && callHasSpreadArgs(*sourceCall))
+            return errorExpr(span, QStringLiteral("spread arguments in pipe builtin calls are not implemented in this v1.1 slice"));
         auto built = buildPipeArgs();
         const auto& checked = built.checked;
         const auto& spans = built.spans;
@@ -3004,10 +3038,12 @@ TypeChecker::NormalizedCallArgs TypeChecker::normalizeCallArgsForParams(
     const std::vector<std::unique_ptr<ParameterNode>>& params,
     const CallExprNode& call,
     const std::vector<ExprType>& rawArgs,
-    bool diagnose)
+    bool diagnose,
+    const std::vector<bool>* rawPipeHoles)
 {
     NormalizedCallArgs out;
     Q_ASSERT(rawArgs.size() == call.args.size());
+    Q_ASSERT(!rawPipeHoles || rawPipeHoles->size() == rawArgs.size());
 
     auto fail = [&](const SourceSpan& span, const QString& message) {
         out.ok = false;
@@ -3078,6 +3114,7 @@ TypeChecker::NormalizedCallArgs TypeChecker::normalizeCallArgsForParams(
     out.checked.reserve(fixedCount + variadicArgIndexes.size());
     out.spans.reserve(fixedCount + variadicArgIndexes.size());
     out.defaulted.reserve(fixedCount + variadicArgIndexes.size());
+    out.pipeHoles.reserve(fixedCount + variadicArgIndexes.size());
 
     DeclContextGuard context(m_currentPackage, m_currentModule, m_currentImports, m_currentImportAliases, decl);
     for (size_t i = 0; i < fixedCount; ++i) {
@@ -3086,6 +3123,7 @@ TypeChecker::NormalizedCallArgs TypeChecker::normalizeCallArgsForParams(
             out.checked.push_back(rawArgs[argIndex]);
             out.spans.push_back(call.args[argIndex]->span);
             out.defaulted.push_back(false);
+            out.pipeHoles.push_back(rawPipeHoles && (*rawPipeHoles)[argIndex]);
             continue;
         }
         const ParameterNode& param = *params[i];
@@ -3094,18 +3132,21 @@ TypeChecker::NormalizedCallArgs TypeChecker::normalizeCallArgsForParams(
             out.checked.push_back(unknownExprType());
             out.spans.push_back(param.span);
             out.defaulted.push_back(false);
+            out.pipeHoles.push_back(false);
             continue;
         }
         const AbelType paramType = typeFromAstForDecl(*param.type, decl);
         out.checked.push_back({paramType, ValueCategory::PRValue, false});
         out.spans.push_back(param.defaultValue->span);
         out.defaulted.push_back(true);
+        out.pipeHoles.push_back(false);
     }
 
     for (const size_t argIndex : variadicArgIndexes) {
         out.checked.push_back(rawArgs[argIndex]);
         out.spans.push_back(call.args[argIndex]->span);
         out.defaulted.push_back(false);
+        out.pipeHoles.push_back(rawPipeHoles && (*rawPipeHoles)[argIndex]);
     }
 
     return out;
@@ -3160,6 +3201,16 @@ ExprType TypeChecker::checkStructuredFunctionOverloadCall(const QString& display
     rawArgs.reserve(call.args.size());
     for (const auto& argExpr : call.args)
         rawArgs.push_back(checkExpr(*argExpr));
+    return checkStructuredFunctionOverloadCallWithArgs(displayName, candidates, call, rawArgs, nullptr);
+}
+
+ExprType TypeChecker::checkStructuredFunctionOverloadCallWithArgs(const QString& displayName,
+                                                                  const QList<const FunctionDeclNode*>& candidates,
+                                                                  const CallExprNode& call,
+                                                                  const std::vector<ExprType>& rawArgs,
+                                                                  const std::vector<bool>* rawPipeHoles)
+{
+    Q_ASSERT(!rawPipeHoles || rawPipeHoles->size() == rawArgs.size());
     for (const ExprType& arg : rawArgs) {
         if (isUnknownType(arg.type))
             return unknownExprType();
@@ -3180,7 +3231,7 @@ ExprType TypeChecker::checkStructuredFunctionOverloadCall(const QString& display
             continue;
         considered.push_back(fn);
 
-        NormalizedCallArgs normalized = normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, false);
+        NormalizedCallArgs normalized = normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, false, rawPipeHoles);
         if (!normalized.ok)
             continue;
 
@@ -3236,7 +3287,7 @@ ExprType TypeChecker::checkStructuredFunctionOverloadCall(const QString& display
     if (matches.isEmpty()) {
         const qsizetype before = m_diagnostics.size();
         for (const FunctionDeclNode* fn : considered) {
-            normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true);
+            normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true, rawPipeHoles);
             if (m_diagnostics.size() != before)
                 return unknownExprType();
         }
@@ -3269,15 +3320,22 @@ ExprType TypeChecker::checkStructuredFunctionOverloadCall(const QString& display
     if (match.isTemplate)
         guard = std::make_unique<TemplateTypeGuard>(m_templateTypes, match.bindings);
 
-    NormalizedCallArgs normalized = normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true);
+    NormalizedCallArgs normalized = normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true, rawPipeHoles);
     if (!normalized.ok)
         return unknownExprType();
 
     const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
     const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
+    int mutableRefHoleCount = 0;
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& param = *fn->params[i];
         const AbelType paramType = typeFromAstForDecl(*param.type, *fn);
+        if (i < normalized.pipeHoles.size()
+            && normalized.pipeHoles[i]
+            && paramType.isReference()
+            && !(paramType.pointee && paramType.pointee->isConst)) {
+            ++mutableRefHoleCount;
+        }
         checkParameterArgument(paramType,
                                normalized.checked[i],
                                normalized.spans[i],
@@ -3285,6 +3343,8 @@ ExprType TypeChecker::checkStructuredFunctionOverloadCall(const QString& display
                                    ? QStringLiteral("default value for parameter '%1'").arg(param.name)
                                    : QStringLiteral("parameter '%1'").arg(param.name));
     }
+    if (mutableRefHoleCount > 1)
+        return errorExpr(call.span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
     if (match.isTemplate)
         checkTemplateInstantiation(*fn, match.bindings);
     return callReturnExprType(typeFromAstForDecl(*fn->returnType, *fn));

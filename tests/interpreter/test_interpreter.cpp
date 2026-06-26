@@ -1884,15 +1884,19 @@ private slots:
                 int e = with_default_side_effect(calls, x: 9);
                 int f = count(1, ...tail);  // 4
                 int g = first_int(...tail); // 2, spread unwraps vector<any> elements once
+                int p1 = 3 |> inc(x: _, by: 4); // 7
+                int p2 = 3 |> inc(by: 4);       // 7
+                int p3 = 3 |> inc;              // 4
+                int p4 = tail |> count("head", ..._); // 4
                 str s = build_string("prefix=", ...tail);
-                return a + b + c + d + e + calls + f + g + s.len();
+                return a + b + c + d + e + calls + f + g + p1 + p2 + p3 + p4 + s.len();
             }
         )");
         auto result = runSource(src);
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 43);
+        QCOMPARE(result.exitCode, 65);
     }
 
     void runsStructuredConstructorAndMethodCalls()
@@ -1981,6 +1985,17 @@ private slots:
         )"));
         QVERIFY(!spreadIntoFixed.diagnostics.isEmpty());
         QCOMPARE(spreadIntoFixed.exitCode, 1);
+
+        auto functionValueNamedPipe = runSource(QStringLiteral(R"(
+            fn int main() {
+                func int(int, int) f = lambda [] int(int a, int b) {
+                    return a + b;
+                };
+                return 1 |> f(a: _, b: 2);
+            }
+        )"));
+        QVERIFY(!functionValueNamedPipe.diagnostics.isEmpty());
+        QCOMPARE(functionValueNamedPipe.exitCode, 1);
     }
 
     void rejectsBadStructuredConstructorAndMethodCallsAtRuntime()
