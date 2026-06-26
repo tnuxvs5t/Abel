@@ -242,6 +242,52 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsStructuredConstructorMethodAndBackendCalls()
+    {
+        const QString src = QStringLiteral(R"(
+            backend MathSystem {
+                fn int fast_add(int a, int b = 1);
+                fn int count(any... xs);
+                fn void touch(int& x, int by = 2);
+            }
+
+            struct Point {
+                int x;
+                int y;
+
+                init(int x, int y = 0) {
+                    this.x = x;
+                    this.y = y;
+                }
+
+                const fn int sum(int add = 0) {
+                    return x + y + add;
+                }
+
+                fn int count(any... xs) {
+                    return xs.len();
+                }
+            }
+
+            fn int main() {
+                vector<any> tail = {1, "x", true};
+                Point p = Point(x: 3);
+                Point q = Point(y: 4, x: 2);
+                int out = 1;
+                MathSystem::touch(x: out);
+                return p.sum(add: 5)
+                    + q.count("prefix", ...tail)
+                    + MathSystem::fast_add(b: 2, a: 1)
+                    + MathSystem::count("prefix", ...tail)
+                    + out;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void rejectsBadStructuredOrdinaryFunctionCalls()
     {
         auto positionalAfterNamed = checkSource(QStringLiteral(R"(
@@ -332,6 +378,71 @@ private slots:
             }
         )"));
         QVERIFY(countMessagesContaining(spreadNonAnyVector, QStringLiteral("spread argument expects vector<any>")) >= 1);
+    }
+
+    void rejectsBadStructuredConstructorMethodAndBackendCalls()
+    {
+        auto badConstructorName = checkSource(QStringLiteral(R"(
+            struct Point {
+                int x;
+                int y;
+
+                init(int x, int y = 0) {
+                    this.x = x;
+                    this.y = y;
+                }
+            }
+
+            fn int main() {
+                Point p = Point(z: 1);
+                return p.x;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(badConstructorName, QStringLiteral("unknown parameter name")) >= 1);
+
+        auto badMethodName = checkSource(QStringLiteral(R"(
+            struct Point {
+                int x;
+
+                init(int x) {
+                    this.x = x;
+                }
+
+                fn int get(int add = 0) {
+                    return x + add;
+                }
+            }
+
+            fn int main() {
+                Point p = Point(1);
+                return p.get(z: 2);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(badMethodName, QStringLiteral("unknown parameter name")) >= 1);
+
+        auto backendSpreadFixed = checkSource(QStringLiteral(R"(
+            backend MathSystem {
+                fn int fast_add(int a, int b);
+            }
+
+            fn int main() {
+                vector<any> xs = {1, 2};
+                return MathSystem::fast_add(...xs);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(backendSpreadFixed, QStringLiteral("spread argument can only expand into an any... tail")) >= 1);
+
+        auto backendSpreadNonAnyVector = checkSource(QStringLiteral(R"(
+            backend MathSystem {
+                fn int count(any... xs);
+            }
+
+            fn int main() {
+                vector<int> xs = {1, 2};
+                return MathSystem::count(...xs);
+            }
+        )"));
+        QVERIFY(countMessagesContaining(backendSpreadNonAnyVector, QStringLiteral("spread argument expects vector<any>")) >= 1);
     }
 
     void rejectsBadOrdinaryFunctionOverloads()

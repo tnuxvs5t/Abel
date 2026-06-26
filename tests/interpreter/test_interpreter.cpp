@@ -1895,6 +1895,55 @@ private slots:
         QCOMPARE(result.exitCode, 43);
     }
 
+    void runsStructuredConstructorAndMethodCalls()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int next(int& calls) {
+                calls = calls + 1;
+                return calls;
+            }
+
+            struct Point {
+                int x;
+                int y;
+
+                init(int x, int y = 10) {
+                    this.x = x;
+                    this.y = y;
+                }
+
+                fn int sum(int add = 0) {
+                    return x + y + add;
+                }
+
+                fn int count(any... xs) {
+                    return xs.len();
+                }
+
+                fn int side(int& calls, int value = next(calls)) {
+                    return value + calls;
+                }
+            }
+
+            fn int main() {
+                vector<any> tail = {2, "z"};
+                Point p = Point(x: 3);
+                Point q = Point(y: 4, x: 1);
+                int calls = 0;
+                int a = p.sum(add: 5);      // 18
+                int b = q.count("a", ...tail); // 3
+                int c = p.side(calls);      // 2, calls becomes 1
+                int d = p.side(calls, value: 9); // 10, default not evaluated
+                return a + b + c + d + q.sum();
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 38);
+    }
+
     void rejectsBadStructuredOrdinaryFunctionCallsAtRuntime()
     {
         auto bad = runSource(QStringLiteral(R"(
@@ -1932,6 +1981,47 @@ private slots:
         )"));
         QVERIFY(!spreadIntoFixed.diagnostics.isEmpty());
         QCOMPARE(spreadIntoFixed.exitCode, 1);
+    }
+
+    void rejectsBadStructuredConstructorAndMethodCallsAtRuntime()
+    {
+        auto badConstructorName = runSource(QStringLiteral(R"(
+            struct Point {
+                int x;
+
+                init(int x) {
+                    this.x = x;
+                }
+            }
+
+            fn int main() {
+                Point p = Point(z: 1);
+                return p.x;
+            }
+        )"));
+        QVERIFY(!badConstructorName.diagnostics.isEmpty());
+        QCOMPARE(badConstructorName.exitCode, 1);
+
+        auto badMethodName = runSource(QStringLiteral(R"(
+            struct Point {
+                int x;
+
+                init(int x) {
+                    this.x = x;
+                }
+
+                fn int get(int add = 0) {
+                    return x + add;
+                }
+            }
+
+            fn int main() {
+                Point p = Point(1);
+                return p.get(z: 2);
+            }
+        )"));
+        QVERIFY(!badMethodName.diagnostics.isEmpty());
+        QCOMPARE(badMethodName.exitCode, 1);
     }
 
     void runsStructConstructorAndMethodOverloads()

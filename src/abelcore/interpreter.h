@@ -170,7 +170,7 @@ private:
     ExecResult callStructFunctionOverloadExpr(const QString& displayName,
                                               const QList<const FunctionDeclNode*>& candidates,
                                               AbelLocation* self,
-                                              const std::vector<std::unique_ptr<ExprNode>>& args,
+                                              const CallExprNode& call,
                                               const SourceSpan& span);
     const ConstructorDeclNode* selectConstructorOverload(const QString& displayName,
                                                         const StructRuntimeInfo& info,
@@ -197,28 +197,24 @@ private:
     AbelValue evalCast(const CastExprNode& expr);
     AbelValue evalPipe(const BinaryExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);
-    AbelValue evalStaticCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
-    AbelValue evalBackendCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    AbelValue evalStaticCall(const StaticAccessExprNode& callee, const CallExprNode& call);
+    AbelValue evalBackendCall(const StaticAccessExprNode& callee, const CallExprNode& call);
     AbelValue evalBackendCallByName(const QString& backendName,
                                     const SourceSpan& backendSpan,
                                     const QString& member,
-                                    const std::vector<std::unique_ptr<ExprNode>>& args,
-                                    const SourceSpan& span);
+                                    const CallExprNode& call);
     AbelValue evalQualifiedFunctionCall(const QString& moduleName,
                                         const QString& name,
-                                        const std::vector<std::unique_ptr<ExprNode>>& args,
-                                        const SourceSpan& span);
+                                        const CallExprNode& call);
     AbelValue evalQualifiedStructConstructor(const QString& moduleName,
                                              const QString& name,
-                                             const std::vector<std::unique_ptr<ExprNode>>& args,
-                                             const SourceSpan& span);
+                                             const CallExprNode& call);
     AbelValue evalLambda(const LambdaExprNode& expr);
     AbelValue makeFunctionValue(const FunctionDeclNode& fn);
     AbelValue evalBuiltinMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args);
     AbelValue evalStructConstructor(const QString& name,
                                     const StructRuntimeInfo& info,
-                                    const std::vector<std::unique_ptr<ExprNode>>& args,
-                                    const SourceSpan& span,
+                                    const CallExprNode& call,
                                     const AbelType* constructedType = nullptr);
     AbelValue evalStructConstructorPrepared(const QString& name,
                                             const StructRuntimeInfo& info,
@@ -226,7 +222,7 @@ private:
                                             const std::vector<PreparedCallArg>& args,
                                             const SourceSpan& span,
                                             const AbelType* constructedType = nullptr);
-    AbelValue evalStructMethod(const FieldAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    AbelValue evalStructMethod(const FieldAccessExprNode& callee, const CallExprNode& call);
     AbelValue evalAssignment(const AssignExprNode& expr);
     AbelValue defaultConstructValue(const AbelType& type, const SourceSpan& span);
     AbelValue defaultConstructValue(const AbelType& type, const SourceSpan& span, QSet<QString>& visiting);

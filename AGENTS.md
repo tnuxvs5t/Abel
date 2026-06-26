@@ -910,8 +910,8 @@ AGENTS.md        本仓库 Agent 操作手册。
 
 ```text
 当前阶段：v1.1 complete 推进中（v1 complete 仍需最终矩阵验收）。
-最新已知提交：docs: define v1.1 backend complexity direction（具体哈希以 `git log --oneline -1` 为准）。
-本轮实现任务：继续 v1.1-a Structured Calls 收口；在 pipe holes 第一片之后，补齐普通函数 named/default args 与 limited spread into any... 的 Parser/TypeChecker/Interpreter/测试闭环。
+最新已知提交：不再手工固化，具体以 `git log --oneline -1` 为准。
+本轮实现任务：继续 v1.1-a Structured Calls 收口；在普通函数 structured call 第一片之后，补齐 struct constructor / method / backend / static-qualified call 的 named/default args 与 limited spread into any... 的 TypeChecker/Interpreter/测试闭环。
 ```
 
 已完成的大块能力摘要：
@@ -931,7 +931,7 @@ std.str/std.vec/std.math/std.io/std.path/std.env/std.char/std.any/std.debug/std.
 exact-shape 二元 operator template 已落地第一片：只接受 `template <type T> fn R<T> operator OP(X<T> lhs, X<T> rhs)`，TypeChecker/Interpreter 共享参数推导与实例化绑定；template type alias 可作为 struct 构造器入口。
 P1~P4 语义闭环修复已落地：`this` 作为对象 lvalue 参与字段/方法 lookup；struct 字段 location 记录 declared type，嵌套构造赋值不再按 `<unknown>` 当前值转换；命名函数与模块限定函数可作为 `func` 值（overload/template 给静态诊断）；backend binder/Qt plugin 支持 bool/int/i64/f64/str 等 scalar `T&` 写回，并强化 declaration/bound signature mismatch 诊断。
 v1.1 方向已收束进文档：不做动态对象化语言扩张；复杂度由 SDK/Backend 承载，Abel surface 用普通 module/template struct/method/type alias 包装能力，内核保持结构化和静态可检查。
-v1.1-a Structured Calls 继续推进：`x |> f(_)`、`x |> f(1, _)`、`x |> f(_, _)` 对普通函数、函数值和 builtin function 可用；`x |> _.method()`、`x |> _.field.method()` 对单 receiver hole 可用；lhs 运行期只求值一次，hole 保留 lvalue 以绑定 `T&`；若同一个 pipe hole 会绑定多个 mutable reference 参数，TypeChecker 拒绝。普通函数调用已支持 named args、default args，并通过候选归一化保持 TypeChecker/Interpreter 一致；default expr 在声明上下文检查，运行期只在选中 overload 后求值。limited spread 第一片已支持 `vector<any>` / `any...` 展开到用户 `any...` 尾部，并支持 builtin `build_string`/`print`/`println` 展开；展开时 `vector<any>` 元素只解包一层，避免 `any(any(x))`。暂未支持 named/default 到 method/constructor/backend/static 调用或 pipe RHS 结构化调用；这些路径现在给稳定诊断，不再按位置参数静默运行。
+v1.1-a Structured Calls 继续推进：`x |> f(_)`、`x |> f(1, _)`、`x |> f(_, _)` 对普通函数、函数值和 builtin function 可用；`x |> _.method()`、`x |> _.field.method()` 对单 receiver hole 可用；lhs 运行期只求值一次，hole 保留 lvalue 以绑定 `T&`；若同一个 pipe hole 会绑定多个 mutable reference 参数，TypeChecker 拒绝。普通函数、module-qualified 普通函数、struct constructor、struct method、backend/static call 已支持 named args、default args，并通过候选归一化保持 TypeChecker/Interpreter 一致；default expr 在声明上下文检查，运行期只在选中 overload 后求值。limited spread 第一片已支持 `vector<any>` / `any...` 展开到用户和 backend `any...` 尾部，并支持 builtin `build_string`/`print`/`println` 展开；展开时 `vector<any>` 元素只解包一层，避免 `any(any(x))`。builtin method 与 function value call 仍保持 positional-only / 不补 default 的 ABI 边界；pipe RHS 结构化调用仍待收口。
 ```
 
 最近验证命令模板：
@@ -951,7 +951,7 @@ template v1 最简无约束函数/struct/type alias 与 exact-shape 二元 opera
 package 只要求本地/file registry 完整闭环；HTTP/network registry、全球索引、签名发布不进 v1。
 diagnostic 需要矩阵验收；交互式 debugger/DAP 不进 v1。
 标准库只要求常用本地程序 API 稳定；regex/locale/streaming/view/GUI 不进 v1。
-v1.1-a 剩余：named/default args 尚需扩展到 method/constructor/backend/static call 与 pipe RHS 结构化调用；limited spread 尚需覆盖 backend `any...`、pipe RHS 与更多调用归一化路径；backend/constructor 路径的 hole 归一化仍未完成；receiver-hole 第一片当前限制为单 `_`，尚未开放 `_.method(_)` 这类多 hole / mutable receiver 组合；任何后续推进都必须继续走 TypeChecker/Interpreter/测试三件套闭环。
+v1.1-a 剩余：pipe RHS 结构化调用（如 `3 |> scale(x: _, by: 4)`）仍未完成；backend/constructor 路径的 hole 归一化仍未完成；receiver-hole 第一片当前限制为单 `_`，尚未开放 `_.method(_)` 这类多 hole / mutable receiver 组合；builtin method 与 function value call 继续保持 positional-only 边界；任何后续推进都必须继续走 TypeChecker/Interpreter/测试三件套闭环。
 ```
 
 提交记录不再手工复制长列表；需要历史请用：

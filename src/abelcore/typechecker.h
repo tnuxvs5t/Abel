@@ -202,7 +202,7 @@ private:
     ExprType checkMethodOverloadCall(const QString& displayName,
                                      const QList<const FunctionDeclNode*>& candidates,
                                      const ExprType& receiver,
-                                     const std::vector<std::unique_ptr<ExprNode>>& args,
+                                     const CallExprNode& call,
                                      const SourceSpan& span);
     ExprType checkFunctionValueCallShape(const AbelType& functionType,
                                          const ExprType& firstArg,
@@ -210,22 +210,19 @@ private:
                                          const SourceSpan& span);
     ExprType checkAssignment(const AssignExprNode& expr);
     ExprType checkCall(const CallExprNode& expr);
-    ExprType checkStaticCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
-    ExprType checkBackendCall(const StaticAccessExprNode& callee, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
+    ExprType checkStaticCall(const StaticAccessExprNode& callee, const CallExprNode& call);
+    ExprType checkBackendCall(const StaticAccessExprNode& callee, const CallExprNode& call);
     ExprType checkBackendCallByName(const QString& backendName,
                                     const SourceSpan& backendSpan,
                                     const QString& member,
-                                    const std::vector<std::unique_ptr<ExprNode>>& args,
-                                    const SourceSpan& span);
+                                    const CallExprNode& call);
     ExprType checkQualifiedFunctionCall(const QString& moduleName,
                                         const SourceSpan& moduleSpan,
                                         const QString& name,
-                                        const std::vector<std::unique_ptr<ExprNode>>& args,
-                                        const SourceSpan& span);
+                                        const CallExprNode& call);
     ExprType checkStructConstructorCall(const QString& displayName,
                                         const StructInfo& info,
-                                        const std::vector<std::unique_ptr<ExprNode>>& args,
-                                        const SourceSpan& span,
+                                        const CallExprNode& call,
                                         const AbelType* constructedType = nullptr);
     ExprType checkFunctionValueCall(const AbelType& functionType, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExprType checkLambda(const LambdaExprNode& expr);

@@ -579,7 +579,7 @@ private slots:
 
         const QString src = QStringLiteral(R"(
             backend MathSystem {
-                fn int fast_add(int a, int b);
+                fn int fast_add(int a, int b = 5);
                 fn void sort(vector<int>& xs);
                 fn char first_char(str s);
                 fn int char_code(char c);
@@ -616,6 +616,10 @@ private slots:
                 int ok = MathSystem::fail_if_negative(5);
                 str joined = MathSystem::join_debug("A", 7, true);
                 int variadic_count = MathSystem::count_variadic("A", 7, true);
+                vector<any> tail = {"A", 7, true};
+                int named_fast = MathSystem::fast_add(b: 4, a: 5);
+                int default_fast = MathSystem::fast_add(a: 5);
+                int variadic_spread = MathSystem::count_variadic("prefix", ...tail);
                 int joined_bonus = 0;
                 if (joined == "A7true") {
                     joined_bonus = 6;
@@ -628,7 +632,8 @@ private slots:
                 } else {
                     refs_bonus = 1000;
                 }
-                return MathSystem::fast_add(xs[0], xs[2]) + n + c + d + ok + bonus + joined_bonus + variadic_count + refs_bonus;
+                return MathSystem::fast_add(xs[0], xs[2]) + n + c + d + ok + bonus + joined_bonus + variadic_count + refs_bonus
+                    + named_fast + default_fast + variadic_spread;
             }
         )");
 
@@ -647,7 +652,7 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 122);
+        QCOMPARE(result.exitCode, 145);
     }
 };
 
