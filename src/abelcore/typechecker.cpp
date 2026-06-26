@@ -2524,71 +2524,57 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
     }
 
     if (m_builtins.hasFunction(name)) {
-        if (hasPipeHole(args))
-            return errorExpr(span, QStringLiteral("pipe holes for builtin functions are not implemented yet"));
-        if (isUnknownType(lhs.type)) {
-            checkRestArgs();
-            return unknownExprType();
-        }
-        const qsizetype argc = static_cast<qsizetype>(args.size()) + 1;
+        auto built = buildPipeArgs();
+        const auto& checked = built.checked;
+        const auto& spans = built.spans;
+        const qsizetype argc = static_cast<qsizetype>(checked.size());
+        auto arg = [&](qsizetype i) -> const ExprType& { return checked[static_cast<size_t>(i)]; };
+        auto argSpan = [&](qsizetype i) -> const SourceSpan& { return spans[static_cast<size_t>(i)]; };
         if (name == QStringLiteral("to_str")) {
             if (argc != 1)
                 return errorExpr(span, QStringLiteral("to_str expects one argument"));
-            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
-                return errorExpr(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
+            if (!isUnknownType(arg(0).type) && !isStringifiable(arg(0).type))
+                return errorExpr(argSpan(0), QStringLiteral("cannot stringify %1").arg(arg(0).type.displayName()));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("str_to_chars")) {
             if (argc != 1)
                 return errorExpr(span, QStringLiteral("str_to_chars expects one argument"));
-            if (!isUnknownType(lhs.type) && lhs.type.kind != TypeKind::Str)
-                return errorExpr(span, QStringLiteral("str_to_chars expects str, got %1").arg(lhs.type.displayName()));
+            if (!isUnknownType(arg(0).type) && arg(0).type.kind != TypeKind::Str)
+                return errorExpr(argSpan(0), QStringLiteral("str_to_chars expects str, got %1").arg(arg(0).type.displayName()));
             return {makeVectorType(makeType(TypeKind::Char)), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("chars_to_str")) {
             if (argc != 1)
                 return errorExpr(span, QStringLiteral("chars_to_str expects one argument"));
             const AbelType charVector = makeVectorType(makeType(TypeKind::Char));
-            if (!isUnknownType(lhs.type) && !isAssignable(charVector, lhs.type))
-                return errorExpr(span, QStringLiteral("chars_to_str expects vector<char>, got %1").arg(lhs.type.displayName()));
+            if (!isUnknownType(arg(0).type) && !isAssignable(charVector, arg(0).type))
+                return errorExpr(argSpan(0), QStringLiteral("chars_to_str expects vector<char>, got %1").arg(arg(0).type.displayName()));
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("build_string")) {
-            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
-                error(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
-            for (const auto& argExpr : args) {
-                ExprType arg = checkExpr(*argExpr);
-                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
-                    error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            for (qsizetype i = 0; i < argc; ++i) {
+                if (!isUnknownType(arg(i).type) && !isStringifiable(arg(i).type))
+                    error(argSpan(i), QStringLiteral("cannot stringify %1").arg(arg(i).type.displayName()));
             }
             return {makeType(TypeKind::Str), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("print") || name == QStringLiteral("println")) {
-            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
-                error(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
-            for (const auto& argExpr : args) {
-                ExprType arg = checkExpr(*argExpr);
-                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
-                    error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            for (qsizetype i = 0; i < argc; ++i) {
+                if (!isUnknownType(arg(i).type) && !isStringifiable(arg(i).type))
+                    error(argSpan(i), QStringLiteral("cannot stringify %1").arg(arg(i).type.displayName()));
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("scan")) {
-            if (!lhs.type.isPointer())
-                error(span, QStringLiteral("scan argument must be pointer, got %1").arg(lhs.type.displayName()));
-            else if (lhs.type.pointee && lhs.type.pointee->isConst)
-                error(span, QStringLiteral("scan cannot write through pointer to const %1").arg(lhs.type.pointee->displayName()));
-            else if (lhs.type.pointee && !isScannableType(*lhs.type.pointee))
-                error(span, QStringLiteral("scan does not support target type %1").arg(lhs.type.pointee->displayName()));
-            for (const auto& argExpr : args) {
-                ExprType arg = checkExpr(*argExpr);
-                if (!isUnknownType(arg.type)) {
-                    if (!arg.type.isPointer())
-                        error(argExpr->span, QStringLiteral("scan argument must be pointer, got %1").arg(arg.type.displayName()));
-                    else if (arg.type.pointee && arg.type.pointee->isConst)
-                        error(argExpr->span, QStringLiteral("scan cannot write through pointer to const %1").arg(arg.type.pointee->displayName()));
-                    else if (arg.type.pointee && !isScannableType(*arg.type.pointee))
-                        error(argExpr->span, QStringLiteral("scan does not support target type %1").arg(arg.type.pointee->displayName()));
+            for (qsizetype i = 0; i < argc; ++i) {
+                if (!isUnknownType(arg(i).type)) {
+                    if (!arg(i).type.isPointer())
+                        error(argSpan(i), QStringLiteral("scan argument must be pointer, got %1").arg(arg(i).type.displayName()));
+                    else if (arg(i).type.pointee && arg(i).type.pointee->isConst)
+                        error(argSpan(i), QStringLiteral("scan cannot write through pointer to const %1").arg(arg(i).type.pointee->displayName()));
+                    else if (arg(i).type.pointee && !isScannableType(*arg(i).type.pointee))
+                        error(argSpan(i), QStringLiteral("scan does not support target type %1").arg(arg(i).type.pointee->displayName()));
                 }
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
@@ -2597,10 +2583,10 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             if (argc != 1)
                 return errorExpr(span, QStringLiteral("%1 expects one argument").arg(name));
             if (name == QStringLiteral("char_from_code")) {
-                if (!lhs.type.isInteger())
-                    return errorExpr(span, QStringLiteral("char_from_code expects integer, got %1").arg(lhs.type.displayName()));
-            } else if (lhs.type.kind != TypeKind::Char) {
-                return errorExpr(span, QStringLiteral("%1 expects char, got %2").arg(name, lhs.type.displayName()));
+                if (!isUnknownType(arg(0).type) && !arg(0).type.isInteger())
+                    return errorExpr(argSpan(0), QStringLiteral("char_from_code expects integer, got %1").arg(arg(0).type.displayName()));
+            } else if (!isUnknownType(arg(0).type) && arg(0).type.kind != TypeKind::Char) {
+                return errorExpr(argSpan(0), QStringLiteral("%1 expects char, got %2").arg(name, arg(0).type.displayName()));
             }
             return {charBuiltinReturnType(name), ValueCategory::PRValue, false};
         }
@@ -2609,13 +2595,13 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             if (argc != expected)
                 return errorExpr(span, QStringLiteral("%1 expects %2 argument(s)").arg(name).arg(expected));
             bool hasUnknown = false;
-            if (lhs.type.kind != TypeKind::Any)
-                error(span, QStringLiteral("%1 argument 1 expects any, got %2").arg(name, lhs.type.displayName()));
+            hasUnknown = hasUnknown || isUnknownType(arg(0).type);
+            if (!isUnknownType(arg(0).type) && arg(0).type.kind != TypeKind::Any)
+                error(argSpan(0), QStringLiteral("%1 argument 1 expects any, got %2").arg(name, arg(0).type.displayName()));
             if (name == QStringLiteral("any_is")) {
-                ExprType expectedName = checkExpr(*args[0]);
-                hasUnknown = hasUnknown || isUnknownType(expectedName.type);
-                if (!isUnknownType(expectedName.type) && expectedName.type.kind != TypeKind::Str)
-                    error(args[0]->span, QStringLiteral("any_is argument 2 expects str, got %1").arg(expectedName.type.displayName()));
+                hasUnknown = hasUnknown || isUnknownType(arg(1).type);
+                if (!isUnknownType(arg(1).type) && arg(1).type.kind != TypeKind::Str)
+                    error(argSpan(1), QStringLiteral("any_is argument 2 expects str, got %1").arg(arg(1).type.displayName()));
             }
             if (hasUnknown)
                 return unknownExprType();
@@ -2625,23 +2611,16 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             const qsizetype expected = filePathBuiltinArity(name);
             if (argc != expected)
                 return errorExpr(span, QStringLiteral("%1 expects %2 argument(s)").arg(name).arg(expected));
-            bool hasUnknown = isUnknownType(lhs.type);
-            if (!hasUnknown) {
-                auto expectedType = filePathBuiltinArgType(name, 0);
-                if (expectedType.has_value() && !isAssignable(*expectedType, lhs.type))
-                    error(span, QStringLiteral("%1 argument 1 expects %2, got %3")
-                                    .arg(name, expectedType->displayName(), lhs.type.displayName()));
-            }
-            for (size_t i = 0; i < args.size(); ++i) {
-                ExprType arg = checkExpr(*args[i]);
-                hasUnknown = hasUnknown || isUnknownType(arg.type);
-                auto expectedType = filePathBuiltinArgType(name, static_cast<qsizetype>(i + 1));
-                if (!isUnknownType(arg.type) && expectedType.has_value() && !isAssignable(*expectedType, arg.type)) {
-                    error(args[i]->span,
+            bool hasUnknown = false;
+            for (qsizetype i = 0; i < argc; ++i) {
+                hasUnknown = hasUnknown || isUnknownType(arg(i).type);
+                auto expectedType = filePathBuiltinArgType(name, i);
+                if (!isUnknownType(arg(i).type) && expectedType.has_value() && !isAssignable(*expectedType, arg(i).type)) {
+                    error(argSpan(i),
                           QStringLiteral("%1 argument %2 expects %3, got %4")
                               .arg(name)
-                              .arg(i + 2)
-                              .arg(expectedType->displayName(), arg.type.displayName()));
+                              .arg(i + 1)
+                              .arg(expectedType->displayName(), arg(i).type.displayName()));
                 }
             }
             if (hasUnknown)
@@ -2652,104 +2631,84 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
             const qsizetype expected = mathBuiltinArity(name);
             if (argc != expected)
                 return errorExpr(span, QStringLiteral("%1 expects %2 argument(s)").arg(name).arg(expected));
-            std::vector<ExprType> checked;
-            checked.reserve(args.size() + 1);
-            checked.push_back(lhs);
-            bool hasUnknown = isUnknownType(lhs.type);
+            bool hasUnknown = false;
             bool hasError = false;
-            if (!hasUnknown && mathBuiltinRequiresInteger(name) && !lhs.type.isInteger()) {
-                error(span, QStringLiteral("%1 expects integer argument, got %2").arg(name, lhs.type.displayName()));
-                hasError = true;
-            } else if (!hasUnknown && !mathBuiltinRequiresInteger(name) && !lhs.type.isNumeric()) {
-                error(span, QStringLiteral("%1 expects numeric argument, got %2").arg(name, lhs.type.displayName()));
-                hasError = true;
-            }
-            for (const auto& argExpr : args) {
-                ExprType arg = checkExpr(*argExpr);
-                hasUnknown = hasUnknown || isUnknownType(arg.type);
-                if (!isUnknownType(arg.type) && mathBuiltinRequiresInteger(name) && !arg.type.isInteger()) {
-                    error(argExpr->span, QStringLiteral("%1 expects integer argument, got %2").arg(name, arg.type.displayName()));
+            for (qsizetype i = 0; i < argc; ++i) {
+                hasUnknown = hasUnknown || isUnknownType(arg(i).type);
+                if (!isUnknownType(arg(i).type) && mathBuiltinRequiresInteger(name) && !arg(i).type.isInteger()) {
+                    error(argSpan(i), QStringLiteral("%1 expects integer argument, got %2").arg(name, arg(i).type.displayName()));
                     hasError = true;
-                } else if (!isUnknownType(arg.type) && !mathBuiltinRequiresInteger(name) && !arg.type.isNumeric()) {
-                    error(argExpr->span, QStringLiteral("%1 expects numeric argument, got %2").arg(name, arg.type.displayName()));
+                } else if (!isUnknownType(arg(i).type) && !mathBuiltinRequiresInteger(name) && !arg(i).type.isNumeric()) {
+                    error(argSpan(i), QStringLiteral("%1 expects numeric argument, got %2").arg(name, arg(i).type.displayName()));
                     hasError = true;
                 }
-                checked.push_back(arg);
             }
             if (hasUnknown || hasError)
                 return unknownExprType();
             if (name == QStringLiteral("abs"))
-                return {checked[0].type, ValueCategory::PRValue, false};
+                return {arg(0).type, ValueCategory::PRValue, false};
             if (mathBuiltinReturnsF64(name))
                 return {makeType(TypeKind::F64), ValueCategory::PRValue, false};
             if (mathBuiltinRequiresInteger(name))
-                return {numericBinaryResultType(checked[0].type, checked[1].type), ValueCategory::PRValue, false};
+                return {numericBinaryResultType(arg(0).type, arg(1).type), ValueCategory::PRValue, false};
             if (name == QStringLiteral("clamp")) {
-                AbelType out = numericBinaryResultType(checked[0].type, checked[1].type);
-                out = numericBinaryResultType(out, checked[2].type);
+                AbelType out = numericBinaryResultType(arg(0).type, arg(1).type);
+                out = numericBinaryResultType(out, arg(2).type);
                 return {out, ValueCategory::PRValue, false};
             }
-            return {numericBinaryResultType(checked[0].type, checked[1].type), ValueCategory::PRValue, false};
+            return {numericBinaryResultType(arg(0).type, arg(1).type), ValueCategory::PRValue, false};
         }
-        if (name == QStringLiteral("debug_break"))
-            return errorExpr(span, QStringLiteral("debug_break expects no arguments"));
+        if (name == QStringLiteral("debug_break")) {
+            if (argc != 0)
+                return errorExpr(span, QStringLiteral("debug_break expects no arguments"));
+            return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        }
         if (name == QStringLiteral("debug_assert")) {
-            if (!isUnknownType(lhs.type) && lhs.type.kind != TypeKind::Bool)
-                error(span, QStringLiteral("debug_assert condition must be bool, got %1").arg(lhs.type.displayName()));
-            for (const auto& argExpr : args) {
-                ExprType arg = checkExpr(*argExpr);
-                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
-                    error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            if (argc < 1)
+                return errorExpr(span, QStringLiteral("debug_assert expects at least one argument"));
+            if (!isUnknownType(arg(0).type) && arg(0).type.kind != TypeKind::Bool)
+                error(argSpan(0), QStringLiteral("debug_assert condition must be bool, got %1").arg(arg(0).type.displayName()));
+            for (qsizetype i = 1; i < argc; ++i) {
+                if (!isUnknownType(arg(i).type) && !isStringifiable(arg(i).type))
+                    error(argSpan(i), QStringLiteral("cannot stringify %1").arg(arg(i).type.displayName()));
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("test_assert")) {
-            if (!isUnknownType(lhs.type) && lhs.type.kind != TypeKind::Bool)
-                error(span, QStringLiteral("test_assert condition must be bool, got %1").arg(lhs.type.displayName()));
-            for (const auto& argExpr : args) {
-                ExprType arg = checkExpr(*argExpr);
-                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
-                    error(argExpr->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            if (argc < 1)
+                return errorExpr(span, QStringLiteral("test_assert expects at least one argument"));
+            if (!isUnknownType(arg(0).type) && arg(0).type.kind != TypeKind::Bool)
+                error(argSpan(0), QStringLiteral("test_assert condition must be bool, got %1").arg(arg(0).type.displayName()));
+            for (qsizetype i = 1; i < argc; ++i) {
+                if (!isUnknownType(arg(i).type) && !isStringifiable(arg(i).type))
+                    error(argSpan(i), QStringLiteral("cannot stringify %1").arg(arg(i).type.displayName()));
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("test_eq") || name == QStringLiteral("test_ne")) {
-            if (args.empty())
+            if (argc < 2)
                 return errorExpr(span, QStringLiteral("%1 expects at least two arguments").arg(name));
-            ExprType rhs = checkExpr(*args[0]);
-            if (!isTestComparable(lhs.type, rhs.type))
-                error(args[0]->span, QStringLiteral("%1 cannot compare %2 and %3")
-                                          .arg(name, lhs.type.displayName(), rhs.type.displayName()));
-            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
-                error(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
-            if (!isUnknownType(rhs.type) && !isStringifiable(rhs.type))
-                error(args[0]->span, QStringLiteral("cannot stringify %1").arg(rhs.type.displayName()));
-            for (size_t i = 1; i < args.size(); ++i) {
-                ExprType arg = checkExpr(*args[i]);
-                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
-                    error(args[i]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            if (!isTestComparable(arg(0).type, arg(1).type))
+                error(argSpan(1), QStringLiteral("%1 cannot compare %2 and %3")
+                                      .arg(name, arg(0).type.displayName(), arg(1).type.displayName()));
+            for (qsizetype i = 0; i < argc; ++i) {
+                if (!isUnknownType(arg(i).type) && !isStringifiable(arg(i).type))
+                    error(argSpan(i), QStringLiteral("cannot stringify %1").arg(arg(i).type.displayName()));
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }
         if (name == QStringLiteral("test_close")) {
-            if (args.size() < 2)
+            if (argc < 3)
                 return errorExpr(span, QStringLiteral("test_close expects at least three arguments"));
-            ExprType expected = checkExpr(*args[0]);
-            ExprType eps = checkExpr(*args[1]);
-            if (!isUnknownType(lhs.type) && !lhs.type.isNumeric())
-                error(span, QStringLiteral("test_close actual must be numeric, got %1").arg(lhs.type.displayName()));
-            if (!isUnknownType(expected.type) && !expected.type.isNumeric())
-                error(args[0]->span, QStringLiteral("test_close expected must be numeric, got %1").arg(expected.type.displayName()));
-            if (!isUnknownType(eps.type) && !eps.type.isNumeric())
-                error(args[1]->span, QStringLiteral("test_close eps must be numeric, got %1").arg(eps.type.displayName()));
-            if (!isUnknownType(lhs.type) && !isStringifiable(lhs.type))
-                error(span, QStringLiteral("cannot stringify %1").arg(lhs.type.displayName()));
-            if (!isUnknownType(expected.type) && !isStringifiable(expected.type))
-                error(args[0]->span, QStringLiteral("cannot stringify %1").arg(expected.type.displayName()));
-            for (size_t i = 2; i < args.size(); ++i) {
-                ExprType arg = checkExpr(*args[i]);
-                if (!isUnknownType(arg.type) && !isStringifiable(arg.type))
-                    error(args[i]->span, QStringLiteral("cannot stringify %1").arg(arg.type.displayName()));
+            if (!isUnknownType(arg(0).type) && !arg(0).type.isNumeric())
+                error(argSpan(0), QStringLiteral("test_close actual must be numeric, got %1").arg(arg(0).type.displayName()));
+            if (!isUnknownType(arg(1).type) && !arg(1).type.isNumeric())
+                error(argSpan(1), QStringLiteral("test_close expected must be numeric, got %1").arg(arg(1).type.displayName()));
+            if (!isUnknownType(arg(2).type) && !arg(2).type.isNumeric())
+                error(argSpan(2), QStringLiteral("test_close eps must be numeric, got %1").arg(arg(2).type.displayName()));
+            for (qsizetype i = 0; i < argc; ++i) {
+                if (!isUnknownType(arg(i).type) && !isStringifiable(arg(i).type))
+                    error(argSpan(i), QStringLiteral("cannot stringify %1").arg(arg(i).type.displayName()));
             }
             return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
         }

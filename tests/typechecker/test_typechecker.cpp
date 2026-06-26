@@ -674,6 +674,31 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsPipeHolesForBuiltinFunctions()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int next(int& x) {
+                x = x + 1;
+                return x;
+            }
+
+            fn int main() {
+                any value = 7;
+                int counter = 0;
+                int hi = 4 |> max(9, _);
+                int bounded = 7 |> clamp(_, 1, 5);
+                int once = next(counter) |> max(_, _);
+                bool ok = value |> any_is(_, "i32");
+                str text = "x" |> build_string("pre", _, "!");
+                return hi + bounded + once + counter + text.len();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void rejectsInvalidPipeHoles()
     {
         auto outsidePipe = checkSource(QStringLiteral(R"(

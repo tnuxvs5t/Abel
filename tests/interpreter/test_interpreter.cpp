@@ -974,6 +974,35 @@ private slots:
         QCOMPARE(result.exitCode, 44);
     }
 
+    void pipeHolesWorkForBuiltinFunctions()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int next(int& x) {
+                x = x + 1;
+                return x;
+            }
+
+            fn int main() {
+                any value = 7;
+                int counter = 0;
+                int hi = 4 |> max(9, _);              // max(9, 4)
+                int bounded = 7 |> clamp(_, 1, 5);    // clamp(7, 1, 5)
+                int once = next(counter) |> max(_, _); // next(counter) is evaluated once
+                bool ok = value |> any_is(_, "i32");
+                str text = "x" |> build_string("pre", _, "!");
+                if (ok && text == "prex!" && counter == 1) {
+                    return hi + bounded + once + counter + text.len();
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 21);
+    }
+
     void prvalueVectorReceiverAndNumericConversionsWork()
     {
         const QString src = QStringLiteral(R"(

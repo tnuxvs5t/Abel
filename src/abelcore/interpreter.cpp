@@ -3418,19 +3418,24 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
     }
 
     if (m_builtins.hasFunction(targetName)) {
-        if (hasPipeHole(args)) {
-            error(QStringLiteral("E0596"), QStringLiteral("pipe holes for builtin functions are not implemented yet"), expr.rhs->span);
-            return AbelValue::makeUnknown();
-        }
         BuiltinFunctionCall call{*m_ctx, targetName, {}, {}, expr.span};
         attachStringifier(call);
-        call.args.reserve(args.size() + 1);
-        call.argSpans.reserve(args.size() + 1);
-        call.args.push_back(evalExpr(*expr.lhs));
-        call.argSpans.push_back(expr.lhs->span);
+        const bool holes = hasPipeHole(args);
+        call.args.reserve(args.size() + (holes ? 0 : 1));
+        call.argSpans.reserve(args.size() + (holes ? 0 : 1));
+        AbelValue lhsValue = evalExpr(*expr.lhs);
+        if (!holes) {
+            call.args.push_back(lhsValue);
+            call.argSpans.push_back(expr.lhs->span);
+        }
         for (const auto& arg : args) {
-            call.args.push_back(evalExpr(*arg));
-            call.argSpans.push_back(arg->span);
+            if (isPipeHoleExpr(*arg)) {
+                call.args.push_back(lhsValue);
+                call.argSpans.push_back(arg->span);
+            } else {
+                call.args.push_back(evalExpr(*arg));
+                call.argSpans.push_back(arg->span);
+            }
         }
         if (m_ctx->hasError())
             return AbelValue::makeUnknown();

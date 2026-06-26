@@ -911,7 +911,7 @@ AGENTS.md        本仓库 Agent 操作手册。
 ```text
 当前阶段：v1 complete 推进中。
 最新已知提交：docs: define v1.1 backend complexity direction（具体哈希以 `git log --oneline -1` 为准）。
-本轮实现任务：启动 v1.1-a Structured Calls 第一片，实现 pipe RHS 调用中的 `_` holes；当前覆盖普通函数与函数值，TypeChecker/Interpreter 保持一致，并测试 hole 复用、lvalue 传递和多 mutable ref hole 拒绝。
+本轮实现任务：继续 v1.1-a Structured Calls 的 pipe holes 收口；在普通函数与函数值之后，补齐 builtin function 的 `_` hole TypeChecker/Interpreter 闭环，并验证 lhs 只求值一次。
 ```
 
 已完成的大块能力摘要：
@@ -931,7 +931,7 @@ std.str/std.vec/std.math/std.io/std.path/std.env/std.char/std.any/std.debug/std.
 exact-shape 二元 operator template 已落地第一片：只接受 `template <type T> fn R<T> operator OP(X<T> lhs, X<T> rhs)`，TypeChecker/Interpreter 共享参数推导与实例化绑定；template type alias 可作为 struct 构造器入口。
 P1~P4 语义闭环修复已落地：`this` 作为对象 lvalue 参与字段/方法 lookup；struct 字段 location 记录 declared type，嵌套构造赋值不再按 `<unknown>` 当前值转换；命名函数与模块限定函数可作为 `func` 值（overload/template 给静态诊断）；backend binder/Qt plugin 支持 bool/int/i64/f64/str 等 scalar `T&` 写回，并强化 declaration/bound signature mismatch 诊断。
 v1.1 方向已收束进文档：不做动态对象化语言扩张；复杂度由 SDK/Backend 承载，Abel surface 用普通 module/template struct/method/type alias 包装能力，内核保持结构化和静态可检查。
-v1.1-a Structured Calls 第一片已启动：`x |> f(_)`、`x |> f(1, _)`、`x |> f(_, _)` 对普通函数和函数值可用；lhs 运行期只求值一次，hole 保留 lvalue 以绑定 `T&`；若同一个 pipe hole 会绑定多个 mutable reference 参数，TypeChecker 拒绝。当前尚未扩展到 builtin hole、`_.method()`、named/default args 或 limited spread。
+v1.1-a Structured Calls 第一片已启动：`x |> f(_)`、`x |> f(1, _)`、`x |> f(_, _)` 对普通函数、函数值和 builtin function 可用；lhs 运行期只求值一次，hole 保留 lvalue 以绑定 `T&`；若同一个 pipe hole 会绑定多个 mutable reference 参数，TypeChecker 拒绝。当前尚未扩展到 `_.method()`、named/default args 或 limited spread。
 ```
 
 最近验证命令模板：
@@ -951,7 +951,7 @@ template v1 最简无约束函数/struct/type alias 与 exact-shape 二元 opera
 package 只要求本地/file registry 完整闭环；HTTP/network registry、全球索引、签名发布不进 v1。
 diagnostic 需要矩阵验收；交互式 debugger/DAP 不进 v1。
 标准库只要求常用本地程序 API 稳定；regex/locale/streaming/view/GUI 不进 v1。
-v1.1-a 剩余：named/default args、limited spread into any...、pipe `_.method()` / `_.field.method()`、builtin/backend/constructor 路径的 hole 归一化仍未完成；任何后续推进都必须继续走 TypeChecker/Interpreter/测试三件套闭环。
+v1.1-a 剩余：named/default args、limited spread into any...、pipe `_.method()` / `_.field.method()`、backend/constructor 路径的 hole 归一化仍未完成；任何后续推进都必须继续走 TypeChecker/Interpreter/测试三件套闭环。
 ```
 
 提交记录不再手工复制长列表；需要历史请用：
