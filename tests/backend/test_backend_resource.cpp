@@ -1,5 +1,6 @@
 #include "abelcore/backend_interface.h"
 #include "abelcore/backend_binder.h"
+#include "abelcore/backend_handle_store.h"
 #include "abelcore/backend_registry.h"
 #include "abelcore/interpreter.h"
 #include "abelcore/lexer.h"
@@ -216,6 +217,54 @@ private slots:
         QCOMPARE(args[2].asInt(), 7);
         QCOMPARE(args[3].asDouble(), 4.0);
         QCOMPARE(args[4].asString(), QStringLiteral("x:out"));
+    }
+
+    void backendHelpersProvideValueKeysAndHandles()
+    {
+        const auto one = abel::AbelValue::makeAny(abel::AbelValue::makeInt(1));
+        const auto alsoOne = abel::AbelValue::makeInt(1);
+        auto key = abel::AbelValueKey::fromValue(one);
+        auto sameKey = abel::AbelValueKey::fromValue(alsoOne);
+        QVERIFY(key.has_value());
+        QVERIFY(sameKey.has_value());
+        QVERIFY(*key == *sameKey);
+
+        QHash<abel::AbelValueKey, abel::AbelValue> map;
+        map.insert(*key, abel::AbelValue::makeString(QStringLiteral("one")));
+        QCOMPARE(map.value(*sameKey).asString(), QStringLiteral("one"));
+
+        const auto vectorKey = abel::AbelValue::makeVector(
+            abel::makeType(abel::TypeKind::Any),
+            {abel::AbelValue::makeAny(abel::AbelValue::makeString(QStringLiteral("x"))),
+             abel::AbelValue::makeAny(abel::AbelValue::makeBool(true))});
+        auto copiedVectorKey = abel::AbelValueKey::fromValue(vectorKey);
+        QVERIFY(copiedVectorKey.has_value());
+        map.insert(*copiedVectorKey, abel::AbelValue::makeInt(7));
+        vectorKey.asVector()->elements[0] = abel::AbelValue::makeAny(abel::AbelValue::makeString(QStringLiteral("mutated")));
+        auto mutatedVectorKey = abel::AbelValueKey::fromValue(vectorKey);
+        QVERIFY(mutatedVectorKey.has_value());
+        QVERIFY(*mutatedVectorKey != *copiedVectorKey);
+        QVERIFY(!map.contains(*mutatedVectorKey));
+        QCOMPARE(map.value(*copiedVectorKey).asInt(), 7);
+
+        QString keyError;
+        auto unsupported = abel::AbelValueKey::fromValue(abel::AbelValue::makeNullPointer(abel::makeType(abel::TypeKind::I32)),
+                                                         &keyError);
+        QVERIFY(!unsupported.has_value());
+        QVERIFY(keyError.contains(QStringLiteral("unsupported AbelValue key type")));
+
+        abel::AbelBackendHandleStore<QHash<abel::AbelValueKey, abel::AbelValue>> store;
+        const qint64 handle = store.create();
+        QVERIFY(store.contains(handle));
+        abel::AbelRuntimeContext okCtx;
+        QVERIFY(store.get(handle, okCtx) != nullptr);
+        QVERIFY(!okCtx.hasError());
+
+        abel::AbelRuntimeContext ctx;
+        QVERIFY(store.get(999, ctx, QStringLiteral("test object")) == nullptr);
+        QVERIFY(ctx.hasError());
+        QCOMPARE(ctx.diagnostics().front().code, QStringLiteral("E0630"));
+        QVERIFY(ctx.diagnostics().front().message.contains(QStringLiteral("test object")));
     }
 
     void parsesValidResourceNodeJson()

@@ -23,7 +23,19 @@ file(WRITE "${PROJECT_DIR}/abel.package.json" [=[
     {
       "backendId": "SdkSystem",
       "path": "]=] "${PLUGIN_PATH}" [=[",
-      "symbols": ["add", "letters", "sum_i64", "guard", "join", "count"]
+      "symbols": [
+        "add",
+        "letters",
+        "sum_i64",
+        "guard",
+        "join",
+        "count",
+        "map_create",
+        "map_len",
+        "map_contains",
+        "map_set",
+        "map_get"
+      ]
     }
   ]
 }
@@ -37,6 +49,11 @@ backend SdkSystem {
     fn int guard(int x);
     fn str join(any... args);
     fn int count(any... args);
+    fn long map_create();
+    fn int map_len(long h);
+    fn bool map_contains(long h, any key);
+    fn void map_set(long h, any key, any value);
+    fn any map_get(long h, any key);
 }
 
 fn int main() {
@@ -49,10 +66,24 @@ fn int main() {
     } else {
         joined_bonus = 100;
     }
+    long h = SdkSystem::map_create();
+    SdkSystem::map_set(h, "answer", 4);
+    vector<any> compound = {"k", true};
+    SdkSystem::map_set(h, compound, "ok");
+    int map_bonus = 0;
+    if (SdkSystem::map_contains(h, "answer")
+        && SdkSystem::map_len(h) == 2
+        && cast<int>(SdkSystem::map_get(h, "answer")) == 4
+        && cast<str>(SdkSystem::map_get(h, compound)) == "ok") {
+        map_bonus = 11;
+    } else {
+        map_bonus = 100;
+    }
     return SdkSystem::add(cs.len(), cast<int>(SdkSystem::sum_i64(xs)))
         + SdkSystem::guard(0)
         + joined_bonus
-        + SdkSystem::count("S", 4, false);
+        + SdkSystem::count("S", 4, false)
+        + map_bonus;
 }
 ]=])
 
@@ -76,6 +107,6 @@ execute_process(
     OUTPUT_VARIABLE run_output
     ERROR_VARIABLE run_error
 )
-if (NOT run_result EQUAL 18)
-    message(FATAL_ERROR "installed abel run expected exit 18, got ${run_result}:\n${run_output}\n${run_error}")
+if (NOT run_result EQUAL 29)
+    message(FATAL_ERROR "installed abel run expected exit 29, got ${run_result}:\n${run_output}\n${run_error}")
 endif()

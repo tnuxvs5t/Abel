@@ -41,6 +41,7 @@ add_library(abelcore SHARED
     src/abelcore/runtime.cpp
     src/abelcore/backend_interface.h
     src/abelcore/backend_binder.h
+    src/abelcore/backend_handle_store.h
     src/abelcore/backend_plugin_base.h
     src/abelcore/backend_registry.h
     src/abelcore/backend_registry.cpp

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "abelcore/backend_binder.h"
+#include "abelcore/backend_handle_store.h"
 
 #include <QHash>
 #include <QObject>

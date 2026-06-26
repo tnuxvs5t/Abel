@@ -2,9 +2,64 @@
 
 #include <QStringList>
 
+#include <cstring>
+
 namespace abel {
 
 namespace {
+
+constexpr quint64 kFnvOffset = 14695981039346656037ull;
+constexpr quint64 kFnvPrime = 1099511628211ull;
+
+quint64 mixByte(quint64 hash, unsigned char byte)
+{
+    hash ^= byte;
+    hash *= kFnvPrime;
+    return hash;
+}
+
+quint64 mixUInt64(quint64 hash, quint64 value)
+{
+    for (int i = 0; i < 8; ++i)
+        hash = mixByte(hash, static_cast<unsigned char>((value >> (i * 8)) & 0xff));
+    return hash;
+}
+
+quint64 mixInt64(quint64 hash, qint64 value)
+{
+    return mixUInt64(hash, static_cast<quint64>(value));
+}
+
+quint64 doubleBits(double value)
+{
+    if (value == 0.0)
+        value = 0.0;
+    quint64 bits = 0;
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+quint64 mixString(quint64 hash, const QString& value)
+{
+    hash = mixUInt64(hash, static_cast<quint64>(value.size()));
+    for (QChar ch : value)
+        hash = mixUInt64(hash, static_cast<quint64>(ch.unicode()));
+    return hash;
+}
+
+quint64 mixType(quint64 hash, const AbelType& type)
+{
+    hash = mixUInt64(hash, static_cast<quint64>(type.kind));
+    hash = mixByte(hash, type.isConst ? 1 : 0);
+    hash = mixString(hash, type.spelling);
+    if (type.pointee)
+        hash = mixType(hash, *type.pointee);
+    hash = mixUInt64(hash, static_cast<quint64>(type.params.size()));
+    for (const auto& param : type.params)
+        hash = mixType(hash, param);
+    return hash;
+}
 
 qint64 normalizeIntegerValue(qint64 value, TypeKind kind)
 {
@@ -28,6 +83,103 @@ qint64 normalizeIntegerValue(qint64 value, TypeKind kind)
     default:
         return value;
     }
+}
+
+std::optional<AbelValue> keyValueCopy(const AbelValue& value, QString* error)
+{
+    switch (value.type().kind) {
+    case TypeKind::Any:
+        return keyValueCopy(value.asAny()->value, error);
+    case TypeKind::Bool:
+        return AbelValue::makeBool(value.asBool());
+    case TypeKind::I8:
+    case TypeKind::I16:
+    case TypeKind::I32:
+    case TypeKind::I64:
+    case TypeKind::U8:
+    case TypeKind::U16:
+    case TypeKind::U32:
+    case TypeKind::U64:
+        return AbelValue::makeInt(value.asInt(), value.type().kind);
+    case TypeKind::F64:
+        return AbelValue::makeDouble(value.asDouble());
+    case TypeKind::Char:
+        return AbelValue::makeChar(value.asChar());
+    case TypeKind::Str:
+        return AbelValue::makeString(value.asString());
+    case TypeKind::Nullptr:
+        return AbelValue::makeNullptr();
+    case TypeKind::Vector: {
+        auto vector = value.asVector();
+        std::vector<AbelValue> elements;
+        elements.reserve(vector->elements.size());
+        for (const auto& element : vector->elements) {
+            auto copied = keyValueCopy(element, error);
+            if (!copied)
+                return std::nullopt;
+            elements.push_back(std::move(*copied));
+        }
+        return AbelValue::makeVector(vector->elementType, std::move(elements));
+    }
+    case TypeKind::Void:
+    case TypeKind::Pointer:
+    case TypeKind::Reference:
+    case TypeKind::Struct:
+    case TypeKind::Function:
+    case TypeKind::Unknown:
+        if (error) {
+            *error = QStringLiteral("unsupported AbelValue key type '%1'")
+                         .arg(value.type().displayName());
+        }
+        return std::nullopt;
+    }
+    if (error)
+        *error = QStringLiteral("unsupported AbelValue key type '%1'")
+                     .arg(value.type().displayName());
+    return std::nullopt;
+}
+
+quint64 valueHash(const AbelValue& value)
+{
+    quint64 hash = mixType(kFnvOffset, value.type());
+    switch (value.type().kind) {
+    case TypeKind::Void:
+    case TypeKind::Reference:
+    case TypeKind::Pointer:
+    case TypeKind::Struct:
+    case TypeKind::Function:
+    case TypeKind::Unknown:
+        return hash;
+    case TypeKind::Bool:
+        return mixByte(hash, value.asBool() ? 1 : 0);
+    case TypeKind::I8:
+    case TypeKind::I16:
+    case TypeKind::I32:
+    case TypeKind::I64:
+    case TypeKind::U8:
+    case TypeKind::U16:
+    case TypeKind::U32:
+    case TypeKind::U64:
+        return mixInt64(hash, value.asInt());
+    case TypeKind::F64:
+        return mixUInt64(hash, doubleBits(value.asDouble()));
+    case TypeKind::Char:
+        return mixUInt64(hash, static_cast<quint64>(value.asChar().unicode()));
+    case TypeKind::Str:
+        return mixString(hash, value.asString());
+    case TypeKind::Any:
+        return valueHash(value.asAny()->value);
+    case TypeKind::Nullptr:
+        return hash;
+    case TypeKind::Vector: {
+        auto vector = value.asVector();
+        hash = mixUInt64(hash, static_cast<quint64>(vector->elements.size()));
+        for (const auto& element : vector->elements)
+            hash = mixUInt64(hash, valueHash(element));
+        return hash;
+    }
+    }
+    return hash;
 }
 
 } // namespace
@@ -272,6 +424,100 @@ AbelValue convertValue(const AbelValue& value, const AbelType& target)
     if (target.kind == TypeKind::Any)
         return AbelValue::makeAny(value);
     return AbelValue::makeUnknown();
+}
+
+bool abelValueEquals(const AbelValue& lhs, const AbelValue& rhs)
+{
+    if (lhs.type().kind == TypeKind::Any)
+        return abelValueEquals(lhs.asAny()->value, rhs);
+    if (rhs.type().kind == TypeKind::Any)
+        return abelValueEquals(lhs, rhs.asAny()->value);
+    if (lhs.type() != rhs.type())
+        return false;
+    switch (lhs.type().kind) {
+    case TypeKind::Void:
+    case TypeKind::Nullptr:
+        return true;
+    case TypeKind::Bool:
+        return lhs.asBool() == rhs.asBool();
+    case TypeKind::I8:
+    case TypeKind::I16:
+    case TypeKind::I32:
+    case TypeKind::I64:
+    case TypeKind::U8:
+    case TypeKind::U16:
+    case TypeKind::U32:
+    case TypeKind::U64:
+        return lhs.asInt() == rhs.asInt();
+    case TypeKind::F64:
+        return doubleBits(lhs.asDouble()) == doubleBits(rhs.asDouble());
+    case TypeKind::Char:
+        return lhs.asChar() == rhs.asChar();
+    case TypeKind::Str:
+        return lhs.asString() == rhs.asString();
+    case TypeKind::Pointer:
+        return lhs.asPointer() == rhs.asPointer();
+    case TypeKind::Reference:
+        return false;
+    case TypeKind::Any:
+        return false;
+    case TypeKind::Vector: {
+        auto lhsVector = lhs.asVector();
+        auto rhsVector = rhs.asVector();
+        if (lhsVector->elements.size() != rhsVector->elements.size())
+            return false;
+        for (size_t i = 0; i < lhsVector->elements.size(); ++i) {
+            if (!abelValueEquals(lhsVector->elements[i], rhsVector->elements[i]))
+                return false;
+        }
+        return true;
+    }
+    case TypeKind::Struct: {
+        auto lhsStruct = lhs.asStruct();
+        auto rhsStruct = rhs.asStruct();
+        if (lhsStruct->typeName != rhsStruct->typeName
+            || lhsStruct->fieldOrder != rhsStruct->fieldOrder) {
+            return false;
+        }
+        for (const auto& name : lhsStruct->fieldOrder) {
+            if (!rhsStruct->fields.contains(name)
+                || !abelValueEquals(lhsStruct->fields.value(name), rhsStruct->fields.value(name))) {
+                return false;
+            }
+        }
+        return true;
+    }
+    case TypeKind::Function:
+        return lhs.asFunction() == rhs.asFunction();
+    case TypeKind::Unknown:
+        return false;
+    }
+    return false;
+}
+
+AbelValueKey::AbelValueKey(AbelValue value, quint64 hash)
+    : m_value(std::move(value))
+    , m_hash(hash)
+{
+}
+
+std::optional<AbelValueKey> AbelValueKey::fromValue(const AbelValue& value, QString* error)
+{
+    auto copied = keyValueCopy(value, error);
+    if (!copied)
+        return std::nullopt;
+    const quint64 hash = valueHash(*copied);
+    return AbelValueKey(std::move(*copied), hash);
+}
+
+bool AbelValueKey::operator==(const AbelValueKey& other) const
+{
+    return m_hash == other.m_hash && abelValueEquals(m_value, other.m_value);
+}
+
+size_t qHash(const AbelValueKey& key, size_t seed)
+{
+    return static_cast<size_t>(key.stableHash() ^ static_cast<quint64>(seed));
 }
 
 } // namespace abel

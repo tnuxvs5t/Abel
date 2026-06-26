@@ -911,7 +911,7 @@ AGENTS.md        本仓库 Agent 操作手册。
 ```text
 当前阶段：v1.1 complete 推进中（v1 complete 仍需最终矩阵验收）。
 最新已知提交：不再手工固化，具体以 `git log --oneline -1` 为准。
-本轮实现任务：继续 v1.1-a Structured Calls 收口；开放 builtin pipe RHS 对 `build_string`/`print`/`println` 的 limited spread，并补 alias constructor pipe 边界测试。
+本轮实现任务：继续 v1.1-b Backend Carries Complexity 收口；补 SDK 侧 AbelValue key/hash/equality helper 与 backend-owned handle store，并用安装版 SDK fixture 证明 map 这类复杂能力可由 backend handle + AbelValue 边界承载，不进入 TypeKind/parser/TypeChecker 内核。
 ```
 
 已完成的大块能力摘要：
@@ -932,6 +932,7 @@ exact-shape 二元 operator template 已落地第一片：只接受 `template <t
 P1~P4 语义闭环修复已落地：`this` 作为对象 lvalue 参与字段/方法 lookup；struct 字段 location 记录 declared type，嵌套构造赋值不再按 `<unknown>` 当前值转换；命名函数与模块限定函数可作为 `func` 值（overload/template 给静态诊断）；backend binder/Qt plugin 支持 bool/int/i64/f64/str 等 scalar `T&` 写回，并强化 declaration/bound signature mismatch 诊断。
 v1.1 方向已收束进文档：不做动态对象化语言扩张；复杂度由 SDK/Backend 承载，Abel surface 用普通 module/template struct/method/type alias 包装能力，内核保持结构化和静态可检查。
 v1.1-a Structured Calls 继续推进：`x |> f(_)`、`x |> f(1, _)`、`x |> f(_, _)` 对普通函数、函数值和 builtin function 可用；普通函数、普通构造器、alias constructor、static-qualified / backend call 的 pipe RHS 已支持 named/default/spread 归一化，例如 `3 |> scale(x: _, by: 4)`、`3 |> scale(by: 4)`、`xs |> report("prefix", ..._)`、`3 |> Point(x: _, y: 4)`、`4 |> Box<int>(_)`、`3 |> MathSystem::fast_add(a: _, b: 4)`、`xs |> MathSystem::count("prefix", ..._)`；`x |> _.method()`、`x |> _.field.method()` 对单 receiver hole 可用。lhs 运行期只求值一次，hole 保留 lvalue 以绑定 `T&`；若同一个 pipe hole 会绑定多个 mutable reference 参数，TypeChecker 拒绝。普通函数、module-qualified 普通函数、struct constructor、struct method、backend/static call 已支持 named args、default args，并通过候选归一化保持 TypeChecker/Interpreter 一致；default expr 在声明上下文检查，运行期只在选中 overload 后求值。limited spread 第一片已支持 `vector<any>` / `any...` 展开到用户和 backend `any...` 尾部，并支持 direct 与 pipe 形态的 builtin `build_string`/`print`/`println` 展开；展开时 `vector<any>` 元素只解包一层，避免 `any(any(x))`。builtin method 与 function value call 仍保持 positional-only / 不补 default 的 ABI 边界。
+v1.1-b Backend Carries Complexity 第一片 SDK helper 已落地：新增 `AbelValueKey` / `abelValueEquals`，支持 backend 对 bool/int/f64/char/str/nullptr/vector/any-unboxed key 做深拷贝、稳定 hash 与 equality，遇到 pointer/reference/struct/function/unknown 等 unsupported key 给明确错误字符串；新增 header-only `AbelBackendHandleStore<T>`，为 C++ backend 提供 long handle -> backend-owned object 的 create/find/get/remove/diagnostic helper。安装版 SDK fixture 已用这些 helper 实现 handle-backed `map_create/map_set/map_get/map_contains/map_len`，Abel 侧仍只是普通 backend fn + long handle + any 边界，未新增 `TypeKind::Map/Object/Dict`、map/object literal、dynamic invoke 或动态字段。
 ```
 
 最近验证命令模板：
@@ -952,6 +953,7 @@ package 只要求本地/file registry 完整闭环；HTTP/network registry、全
 diagnostic 需要矩阵验收；交互式 debugger/DAP 不进 v1。
 标准库只要求常用本地程序 API 稳定；regex/locale/streaming/view/GUI 不进 v1。
 v1.1-a 剩余：receiver-hole 第一片当前限制为单 `_`，尚未开放 `_.method(_)` 这类多 hole / mutable receiver 组合；builtin method 与 function value call 继续保持 positional-only 边界；还需按 v1.1-a 矩阵做 module-qualified pipe 边界补测与文档 smoke；任何后续推进都必须继续走 TypeChecker/Interpreter/测试三件套闭环。
+v1.1-b 剩余：继续扩展 SDK/backend 诊断与 helper 文档/示例矩阵；复杂库能力仍必须通过 backend-backed Abel surface 类型承载，禁止把 map/object/dict/symbol/resource/dynamic invoke 下沉进语言内核。
 ```
 
 提交记录不再手工复制长列表；需要历史请用：

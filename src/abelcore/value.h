@@ -8,6 +8,7 @@
 #include <QString>
 
 #include <memory>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -68,6 +69,29 @@ private:
 
     AbelValue(AbelType type, Payload payload);
 };
+
+bool abelValueEquals(const AbelValue& lhs, const AbelValue& rhs);
+
+class AbelValueKey {
+public:
+    AbelValueKey() = default;
+
+    static std::optional<AbelValueKey> fromValue(const AbelValue& value, QString* error = nullptr);
+
+    const AbelValue& value() const { return m_value; }
+    quint64 stableHash() const { return m_hash; }
+
+    bool operator==(const AbelValueKey& other) const;
+    bool operator!=(const AbelValueKey& other) const { return !(*this == other); }
+
+private:
+    AbelValue m_value = AbelValue::makeUnknown();
+    quint64 m_hash = 0;
+
+    AbelValueKey(AbelValue value, quint64 hash);
+};
+
+size_t qHash(const AbelValueKey& key, size_t seed = 0);
 
 struct AbelVectorValue {
     AbelType elementType;
