@@ -289,6 +289,13 @@ bool vectorElementReadOnly(const AbelValue& vectorValue, bool receiverReadOnly)
         || (vectorValue.type().pointee && vectorValue.type().pointee->isConst);
 }
 
+AbelValue unboxAnyValue(const AbelValue& value)
+{
+    if (value.type().kind == TypeKind::Any)
+        return value.asAny()->value;
+    return value;
+}
+
 TypeKind integerTypeForWidth(int width, bool unsignedResult)
 {
     if (width <= 8)
@@ -3312,20 +3319,34 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
         } else {
             base = evalExpr(*e->base);
         }
-        if (base.type().kind != TypeKind::Vector || !base.type().pointee) {
-            error(QStringLiteral("E0546"), QStringLiteral("indexing requires vector value"), e->span);
+        const bool baseIsAny = base.type().kind == TypeKind::Any;
+        AbelValue rawBase = unboxAnyValue(base);
+        if (rawBase.type().kind != TypeKind::Vector || !rawBase.type().pointee) {
+            error(QStringLiteral("E0546"),
+                  baseIsAny
+                      ? QStringLiteral("dynamic index requires any containing vector, got any containing %1")
+                            .arg(rawBase.type().displayName())
+                      : QStringLiteral("indexing requires vector value"),
+                  e->span);
             return nullptr;
         }
-        m_ctx->createStorage(base);
-        qint64 idx = 0;
-        if (!requireInteger(evalExpr(*e->index), e->index->span, idx))
+        m_ctx->createStorage(rawBase);
+        AbelValue index = unboxAnyValue(evalExpr(*e->index));
+        if (!index.type().isInteger()) {
+            error(QStringLiteral("E0529"),
+                  QStringLiteral("%1 index must be integer, got %2")
+                      .arg(baseIsAny ? QStringLiteral("dynamic") : QStringLiteral("vector"),
+                           index.type().displayName()),
+                  e->index->span);
             return nullptr;
-        auto vector = base.asVector();
+        }
+        const qint64 idx = index.asInt();
+        auto vector = rawBase.asVector();
         if (idx < 0 || static_cast<size_t>(idx) >= vector->elements.size()) {
             error(QStringLiteral("E0547"), QStringLiteral("vector index out of range"), e->span);
             return nullptr;
         }
-        return m_ctx->createVectorElementLocation(vector.get(), static_cast<size_t>(idx), vectorElementReadOnly(base, baseReadOnly));
+        return m_ctx->createVectorElementLocation(vector.get(), static_cast<size_t>(idx), vectorElementReadOnly(rawBase, baseReadOnly));
     }
     if (auto* e = dynamic_cast<const CallExprNode*>(&expr)) {
         auto* field = dynamic_cast<FieldAccessExprNode*>(e->callee.get());
@@ -3388,11 +3409,6 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
         return AbelValue::makeUnknown();
 
     const QString& op = expr.op;
-    auto unboxAny = [](const AbelValue& value) -> AbelValue {
-        if (value.type().kind == TypeKind::Any)
-            return value.asAny()->value;
-        return value;
-    };
     auto evalBuiltinDynamic = [&](const AbelValue& rawLhs, const AbelValue& rawRhs) -> std::optional<AbelValue> {
         if (op == QStringLiteral("+") && rawLhs.type().kind == TypeKind::Str && rawRhs.type().kind == TypeKind::Str)
             return AbelValue::makeString(rawLhs.asString() + rawRhs.asString());
@@ -3523,8 +3539,8 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
     };
 
     if (lhs.type().kind == TypeKind::Any || rhs.type().kind == TypeKind::Any) {
-        AbelValue rawLhs = unboxAny(lhs);
-        AbelValue rawRhs = unboxAny(rhs);
+        AbelValue rawLhs = unboxAnyValue(lhs);
+        AbelValue rawRhs = unboxAnyValue(rhs);
         if (auto builtin = evalBuiltinDynamic(rawLhs, rawRhs))
             return *builtin;
         if (m_ctx->hasError())

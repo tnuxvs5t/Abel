@@ -4399,6 +4399,13 @@ ExprType TypeChecker::checkIndex(const IndexExprNode& expr)
     ExprType index = checkExpr(*expr.index);
     if (isUnknownType(base.type))
         return unknownExprType();
+    if (base.type.kind == TypeKind::Any) {
+        if (!isUnknownType(index.type) && !index.type.isInteger() && index.type.kind != TypeKind::Any)
+            error(expr.index->span, QStringLiteral("dynamic index must be integer or any"));
+        return {makeType(TypeKind::Any),
+                ValueCategory::LValue,
+                base.category == ValueCategory::PRValue || base.isMutable};
+    }
     if (base.type.kind != TypeKind::Vector || !base.type.pointee)
         return errorExpr(expr.span, QStringLiteral("indexing requires vector"));
     if (!isUnknownType(index.type) && !index.type.isInteger())

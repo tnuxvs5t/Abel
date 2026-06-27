@@ -1085,6 +1085,35 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsAnyVectorDynamicIndexing()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<any> xs = {1, "x"};
+                any raw = xs;
+                any i = 1;
+                any value = raw[i];
+                raw[0] = 7;
+                str text = cast<str>(value);
+                return cast<int>(raw[0]) + text.len();
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+
+        auto badIndex = checkSource(QStringLiteral(R"(
+            fn int main() {
+                any raw = 1;
+                any value = raw["x"];
+                return 0;
+            }
+        )"));
+        QVERIFY(!badIndex.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(badIndex, QStringLiteral("dynamic index must be integer or any")) >= 1);
+    }
+
     void acceptsImplicitAnyCastsAtTargetTypedPositions()
     {
         const QString src = QStringLiteral(R"(

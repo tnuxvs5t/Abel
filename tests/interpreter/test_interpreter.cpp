@@ -1327,6 +1327,56 @@ private slots:
         QCOMPARE(result.exitCode, 9);
     }
 
+    void anyVectorDynamicIndexingWorks()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<any> xs = {1, "abc", 3};
+                any raw = xs;
+                any i = 1;
+                str text = cast<str>(raw[i]);
+                raw[0] = 7;
+                any j = 2;
+                int tail = cast<int>(raw[j]);
+                return cast<int>(raw[0]) + text.len() + tail;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 13);
+    }
+
+    void badAnyVectorDynamicIndexingReportsRuntimeError()
+    {
+        auto nonVector = runSource(QStringLiteral(R"(
+            fn int main() {
+                any raw = 42;
+                any value = raw[0];
+                return cast<int>(value);
+            }
+        )"));
+        QVERIFY(!nonVector.diagnostics.isEmpty());
+        QCOMPARE(nonVector.diagnostics.front().code, QStringLiteral("E0546"));
+        QVERIFY(nonVector.diagnostics.front().message.contains(QStringLiteral("any containing i32")));
+        QCOMPARE(nonVector.exitCode, 1);
+
+        auto badIndex = runSource(QStringLiteral(R"(
+            fn int main() {
+                vector<any> xs = {1};
+                any raw = xs;
+                any idx = "bad";
+                any value = raw[idx];
+                return cast<int>(value);
+            }
+        )"));
+        QVERIFY(!badIndex.diagnostics.isEmpty());
+        QCOMPARE(badIndex.diagnostics.front().code, QStringLiteral("E0529"));
+        QVERIFY(badIndex.diagnostics.front().message.contains(QStringLiteral("str")));
+        QCOMPARE(badIndex.exitCode, 1);
+    }
+
     void badAnyDynamicOperatorReportsRuntimeError()
     {
         const QString src = QStringLiteral(R"(
