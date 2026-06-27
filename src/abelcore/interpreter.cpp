@@ -3462,8 +3462,6 @@ std::optional<AbelValue> Interpreter::evalUserBinaryOperator(const QString& op,
 
     struct Match {
         const FunctionDeclNode* fn = nullptr;
-        QHash<QString, AbelType> bindings;
-        bool isTemplate = false;
     };
 
     QList<Match> matches;

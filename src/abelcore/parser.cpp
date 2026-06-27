@@ -147,9 +147,6 @@ bool Parser::isTopLevelDeclarationStart(TokenKind kind) const
         || kind == TokenKind::KwStruct
         || kind == TokenKind::KwEnum
         || kind == TokenKind::KwType
-        || kind == TokenKind::KwTemplate
-        || kind == TokenKind::KwInterface
-        || kind == TokenKind::KwRequire
         || kind == TokenKind::KwFn;
 }
 
@@ -236,17 +233,6 @@ std::unique_ptr<DeclNode> Parser::parseDeclaration()
         return parseEnum(exported);
     if (match(TokenKind::KwType))
         return parseTypeAlias(exported);
-    if (match(TokenKind::KwInterface) || match(TokenKind::KwRequire)) {
-        errorAt(previous(), QStringLiteral("interface/require are reserved for v2 template constraints"));
-        return nullptr;
-    }
-    if (match(TokenKind::KwTemplate)) {
-        errorAt(previous(),
-                QStringLiteral("template declarations are retired in v1.1-H; use any/cast and backend-backed dynamic ADTs instead"));
-        parseTemplatePrefix();
-        skipRetiredTemplateDeclaration();
-        return nullptr;
-    }
     if (match(TokenKind::KwFn))
         return parseFunction(exported, false);
     errorAt(peek(), QStringLiteral("expected top-level declaration"));
@@ -283,72 +269,6 @@ QString Parser::parseQualifiedName(const QString& what)
     while (match(TokenKind::Dot))
         parts.push_back(consume(TokenKind::Identifier, QStringLiteral("expected identifier after '.' in %1").arg(what)).text);
     return parts.join(QLatin1Char('.'));
-}
-
-void Parser::parseTemplatePrefix()
-{
-    consume(TokenKind::Less, QStringLiteral("expected '<' after template"));
-    if (!check(TokenKind::Greater)) {
-        do {
-            consume(TokenKind::KwType, QStringLiteral("expected type template parameter"));
-            consume(TokenKind::Identifier, QStringLiteral("expected template type parameter name"));
-        } while (match(TokenKind::Comma));
-    }
-    consume(TokenKind::Greater, QStringLiteral("expected '>' after template parameter list"));
-}
-
-void Parser::skipRetiredTemplateDeclaration()
-{
-    if (match(TokenKind::KwInterface) || match(TokenKind::KwRequire))
-        return;
-    if (match(TokenKind::KwType)) {
-        while (!atEnd() && !match(TokenKind::Semicolon))
-            ++m_pos;
-        return;
-    }
-    if (match(TokenKind::KwFn)) {
-        int depth = 0;
-        bool seenBody = false;
-        while (!atEnd()) {
-            if (check(TokenKind::LBrace)) {
-                seenBody = true;
-                ++depth;
-                ++m_pos;
-                continue;
-            }
-            if (check(TokenKind::RBrace)) {
-                ++m_pos;
-                if (seenBody && --depth <= 0)
-                    return;
-                continue;
-            }
-            if (!seenBody && match(TokenKind::Semicolon))
-                return;
-            ++m_pos;
-        }
-        return;
-    }
-    if (match(TokenKind::KwStruct)) {
-        int depth = 0;
-        bool seenBody = false;
-        while (!atEnd()) {
-            if (check(TokenKind::LBrace)) {
-                seenBody = true;
-                ++depth;
-                ++m_pos;
-                continue;
-            }
-            if (check(TokenKind::RBrace)) {
-                ++m_pos;
-                if (seenBody && --depth <= 0)
-                    return;
-                continue;
-            }
-            ++m_pos;
-        }
-        return;
-    }
-    synchronizeDeclaration();
 }
 
 std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt)
@@ -580,20 +500,6 @@ std::unique_ptr<TypeNode> Parser::parseType()
         t->name = QStringLiteral("any");
     } else {
         t->name = parseTypeName();
-        if (match(TokenKind::Less)) {
-            errorAt(previous(),
-                    QStringLiteral("generic type syntax is retired in v1.1-H; only vector<T>, func types, and cast<T>(x) remain"));
-            int depth = 1;
-            while (!atEnd() && depth > 0) {
-                if (match(TokenKind::Less)) {
-                    ++depth;
-                } else if (match(TokenKind::Greater)) {
-                    --depth;
-                } else {
-                    ++m_pos;
-                }
-            }
-        }
     }
     while (match(TokenKind::Star))
         ++t->pointerDepth;
@@ -944,49 +850,10 @@ std::unique_ptr<ExprNode> Parser::parsePostfix()
 {
     auto expr = parsePrimary();
     for (;;) {
-        auto looksLikeExplicitTemplateCall = [&]() {
-            if (!dynamic_cast<NameExprNode*>(expr.get()) || !check(TokenKind::Less))
-                return false;
-            int depth = 0;
-            for (qsizetype pos = m_pos; pos < m_tokens.size(); ++pos) {
-                const TokenKind kind = m_tokens[pos].kind;
-                if (kind == TokenKind::Less) {
-                    ++depth;
-                } else if (kind == TokenKind::Greater) {
-                    --depth;
-                    if (depth == 0)
-                        return pos + 1 < m_tokens.size() && m_tokens[pos + 1].kind == TokenKind::LParen;
-                } else if (kind == TokenKind::End || kind == TokenKind::Semicolon || kind == TokenKind::LBrace || kind == TokenKind::RBrace) {
-                    return false;
-                }
-            }
-            return false;
-        };
         if (match(TokenKind::LParen)) {
             auto call = std::make_unique<CallExprNode>();
             const SourceSpan startSpan = expr->span;
             call->callee = std::move(expr);
-            parseCallArguments(*call);
-            const Token close = consume(TokenKind::RParen, QStringLiteral("expected ')'"));
-            call->span = mergeSpans(startSpan, close.span);
-            expr = std::move(call);
-        } else if (looksLikeExplicitTemplateCall()) {
-            auto call = std::make_unique<CallExprNode>();
-            const SourceSpan startSpan = expr->span;
-            call->callee = std::move(expr);
-            errorAt(peek(), QStringLiteral("explicit type arguments are retired in v1.1-H"));
-            consume(TokenKind::Less, QStringLiteral("expected '<'"));
-            int depth = 1;
-            while (!atEnd() && depth > 0) {
-                if (match(TokenKind::Less)) {
-                    ++depth;
-                } else if (match(TokenKind::Greater)) {
-                    --depth;
-                } else {
-                    ++m_pos;
-                }
-            }
-            consume(TokenKind::LParen, QStringLiteral("expected '(' after explicit template arguments"));
             parseCallArguments(*call);
             const Token close = consume(TokenKind::RParen, QStringLiteral("expected ')'"));
             call->span = mergeSpans(startSpan, close.span);

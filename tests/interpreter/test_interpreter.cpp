@@ -2373,42 +2373,6 @@ private slots:
         QCOMPARE(result.exitCode, 39);
     }
 
-    void runsMinimalFunctionTemplates()
-    {
-        auto fn = runSource(QStringLiteral(R"(
-            template <type T>
-            fn T id(T x) { return x; }
-
-            fn int main() { return 0; }
-        )"));
-        QVERIFY(!fn.diagnostics.isEmpty());
-        QVERIFY(fn.diagnostics.front().message.contains(QStringLiteral("template declarations are retired")));
-    }
-
-    void runsMinimalStructAndTypeTemplates()
-    {
-        auto st = runSource(QStringLiteral(R"(
-            template <type T>
-            struct Box { T value; }
-
-            fn int main() { return 0; }
-        )"));
-        QVERIFY(!st.diagnostics.isEmpty());
-        QVERIFY(st.diagnostics.front().message.contains(QStringLiteral("template declarations are retired")));
-    }
-
-    void runsAliasConstructorsAndExactShapeOperatorTemplates()
-    {
-        auto alias = runSource(QStringLiteral(R"(
-            template <type T>
-            type Bag = vector<T>;
-
-            fn int main() { return 0; }
-        )"));
-        QVERIFY(!alias.diagnostics.isEmpty());
-        QVERIFY(alias.diagnostics.front().message.contains(QStringLiteral("template declarations are retired")));
-    }
-
     void runsThisMethodNestedStructAssignmentAndFunctionValues()
     {
         const QString src = QStringLiteral(R"(

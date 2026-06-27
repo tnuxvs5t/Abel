@@ -2520,52 +2520,6 @@ private slots:
         QVERIFY(!ambiguous.diagnostics.isEmpty());
     }
 
-    void rejectsRetiredTemplatesAndGenericTypeSyntax()
-    {
-        auto fn = checkSource(QStringLiteral(R"(
-            template <type T>
-            fn T id(T x) { return x; }
-
-            fn int main() { return 0; }
-        )"));
-        QVERIFY(!fn.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(fn, QStringLiteral("template declarations are retired")) >= 1);
-
-        auto st = checkSource(QStringLiteral(R"(
-            template <type T>
-            struct Box { T value; }
-
-            fn int main() { return 0; }
-        )"));
-        QVERIFY(!st.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(st, QStringLiteral("template declarations are retired")) >= 1);
-
-        auto alias = checkSource(QStringLiteral(R"(
-            template <type T>
-            type Bag = vector<T>;
-
-            fn int main() { return 0; }
-        )"));
-        QVERIFY(!alias.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(alias, QStringLiteral("template declarations are retired")) >= 1);
-
-        auto genericType = checkSource(QStringLiteral(R"(
-            type Bad = Box<int>;
-
-            fn int main() { return 0; }
-        )"));
-        QVERIFY(!genericType.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(genericType, QStringLiteral("generic type syntax is retired")) >= 1);
-
-        auto explicitCall = checkSource(QStringLiteral(R"(
-            fn int id(int x) { return x; }
-
-            fn int main() { return id<int>(1); }
-        )"));
-        QVERIFY(!explicitCall.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(explicitCall, QStringLiteral("explicit type arguments are retired")) >= 1);
-    }
-
     void acceptsThisMethodNestedStructAssignmentAndFunctionValues()
     {
         const QString src = QStringLiteral(R"(
@@ -2612,21 +2566,6 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
-    void rejectsBadStructAndTypeTemplates()
-    {
-        auto retired = checkSource(QStringLiteral(R"(
-            template <type T>
-            fn T operator +(T lhs, T rhs) {
-                return lhs;
-            }
-
-            fn int main() {
-                return 0;
-            }
-        )"));
-        QVERIFY(!retired.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(retired, QStringLiteral("template declarations are retired")) >= 1);
-    }
 };
 
 QTEST_MAIN(AbelTypeCheckerTests)

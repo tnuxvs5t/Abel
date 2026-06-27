@@ -448,60 +448,31 @@ private slots:
         QCOMPARE(fn->params.size(), static_cast<size_t>(2));
     }
 
-    void rejectsRetiredTemplateDeclarations()
+    void treatsFormerTemplateWordsAsIdentifiers()
     {
-        auto parse = [](const QString& src) {
-            abel::Lexer lexer;
-            auto lexed = lexer.lex(QStringLiteral("<test>"), src);
-            if (!lexed.diagnostics.isEmpty())
-                return lexed.diagnostics;
-            abel::Parser parser;
-            return parser.parse(lexed.tokens).diagnostics;
-        };
+        const QString src = QStringLiteral(R"(
+            fn int template() {
+                int interface = 1;
+                int require = 2;
+                return interface + require;
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
 
-        auto fn = parse(QStringLiteral(R"(
-            template <type T>
-            fn T id(T x) { return x; }
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
 
-            fn int main() { return 0; }
-        )"));
-        QVERIFY(!fn.isEmpty());
-        QVERIFY(fn.front().message.contains(QStringLiteral("template declarations are retired")));
-
-        auto st = parse(QStringLiteral(R"(
-            template <type T>
-            struct Box { T value; }
-
-            fn int main() { return 0; }
-        )"));
-        QVERIFY(!st.isEmpty());
-        QVERIFY(st.front().message.contains(QStringLiteral("template declarations are retired")));
-
-        auto alias = parse(QStringLiteral(R"(
-            template <type T>
-            type Bag = vector<T>;
-
-            fn int main() { return 0; }
-        )"));
-        QVERIFY(!alias.isEmpty());
-        QVERIFY(alias.front().message.contains(QStringLiteral("template declarations are retired")));
+        auto* fn = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[0].get());
+        QVERIFY(fn != nullptr);
+        QCOMPARE(fn->name, QStringLiteral("template"));
     }
 
-    void rejectsReservedTemplateConstraintSyntax()
-    {
-        auto parse = [](const QString& src) {
-            abel::Lexer lexer;
-            auto lexed = lexer.lex(QStringLiteral("<test>"), src);
-            if (!lexed.diagnostics.isEmpty())
-                return lexed.diagnostics;
-            abel::Parser parser;
-            return parser.parse(lexed.tokens).diagnostics;
-        };
-
-        QVERIFY(!parse(QStringLiteral("interface Eq { } fn int main() { return 0; }")).isEmpty());
-        QVERIFY(!parse(QStringLiteral("require Eq<int>; fn int main() { return 0; }")).isEmpty());
-        QVERIFY(!parse(QStringLiteral("template <type T> interface Eq { } fn int main() { return 0; }")).isEmpty());
-    }
 };
 
 QTEST_MAIN(AbelParserTests)
