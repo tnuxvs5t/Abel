@@ -135,3 +135,29 @@ execute_process(
 if (NOT run_result EQUAL 85)
     message(FATAL_ERROR "installed abel run expected exit 85, got ${run_result}:\n${run_output}\n${run_error}")
 endif()
+
+file(WRITE "${PROJECT_DIR}/src/main.abel" [=[
+backend SdkSystem {
+    fn any dynamic_map();
+}
+
+fn int main() {
+    any dm = SdkSystem::dynamic_map();
+    any missing = dm["missing"];
+    return cast<int>(missing);
+}
+]=])
+
+execute_process(
+    COMMAND "${ABEL_BIN}" run "${PROJECT_DIR}"
+    RESULT_VARIABLE bad_dynamic_result
+    OUTPUT_VARIABLE bad_dynamic_output
+    ERROR_VARIABLE bad_dynamic_error
+)
+if (bad_dynamic_result EQUAL 0)
+    message(FATAL_ERROR "installed abel run unexpectedly accepted bad dynamic object access:\n${bad_dynamic_output}\n${bad_dynamic_error}")
+endif()
+string(FIND "${bad_dynamic_error}" "sdk.dynamic_map missing key 'missing'" missing_key_pos)
+if (missing_key_pos EQUAL -1)
+    message(FATAL_ERROR "installed SDK fixture did not report dynamic object missing-key diagnostic:\n${bad_dynamic_output}\n${bad_dynamic_error}")
+endif()

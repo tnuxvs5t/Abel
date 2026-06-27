@@ -1191,6 +1191,50 @@ private slots:
         QCOMPARE(result.exitCode, 1);
     }
 
+    void anyScalarStrAndStructCastsRestoreValues()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                int value;
+            }
+
+            fn int main() {
+                any i = 7;
+                any s = "abel";
+                any box = Box(31);
+                Box restored = cast<Box>(box);
+                str text = cast<str>(s);
+                return cast<int>(i) + text.len() + restored.value;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 42);
+    }
+
+    void badAnyStructCastReportsRuntimeError()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                int value;
+            }
+
+            fn int main() {
+                any raw = 1;
+                Box box = cast<Box>(raw);
+                return box.value;
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.diagnostics.front().code, QStringLiteral("E0591"));
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("any containing i32")));
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("Box")));
+        QCOMPARE(result.exitCode, 1);
+    }
+
     void anyFunctionCastRestoresCallable()
     {
         const QString src = QStringLiteral(R"(
