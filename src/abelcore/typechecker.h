@@ -74,11 +74,7 @@ private:
     QHash<QString, QList<BackendInfo>> m_backends;
     QHash<QString, QList<EnumInfo>> m_enums;
     QHash<QString, QList<const TypeAliasDeclNode*>> m_typeAliases;
-    QHash<QString, AbelType> m_templateTypes;
-    QHash<QString, QHash<QString, AbelType>> m_structTemplateInstantiations;
     QSet<QString> m_resolvingTypeAliases;
-    QSet<QString> m_checkingTemplateInstantiations;
-    QSet<QString> m_checkedTemplateInstantiations;
     QList<QHash<QString, VariableInfo>> m_scopes;
     QList<Diagnostic> m_diagnostics;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
@@ -153,16 +149,6 @@ private:
     AbelType typeFromAstInCurrentPackage(const TypeNode& node);
     AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName, bool diagnose = true);
     AbelType typeFromAstForDecl(const TypeNode& node, const DeclNode& decl, bool diagnose = true);
-    std::optional<QHash<QString, AbelType>> bindTypeTemplateParams(const std::vector<QString>& params,
-                                                                   const std::vector<std::unique_ptr<TypeNode>>& args,
-                                                                   const DeclNode& decl,
-                                                                   const SourceSpan& span,
-                                                                   bool diagnose);
-    QString templateTypeInstantiationName(const DeclNode& decl,
-                                          const QString& name,
-                                          const std::vector<QString>& params,
-                                          const QHash<QString, AbelType>& bindings) const;
-    std::optional<QHash<QString, AbelType>> structTemplateBindingsForType(const StructDeclNode& decl, const AbelType& type) const;
     FieldInfo fieldInfoForStructField(const StructInfo& info, const AbelType& structType, const FieldDeclNode& field);
     void checkFunction(const FunctionDeclNode& fn);
     void checkTypeAlias(const TypeAliasDeclNode& alias);
@@ -287,14 +273,6 @@ private:
                                const std::vector<std::unique_ptr<ParameterNode>>& params,
                                size_t index,
                                const AbelType& paramType);
-    std::optional<QHash<QString, AbelType>> bindFunctionTemplate(const FunctionDeclNode& fn,
-                                                                 const std::vector<ExprType>& args,
-                                                                 const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
-                                                                 bool hasExplicitTypeArgs);
-    bool inferTemplateTypes(const TypeNode& pattern, const ExprType& arg, QHash<QString, AbelType>& bindings);
-    bool bindTemplateTypeName(const QString& name, const AbelType& type, QHash<QString, AbelType>& bindings) const;
-    void checkTemplateDeclaration(const FunctionDeclNode& fn);
-    void checkTemplateInstantiation(const FunctionDeclNode& fn, const QHash<QString, AbelType>& bindings);
 
     void pushScope();
     void popScope();

@@ -2229,115 +2229,38 @@ private slots:
 
     void runsMinimalFunctionTemplates()
     {
-        const QString src = QStringLiteral(R"(
+        auto fn = runSource(QStringLiteral(R"(
             template <type T>
-            fn T id(T x) {
-                return x;
-            }
+            fn T id(T x) { return x; }
 
-            template <type T>
-            fn int vec_len(vector<T> xs) {
-                return xs.len();
-            }
-
-            template <type T>
-            fn T make_value() {
-                return 5;
-            }
-
-            fn int main() {
-                vector<int> xs = {1, 2, 3};
-                str s = id<str>("ab");
-                return id(4) + make_value<int>() + vec_len(xs) + s.len();
-            }
-        )");
-        auto result = runSource(src);
-        for (const auto& d : result.diagnostics)
-            qWarning() << d.code << d.message;
-        QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 14);
+            fn int main() { return 0; }
+        )"));
+        QVERIFY(!fn.diagnostics.isEmpty());
+        QVERIFY(fn.diagnostics.front().message.contains(QStringLiteral("template declarations are retired")));
     }
 
     void runsMinimalStructAndTypeTemplates()
     {
-        const QString src = QStringLiteral(R"(
+        auto st = runSource(QStringLiteral(R"(
             template <type T>
-            struct Box {
-                T value;
+            struct Box { T value; }
 
-                init(T v) {
-                    value = v;
-                }
-
-                fn T get() {
-                    return value;
-                }
-            }
-
-            template <type T>
-            type Bag = vector<T>;
-
-            fn int main() {
-                Box<int> a = Box<int>(4);
-                Box<str> b = Box<str>("abc");
-                Bag<int> xs = {a.get(), b.get().len()};
-                return xs[0] + xs[1];
-            }
-        )");
-        auto result = runSource(src);
-        for (const auto& d : result.diagnostics)
-            qWarning() << d.code << d.message;
-        QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 7);
+            fn int main() { return 0; }
+        )"));
+        QVERIFY(!st.diagnostics.isEmpty());
+        QVERIFY(st.diagnostics.front().message.contains(QStringLiteral("template declarations are retired")));
     }
 
     void runsAliasConstructorsAndExactShapeOperatorTemplates()
     {
-        const QString src = QStringLiteral(R"(
+        auto alias = runSource(QStringLiteral(R"(
             template <type T>
-            struct Box {
-                T value;
+            type Bag = vector<T>;
 
-                init(T v) {
-                    value = v;
-                }
-            }
-
-            template <type T>
-            fn Box<T> operator +(Box<T> lhs, Box<T> rhs) {
-                return Box<T>(lhs.value + rhs.value);
-            }
-
-            template <type A, type B>
-            struct Pair {
-                A first;
-                B second;
-
-                init(A a, B b) {
-                    first = a;
-                    second = b;
-                }
-            }
-
-            template <type A, type B>
-            type Pair2 = Pair<A, B>;
-
-            fn int main() {
-                Box<int> a = Box<int>(2);
-                Box<int> b = Box<int>(3);
-                Box<int> c = a + b;
-                Pair<int, int> p = Pair<int, int>(2, 2);
-                Pair2<int, int> q = Pair2<int, int>(3, 4);
-                Box<int> d = 4 |> Box<int>(_);
-                Pair2<int, int> r = 5 |> Pair2<int, int>(_, 6);
-                return c.value + p.first + p.second + q.first + q.second + d.value + r.first + r.second;
-            }
-        )");
-        auto result = runSource(src);
-        for (const auto& d : result.diagnostics)
-            qWarning() << d.code << d.message;
-        QVERIFY(result.diagnostics.isEmpty());
-        QCOMPARE(result.exitCode, 31);
+            fn int main() { return 0; }
+        )"));
+        QVERIFY(!alias.diagnostics.isEmpty());
+        QVERIFY(alias.diagnostics.front().message.contains(QStringLiteral("template declarations are retired")));
     }
 
     void runsThisMethodNestedStructAssignmentAndFunctionValues()

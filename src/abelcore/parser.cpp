@@ -241,28 +241,11 @@ std::unique_ptr<DeclNode> Parser::parseDeclaration()
         return nullptr;
     }
     if (match(TokenKind::KwTemplate)) {
-        std::vector<QString> templateParams = parseTemplatePrefix();
-        if (match(TokenKind::KwStruct)) {
-            auto s = parseStruct(exported);
-            s->templateParams = std::move(templateParams);
-            return s;
-        }
-        if (match(TokenKind::KwType)) {
-            auto alias = parseTypeAlias(exported);
-            alias->templateParams = std::move(templateParams);
-            return alias;
-        }
-        if (match(TokenKind::KwInterface) || match(TokenKind::KwRequire)) {
-            errorAt(previous(), QStringLiteral("template+interface/require constraints are not part of v1"));
-            return nullptr;
-        }
-        if (!match(TokenKind::KwFn)) {
-            errorAt(peek(), QStringLiteral("expected struct, type, or fn after template <type ...>"));
-            return nullptr;
-        }
-        auto fn = parseFunction(exported, false);
-        fn->templateParams = std::move(templateParams);
-        return fn;
+        errorAt(previous(),
+                QStringLiteral("template declarations are retired in v1.1-H; use any/cast and backend-backed dynamic ADTs instead"));
+        parseTemplatePrefix();
+        skipRetiredTemplateDeclaration();
+        return nullptr;
     }
     if (match(TokenKind::KwFn))
         return parseFunction(exported, false);
@@ -302,21 +285,70 @@ QString Parser::parseQualifiedName(const QString& what)
     return parts.join(QLatin1Char('.'));
 }
 
-std::vector<QString> Parser::parseTemplatePrefix()
+void Parser::parseTemplatePrefix()
 {
-    std::vector<QString> params;
     consume(TokenKind::Less, QStringLiteral("expected '<' after template"));
     if (!check(TokenKind::Greater)) {
         do {
             consume(TokenKind::KwType, QStringLiteral("expected type template parameter"));
-            const Token name = consume(TokenKind::Identifier, QStringLiteral("expected template type parameter name"));
-            params.push_back(name.text);
+            consume(TokenKind::Identifier, QStringLiteral("expected template type parameter name"));
         } while (match(TokenKind::Comma));
     }
     consume(TokenKind::Greater, QStringLiteral("expected '>' after template parameter list"));
-    if (params.empty())
-        errorAt(previous(), QStringLiteral("template requires at least one type parameter"));
-    return params;
+}
+
+void Parser::skipRetiredTemplateDeclaration()
+{
+    if (match(TokenKind::KwInterface) || match(TokenKind::KwRequire))
+        return;
+    if (match(TokenKind::KwType)) {
+        while (!atEnd() && !match(TokenKind::Semicolon))
+            ++m_pos;
+        return;
+    }
+    if (match(TokenKind::KwFn)) {
+        int depth = 0;
+        bool seenBody = false;
+        while (!atEnd()) {
+            if (check(TokenKind::LBrace)) {
+                seenBody = true;
+                ++depth;
+                ++m_pos;
+                continue;
+            }
+            if (check(TokenKind::RBrace)) {
+                ++m_pos;
+                if (seenBody && --depth <= 0)
+                    return;
+                continue;
+            }
+            if (!seenBody && match(TokenKind::Semicolon))
+                return;
+            ++m_pos;
+        }
+        return;
+    }
+    if (match(TokenKind::KwStruct)) {
+        int depth = 0;
+        bool seenBody = false;
+        while (!atEnd()) {
+            if (check(TokenKind::LBrace)) {
+                seenBody = true;
+                ++depth;
+                ++m_pos;
+                continue;
+            }
+            if (check(TokenKind::RBrace)) {
+                ++m_pos;
+                if (seenBody && --depth <= 0)
+                    return;
+                continue;
+            }
+            ++m_pos;
+        }
+        return;
+    }
+    synchronizeDeclaration();
 }
 
 std::unique_ptr<FunctionDeclNode> Parser::parseFunction(bool exported, bool debt)
@@ -549,12 +581,18 @@ std::unique_ptr<TypeNode> Parser::parseType()
     } else {
         t->name = parseTypeName();
         if (match(TokenKind::Less)) {
-            if (!check(TokenKind::Greater)) {
-                do {
-                    t->typeArguments.push_back(parseType());
-                } while (match(TokenKind::Comma));
+            errorAt(previous(),
+                    QStringLiteral("generic type syntax is retired in v1.1-H; only vector<T>, func types, and cast<T>(x) remain"));
+            int depth = 1;
+            while (!atEnd() && depth > 0) {
+                if (match(TokenKind::Less)) {
+                    ++depth;
+                } else if (match(TokenKind::Greater)) {
+                    --depth;
+                } else {
+                    ++m_pos;
+                }
             }
-            consume(TokenKind::Greater, QStringLiteral("expected '>' after type arguments"));
         }
     }
     while (match(TokenKind::Star))

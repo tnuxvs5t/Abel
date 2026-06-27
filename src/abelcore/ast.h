@@ -23,7 +23,7 @@ struct TypeNode : AstNode {
     bool isReference = false;
     std::unique_ptr<TypeNode> elementType; // vector<T> element or func return type
     std::vector<std::unique_ptr<TypeNode>> functionParamTypes;
-    std::vector<std::unique_ptr<TypeNode>> typeArguments; // minimal named generic types, e.g. Box<int>
+    std::vector<std::unique_ptr<TypeNode>> typeArguments; // parser recovery for retired named generic syntax
 
     QString displayName() const;
 };
@@ -195,7 +195,6 @@ struct FunctionDeclNode final : DeclNode {
     QString operatorSymbol;
     std::unique_ptr<TypeNode> returnType;
     QString name;
-    std::vector<QString> templateParams;
     std::vector<std::unique_ptr<ParameterNode>> params;
     std::unique_ptr<BlockStmtNode> body;
 };
@@ -215,7 +214,6 @@ struct ConstructorDeclNode : AstNode {
 struct StructDeclNode final : DeclNode {
     bool exported = false;
     QString name;
-    std::vector<QString> templateParams;
     std::vector<std::unique_ptr<FieldDeclNode>> fields;
     std::vector<std::unique_ptr<ConstructorDeclNode>> constructors;
     std::vector<std::unique_ptr<FunctionDeclNode>> methods;
@@ -230,7 +228,6 @@ struct EnumDeclNode final : DeclNode {
 struct TypeAliasDeclNode final : DeclNode {
     bool exported = false;
     QString name;
-    std::vector<QString> templateParams;
     std::unique_ptr<TypeNode> targetType;
 };
 

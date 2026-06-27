@@ -2424,154 +2424,50 @@ private slots:
         QVERIFY(!ambiguous.diagnostics.isEmpty());
     }
 
-    void acceptsMinimalFunctionTemplates()
+    void rejectsRetiredTemplatesAndGenericTypeSyntax()
     {
-        const QString src = QStringLiteral(R"(
+        auto fn = checkSource(QStringLiteral(R"(
             template <type T>
-            fn T id(T x) {
-                return x;
-            }
+            fn T id(T x) { return x; }
 
-            template <type T>
-            fn int vec_len(vector<T> xs) {
-                return xs.len();
-            }
-
-            template <type T>
-            fn T make_default() {
-                return 7;
-            }
-
-            fn int main() {
-                vector<int> xs = {1, 2, 3};
-                str s = id<str>("ab");
-                return id(4) + make_default<int>() + vec_len(xs) + s.len();
-            }
-        )");
-        auto result = checkSource(src);
-        for (const auto& d : result.diagnostics)
-            qWarning() << d.code << d.message;
-        QVERIFY(result.diagnostics.isEmpty());
-    }
-
-    void rejectsBadFunctionTemplates()
-    {
-        auto badInstantiation = checkSource(QStringLiteral(R"(
-            template <type T>
-            fn int bad_return(T x) {
-                return x;
-            }
-
-            fn int main() {
-                return bad_return("nope");
-            }
+            fn int main() { return 0; }
         )"));
-        QVERIFY(!badInstantiation.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(badInstantiation, QStringLiteral("cannot return str from function returning int")) >= 1);
+        QVERIFY(!fn.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(fn, QStringLiteral("template declarations are retired")) >= 1);
 
-        auto leakedCallerScope = checkSource(QStringLiteral(R"(
+        auto st = checkSource(QStringLiteral(R"(
             template <type T>
-            fn int leak(T x) {
-                return y;
-            }
+            struct Box { T value; }
 
-            fn int main() {
-                int y = 5;
-                return leak(1);
-            }
+            fn int main() { return 0; }
         )"));
-        QVERIFY(!leakedCallerScope.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(leakedCallerScope, QStringLiteral("unknown variable 'y'")) >= 1);
+        QVERIFY(!st.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(st, QStringLiteral("template declarations are retired")) >= 1);
 
-        auto unknownGenericType = checkSource(QStringLiteral(R"(
-            type Bad = Box<int>;
-
-            fn int main() {
-                return 0;
-            }
-        )"));
-        QVERIFY(!unknownGenericType.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(unknownGenericType, QStringLiteral("unknown generic type 'Box'")) >= 1);
-    }
-
-    void acceptsMinimalStructAndTypeTemplates()
-    {
-        const QString src = QStringLiteral(R"(
-            template <type T>
-            struct Box {
-                T value;
-
-                init(T v) {
-                    value = v;
-                }
-
-                fn T get() {
-                    return value;
-                }
-            }
-
+        auto alias = checkSource(QStringLiteral(R"(
             template <type T>
             type Bag = vector<T>;
 
-            fn int main() {
-                Box<int> a = Box<int>(3);
-                Box<str> b = Box<str>("abcd");
-                Bag<int> xs = {a.get(), b.get().len()};
-                return xs[0] + xs[1];
-            }
-        )");
-        auto result = checkSource(src);
-        for (const auto& d : result.diagnostics)
-            qWarning() << d.code << d.message;
-        QVERIFY(result.diagnostics.isEmpty());
-    }
+            fn int main() { return 0; }
+        )"));
+        QVERIFY(!alias.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(alias, QStringLiteral("template declarations are retired")) >= 1);
 
-    void acceptsAliasConstructorsAndExactShapeOperatorTemplates()
-    {
-        const QString src = QStringLiteral(R"(
-            template <type T>
-            struct Box {
-                T value;
+        auto genericType = checkSource(QStringLiteral(R"(
+            type Bad = Box<int>;
 
-                init(T v) {
-                    value = v;
-                }
-            }
+            fn int main() { return 0; }
+        )"));
+        QVERIFY(!genericType.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(genericType, QStringLiteral("generic type syntax is retired")) >= 1);
 
-            template <type T>
-            fn Box<T> operator +(Box<T> lhs, Box<T> rhs) {
-                return Box<T>(lhs.value + rhs.value);
-            }
+        auto explicitCall = checkSource(QStringLiteral(R"(
+            fn int id(int x) { return x; }
 
-            template <type A, type B>
-            struct Pair {
-                A first;
-                B second;
-
-                init(A a, B b) {
-                    first = a;
-                    second = b;
-                }
-            }
-
-            template <type A, type B>
-            type Pair2 = Pair<A, B>;
-
-            fn int main() {
-                Box<int> a = Box<int>(2);
-                Box<int> b = Box<int>(3);
-                Box<int> c = a + b;
-                Pair<int, int> p = Pair<int, int>(2, 2);
-                Pair2<int, int> q = Pair2<int, int>(3, 4);
-                Box<int> d = 4 |> Box<int>(_);
-                Pair2<int, int> r = 5 |> Pair2<int, int>(_, 6);
-                return c.value + p.first + p.second + q.first + q.second + d.value + r.first + r.second;
-            }
-        )");
-        auto result = checkSource(src);
-        for (const auto& d : result.diagnostics)
-            qWarning() << d.code << d.message;
-        QVERIFY(result.diagnostics.isEmpty());
+            fn int main() { return id<int>(1); }
+        )"));
+        QVERIFY(!explicitCall.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(explicitCall, QStringLiteral("explicit type arguments are retired")) >= 1);
     }
 
     void acceptsThisMethodNestedStructAssignmentAndFunctionValues()
@@ -2622,53 +2518,7 @@ private slots:
 
     void rejectsBadStructAndTypeTemplates()
     {
-        auto noArgs = checkSource(QStringLiteral(R"(
-            template <type T>
-            struct Box {
-                T value;
-            }
-
-            fn int main() {
-                Box b = Box<int>(1);
-                return 0;
-            }
-        )"));
-        QVERIFY(!noArgs.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(noArgs, QStringLiteral("template struct 'Box' requires type arguments")) >= 1);
-
-        auto badFieldInit = checkSource(QStringLiteral(R"(
-            template <type T>
-            struct Box {
-                T value;
-            }
-
-            fn int main() {
-                Box<int> b = Box<int>("bad");
-                return 0;
-            }
-        )"));
-        QVERIFY(!badFieldInit.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(badFieldInit, QStringLiteral("cannot initialize field 'value'")) >= 1);
-
-        auto badMethodInstantiation = checkSource(QStringLiteral(R"(
-            template <type T>
-            struct Box {
-                T value;
-
-                fn int bad() {
-                    return value;
-                }
-            }
-
-            fn int main() {
-                Box<str> b = Box<str>("bad");
-                return b.bad();
-            }
-        )"));
-        QVERIFY(!badMethodInstantiation.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(badMethodInstantiation, QStringLiteral("cannot return str from function returning int")) >= 1);
-
-        auto badOperatorTemplate = checkSource(QStringLiteral(R"(
+        auto retired = checkSource(QStringLiteral(R"(
             template <type T>
             fn T operator +(T lhs, T rhs) {
                 return lhs;
@@ -2678,9 +2528,8 @@ private slots:
                 return 0;
             }
         )"));
-        QVERIFY(!badOperatorTemplate.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(badOperatorTemplate,
-                                        QStringLiteral("operator templates must have exact shape")) >= 1);
+        QVERIFY(!retired.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(retired, QStringLiteral("template declarations are retired")) >= 1);
     }
 };
 

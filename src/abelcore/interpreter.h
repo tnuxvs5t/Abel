@@ -66,8 +66,6 @@ private:
     QHash<QString, QList<BackendRuntimeInfo>> m_backends;
     QHash<QString, QList<EnumRuntimeInfo>> m_enums;
     QHash<QString, QList<const TypeAliasDeclNode*>> m_typeAliases;
-    QHash<QString, AbelType> m_templateTypes;
-    QHash<QString, QHash<QString, AbelType>> m_structTemplateInstantiations;
     QSet<QString> m_resolvingTypeAliases;
     BackendRegistry m_backendRegistry;
     BackendRegistry* m_activeBackendRegistry = nullptr;
@@ -109,15 +107,6 @@ private:
     AbelType typeFromAstInCurrentPackage(const TypeNode& node);
     AbelType typeFromAstInPackage(const TypeNode& node, const QString& packageName);
     AbelType typeFromAstForDecl(const TypeNode& node, const DeclNode& decl);
-    std::optional<QHash<QString, AbelType>> bindTypeTemplateParams(const std::vector<QString>& params,
-                                                                   const std::vector<std::unique_ptr<TypeNode>>& args,
-                                                                   const DeclNode& decl,
-                                                                   const SourceSpan& span);
-    QString templateTypeInstantiationName(const DeclNode& decl,
-                                          const QString& name,
-                                          const std::vector<QString>& params,
-                                          const QHash<QString, AbelType>& bindings) const;
-    std::optional<QHash<QString, AbelType>> structTemplateBindingsForType(const StructDeclNode& decl, const AbelType& type) const;
     ExecResult callFunction(const FunctionDeclNode& fn, const std::vector<AbelValue>& args);
     ExecResult callFunctionExpr(const FunctionDeclNode& fn, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExecResult callFunctionPipeExpr(const FunctionDeclNode& fn,
@@ -145,12 +134,10 @@ private:
                                                    const std::vector<PreparedCallArg>& args,
                                                    const SourceSpan& span,
                                                    const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs = nullptr,
-                                                   bool hasExplicitTypeArgs = false,
-                                                   QHash<QString, AbelType>* outTemplateBindings = nullptr);
+                                                   bool hasExplicitTypeArgs = false);
     ExecResult callFunctionPrepared(const FunctionDeclNode& fn,
                                     const std::vector<PreparedCallArg>& args,
-                                    const SourceSpan& span,
-                                    const QHash<QString, AbelType>* templateBindings = nullptr);
+                                    const SourceSpan& span);
     ExecResult callFunctionOverloadExpr(const QString& displayName,
                                         const QList<const FunctionDeclNode*>& candidates,
                                         const std::vector<std::unique_ptr<ExprNode>>& args,
@@ -278,12 +265,6 @@ private:
     bool isReadOnlyBinding(const AbelType& type, bool syntacticConst) const;
     bool canBindReferenceValue(const AbelType& referenceType, const AbelType& sourceType) const;
     std::optional<int> scoreValueArgument(const AbelType& paramType, const AbelValue& arg) const;
-    bool bindTemplateTypeName(const QString& name, const AbelType& type, QHash<QString, AbelType>& bindings) const;
-    bool inferTemplateTypes(const TypeNode& pattern, const PreparedCallArg& arg, QHash<QString, AbelType>& bindings);
-    std::optional<QHash<QString, AbelType>> bindFunctionTemplate(const FunctionDeclNode& fn,
-                                                                 const std::vector<PreparedCallArg>& args,
-                                                                 const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
-                                                                 bool hasExplicitTypeArgs);
     void error(const QString& code, const QString& message, const SourceSpan& span);
 };
 

@@ -42,7 +42,8 @@ private:
     std::unique_ptr<ModuleDeclNode> parseModule();
     std::unique_ptr<UseDeclNode> parseUse(bool exported = false);
     QString parseQualifiedName(const QString& what);
-    std::vector<QString> parseTemplatePrefix();
+    void parseTemplatePrefix();
+    void skipRetiredTemplateDeclaration();
     std::unique_ptr<FunctionDeclNode> parseFunction(bool exported, bool debt);
     QString parseOperatorSymbol();
     std::unique_ptr<StructDeclNode> parseStruct(bool exported);
