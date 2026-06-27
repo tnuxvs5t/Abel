@@ -823,6 +823,18 @@ private slots:
     void acceptsCharAndAnyBuiltins()
     {
         const QString src = QStringLiteral(R"(
+            struct Box {
+                int value;
+
+                init(int v) {
+                    value = v;
+                }
+            }
+
+            fn int inc(int x) {
+                return x + 1;
+            }
+
             fn int main() {
                 char a = 'a';
                 int code = char_code(a);
@@ -839,12 +851,23 @@ private slots:
                 any x = 7;
                 any s = "kappa";
                 any chars = str_to_chars("ab");
+                any box = Box(3);
+                any f = inc;
                 bool anyOk = any_type(x).len() > 0
+                    && any_debug(x).len() > 0
                     && any_is(x, "integer")
                     && any_is_int(x)
                     && !any_is_double(x)
                     && any_is_str(s)
-                    && any_is_vector(chars);
+                    && any_is_vector(chars)
+                    && !any_is_struct(chars)
+                    && !any_is_func(chars)
+                    && any_is_struct(box)
+                    && any_is(box, "struct")
+                    && any_debug(box).len() > 0
+                    && any_is_func(f)
+                    && any_is(f, "func")
+                    && any_debug(f).len() > 0;
 
                 bool pipeOk = a |> char_upper |> char_is_upper;
                 bool pipeAny = x |> any_is_int;
@@ -871,6 +894,9 @@ private slots:
 
         auto badAnyValue = checkSource(QStringLiteral("fn int main() { str t = any_type(1); return t.len(); }"));
         QVERIFY(!badAnyValue.diagnostics.isEmpty());
+
+        auto badAnyDebugValue = checkSource(QStringLiteral("fn int main() { str t = any_debug(1); return t.len(); }"));
+        QVERIFY(!badAnyDebugValue.diagnostics.isEmpty());
 
         auto badAnyExpected = checkSource(QStringLiteral(R"(
             fn int main() {

@@ -753,6 +753,18 @@ private slots:
     void charAndAnyBuiltinsWork()
     {
         const QString src = QStringLiteral(R"(
+            struct Box {
+                int value;
+
+                init(int v) {
+                    value = v;
+                }
+            }
+
+            fn int inc(int x) {
+                return x + 1;
+            }
+
             fn int main() {
                 char a = 'a';
                 int code = char_code(a);
@@ -760,6 +772,8 @@ private slots:
                 any x = 7;
                 any text = "kappa";
                 any chars = str_to_chars("ab");
+                any box = Box(3);
+                any f = inc;
                 bool ok = from == a
                     && char_is_lower(a)
                     && char_is_upper(char_upper(a))
@@ -775,6 +789,14 @@ private slots:
                     && !any_is_double(x)
                     && any_is_str(text)
                     && any_is_vector(chars)
+                    && any_is_struct(box)
+                    && any_is(box, "struct")
+                    && any_type(box) == "Box"
+                    && any_debug(box) == "<struct Box>"
+                    && any_is_func(f)
+                    && any_is(f, "func")
+                    && any_type(f).len() > 0
+                    && any_debug(f) == "<function>"
                     && (a |> char_upper |> char_is_upper)
                     && (x |> any_is_int)
                     && (x |> any_is("i32"));

@@ -416,6 +416,7 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("char_lower")));
         QVERIFY(registry.hasFunction(QStringLiteral("char_to_str")));
         QVERIFY(registry.hasFunction(QStringLiteral("any_type")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_debug")));
         QVERIFY(registry.hasFunction(QStringLiteral("any_is")));
         QVERIFY(registry.hasFunction(QStringLiteral("any_is_bool")));
         QVERIFY(registry.hasFunction(QStringLiteral("any_is_int")));
@@ -424,6 +425,8 @@ private slots:
         QVERIFY(registry.hasFunction(QStringLiteral("any_is_str")));
         QVERIFY(registry.hasFunction(QStringLiteral("any_is_vector")));
         QVERIFY(registry.hasFunction(QStringLiteral("any_is_pointer")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_is_struct")));
+        QVERIFY(registry.hasFunction(QStringLiteral("any_is_func")));
         QVERIFY(registry.hasFunction(QStringLiteral("abs")));
         QVERIFY(registry.hasFunction(QStringLiteral("sqrt")));
         QVERIFY(registry.hasFunction(QStringLiteral("floor")));
@@ -835,6 +838,14 @@ private slots:
             abel::AbelValue::makeVector(abel::makeType(abel::TypeKind::Str),
                                         {abel::AbelValue::makeString(QStringLiteral("x"))}));
         QVERIFY(call(QStringLiteral("any_is_vector"), {anyVector}).asBool());
+        QCOMPARE(call(QStringLiteral("any_debug"), {anyVector}).asString(), QStringLiteral("<vector len=1>"));
+
+        abel::AbelValue anyStruct = abel::AbelValue::makeAny(
+            abel::AbelValue::makeStruct(QStringLiteral("Box"), {QStringLiteral("x")},
+                                        {{QStringLiteral("x"), abel::AbelValue::makeInt(3)}}));
+        QVERIFY(call(QStringLiteral("any_is_struct"), {anyStruct}).asBool());
+        QVERIFY(call(QStringLiteral("any_is"), {anyStruct, abel::AbelValue::makeString(QStringLiteral("struct"))}).asBool());
+        QCOMPARE(call(QStringLiteral("any_debug"), {anyStruct}).asString(), QStringLiteral("<struct Box>"));
         QVERIFY(ctx.diagnostics().isEmpty());
     }
 

@@ -830,6 +830,8 @@ AbelValue builtinAny(BuiltinFunctionCall& call)
 
     if (name == QStringLiteral("any_type"))
         return AbelValue::makeString(runtimeTypeName(value));
+    if (name == QStringLiteral("any_debug"))
+        return AbelValue::makeString(value.asAny()->value.debugString());
 
     if (name == QStringLiteral("any_is")) {
         auto expected = requireStringArg(call, 1);
@@ -852,6 +854,10 @@ AbelValue builtinAny(BuiltinFunctionCall& call)
         return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("vector")));
     if (name == QStringLiteral("any_is_pointer"))
         return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("pointer")));
+    if (name == QStringLiteral("any_is_struct"))
+        return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("struct")));
+    if (name == QStringLiteral("any_is_func"))
+        return AbelValue::makeBool(runtimeTypeMatches(value, QStringLiteral("func")));
 
     call.ctx.error(QStringLiteral("E0461"), QStringLiteral("unknown any builtin '%1'").arg(name), call.callSpan);
     return AbelValue::makeUnknown();
@@ -1674,6 +1680,7 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("char_lower"), 1, 1, false, builtinChar, QStringLiteral("lowercase char")});
     registry.registerFunction({QStringLiteral("char_to_str"), 1, 1, false, builtinChar, QStringLiteral("single-char string")});
     registry.registerFunction({QStringLiteral("any_type"), 1, 1, false, builtinAny, QStringLiteral("runtime type name inside any")});
+    registry.registerFunction({QStringLiteral("any_debug"), 1, 1, false, builtinAny, QStringLiteral("debug render value inside any")});
     registry.registerFunction({QStringLiteral("any_is"), 2, 2, false, builtinAny, QStringLiteral("test runtime type inside any")});
     registry.registerFunction({QStringLiteral("any_is_bool"), 1, 1, false, builtinAny, QStringLiteral("test any contains bool")});
     registry.registerFunction({QStringLiteral("any_is_int"), 1, 1, false, builtinAny, QStringLiteral("test any contains integer")});
@@ -1682,6 +1689,8 @@ BuiltinRegistry BuiltinRegistry::makeDefault()
     registry.registerFunction({QStringLiteral("any_is_str"), 1, 1, false, builtinAny, QStringLiteral("test any contains str")});
     registry.registerFunction({QStringLiteral("any_is_vector"), 1, 1, false, builtinAny, QStringLiteral("test any contains vector")});
     registry.registerFunction({QStringLiteral("any_is_pointer"), 1, 1, false, builtinAny, QStringLiteral("test any contains pointer")});
+    registry.registerFunction({QStringLiteral("any_is_struct"), 1, 1, false, builtinAny, QStringLiteral("test any contains struct")});
+    registry.registerFunction({QStringLiteral("any_is_func"), 1, 1, false, builtinAny, QStringLiteral("test any contains func")});
     registry.registerFunction({QStringLiteral("abs"), 1, 1, false, builtinMath, QStringLiteral("absolute value")});
     registry.registerFunction({QStringLiteral("sqrt"), 1, 1, false, builtinMath, QStringLiteral("square root as f64")});
     registry.registerFunction({QStringLiteral("floor"), 1, 1, false, builtinMath, QStringLiteral("floor as f64")});

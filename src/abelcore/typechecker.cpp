@@ -411,6 +411,7 @@ AbelType charBuiltinReturnType(const QString& name)
 bool isAnyBuiltinName(const QString& name)
 {
     return name == QStringLiteral("any_type")
+        || name == QStringLiteral("any_debug")
         || name == QStringLiteral("any_is")
         || name == QStringLiteral("any_is_bool")
         || name == QStringLiteral("any_is_int")
@@ -418,7 +419,9 @@ bool isAnyBuiltinName(const QString& name)
         || name == QStringLiteral("any_is_char")
         || name == QStringLiteral("any_is_str")
         || name == QStringLiteral("any_is_vector")
-        || name == QStringLiteral("any_is_pointer");
+        || name == QStringLiteral("any_is_pointer")
+        || name == QStringLiteral("any_is_struct")
+        || name == QStringLiteral("any_is_func");
 }
 
 int anyBuiltinArity(const QString& name)
@@ -428,7 +431,7 @@ int anyBuiltinArity(const QString& name)
 
 AbelType anyBuiltinReturnType(const QString& name)
 {
-    if (name == QStringLiteral("any_type"))
+    if (name == QStringLiteral("any_type") || name == QStringLiteral("any_debug"))
         return makeType(TypeKind::Str);
     return makeType(TypeKind::Bool);
 }
