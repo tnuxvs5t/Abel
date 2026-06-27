@@ -2084,6 +2084,18 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
             return errorExpr(expr.span, QStringLiteral("logical operator '%1' requires bool operands").arg(op));
         return {makeType(TypeKind::Bool), ValueCategory::PRValue, false};
     }
+    if (lhs.type.kind == TypeKind::Any || rhs.type.kind == TypeKind::Any) {
+        if (op == QStringLiteral("==") || op == QStringLiteral("!=")
+            || op == QStringLiteral("<") || op == QStringLiteral("<=")
+            || op == QStringLiteral(">") || op == QStringLiteral(">=")) {
+            return {makeType(TypeKind::Bool), ValueCategory::PRValue, false};
+        }
+        if (op == QStringLiteral("+") || op == QStringLiteral("-") || op == QStringLiteral("*")
+            || op == QStringLiteral("/") || op == QStringLiteral("%") || op == QStringLiteral("%%")
+            || op == QStringLiteral("**") || op == QStringLiteral("<?") || op == QStringLiteral(">?")) {
+            return {makeType(TypeKind::Any), ValueCategory::PRValue, false};
+        }
+    }
     if (op == QStringLiteral("==") || op == QStringLiteral("!=")) {
         const bool ok = isBuiltinEqualityComparable(lhs.type, rhs.type);
         if (!ok) {

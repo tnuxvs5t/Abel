@@ -1296,6 +1296,56 @@ private slots:
         QCOMPARE(result.exitCode, 21);
     }
 
+    void anyDynamicBinaryOperatorsWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn any operator +(any a, any b) {
+                return build_string(any_debug(a), ":", any_debug(b));
+            }
+
+            fn int main() {
+                any a = 4;
+                any b = 5;
+                any sum = a + b;
+                bool less = a < b;
+                bool neq = a != b;
+                any suffix = "b";
+                any text = "a" + suffix;
+                any custom = true + "x";
+                str text_s = cast<str>(text);
+                str custom_s = cast<str>(custom);
+                if (less && neq && text_s == "ab" && custom_s == "true:x") {
+                    return cast<int>(sum);
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 9);
+    }
+
+    void badAnyDynamicOperatorReportsRuntimeError()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                any a = true;
+                any b = "x";
+                any c = a - b;
+                return cast<int>(c);
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.diagnostics.front().code, QStringLiteral("E0521"));
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("dynamic operator '-' failed")));
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("bool")));
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("str")));
+        QCOMPARE(result.exitCode, 1);
+    }
+
     void badImplicitAnyCastReportsRuntimeError()
     {
         const QString src = QStringLiteral(R"(

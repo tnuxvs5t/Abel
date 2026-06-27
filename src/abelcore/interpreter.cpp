@@ -3388,6 +3388,156 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
         return AbelValue::makeUnknown();
 
     const QString& op = expr.op;
+    auto unboxAny = [](const AbelValue& value) -> AbelValue {
+        if (value.type().kind == TypeKind::Any)
+            return value.asAny()->value;
+        return value;
+    };
+    auto evalBuiltinDynamic = [&](const AbelValue& rawLhs, const AbelValue& rawRhs) -> std::optional<AbelValue> {
+        if (op == QStringLiteral("+") && rawLhs.type().kind == TypeKind::Str && rawRhs.type().kind == TypeKind::Str)
+            return AbelValue::makeString(rawLhs.asString() + rawRhs.asString());
+
+        if (op == QStringLiteral("==") || op == QStringLiteral("!=")) {
+            const bool pointerNull =
+                (rawLhs.type().kind == TypeKind::Pointer && rawRhs.type().kind == TypeKind::Nullptr)
+                || (rawLhs.type().kind == TypeKind::Nullptr && rawRhs.type().kind == TypeKind::Pointer);
+            if (pointerNull) {
+                AbelLocation* ptr = rawLhs.type().kind == TypeKind::Pointer ? rawLhs.asPointer() : rawRhs.asPointer();
+                const bool eq = ptr == nullptr;
+                return AbelValue::makeBool(op == QStringLiteral("==") ? eq : !eq);
+            }
+            if (rawLhs.type().isNumeric() && rawRhs.type().isNumeric()) {
+                const bool useDouble = rawLhs.type().kind == TypeKind::F64 || rawRhs.type().kind == TypeKind::F64;
+                const bool useUnsigned = !useDouble && (rawLhs.type().isUnsignedInteger() || rawRhs.type().isUnsignedInteger());
+                const bool eq = useDouble
+                    ? rawLhs.asDouble() == rawRhs.asDouble()
+                    : useUnsigned
+                        ? static_cast<quint64>(rawLhs.asInt()) == static_cast<quint64>(rawRhs.asInt())
+                        : rawLhs.asInt() == rawRhs.asInt();
+                return AbelValue::makeBool(op == QStringLiteral("==") ? eq : !eq);
+            }
+            if (rawLhs.type().kind == rawRhs.type().kind && isBuiltinEqualityComparable(rawLhs.type(), rawRhs.type())) {
+                const bool eq = abelValueEquals(rawLhs, rawRhs);
+                return AbelValue::makeBool(op == QStringLiteral("==") ? eq : !eq);
+            }
+            return std::nullopt;
+        }
+
+        if (!rawLhs.type().isNumeric() || !rawRhs.type().isNumeric())
+            return std::nullopt;
+
+        const bool useDouble = rawLhs.type().kind == TypeKind::F64 || rawRhs.type().kind == TypeKind::F64;
+        if (useDouble) {
+            const double a = rawLhs.asDouble();
+            const double b = rawRhs.asDouble();
+            if (op == QStringLiteral("+")) return AbelValue::makeDouble(a + b);
+            if (op == QStringLiteral("-")) return AbelValue::makeDouble(a - b);
+            if (op == QStringLiteral("*")) return AbelValue::makeDouble(a * b);
+            if (op == QStringLiteral("/")) return AbelValue::makeDouble(a / b);
+            if (op == QStringLiteral("**")) return AbelValue::makeDouble(std::pow(a, b));
+            if (op == QStringLiteral("<")) return AbelValue::makeBool(a < b);
+            if (op == QStringLiteral("<=")) return AbelValue::makeBool(a <= b);
+            if (op == QStringLiteral(">")) return AbelValue::makeBool(a > b);
+            if (op == QStringLiteral(">=")) return AbelValue::makeBool(a >= b);
+            if (op == QStringLiteral("<?")) return AbelValue::makeDouble(a < b ? a : b);
+            if (op == QStringLiteral(">?")) return AbelValue::makeDouble(a > b ? a : b);
+            return std::nullopt;
+        }
+
+        const TypeKind resultKind = numericBinaryResultKind(rawLhs.type(), rawRhs.type());
+        const bool useUnsigned = rawLhs.type().isUnsignedInteger() || rawRhs.type().isUnsignedInteger();
+        if (useUnsigned) {
+            const quint64 a = static_cast<quint64>(rawLhs.asInt());
+            const quint64 b = static_cast<quint64>(rawRhs.asInt());
+            if (op == QStringLiteral("+")) return AbelValue::makeInt(static_cast<qint64>(a + b), resultKind);
+            if (op == QStringLiteral("-")) return AbelValue::makeInt(static_cast<qint64>(a - b), resultKind);
+            if (op == QStringLiteral("*")) return AbelValue::makeInt(static_cast<qint64>(a * b), resultKind);
+            if (op == QStringLiteral("/")) {
+                if (b == 0) {
+                    error(QStringLiteral("E0517"), QStringLiteral("division by zero"), expr.span);
+                    return AbelValue::makeUnknown();
+                }
+                return AbelValue::makeInt(static_cast<qint64>(a / b), resultKind);
+            }
+            if (op == QStringLiteral("%") || op == QStringLiteral("%%")) {
+                if (b == 0) {
+                    error(QStringLiteral("E0518"), QStringLiteral("modulo by zero"), expr.span);
+                    return AbelValue::makeUnknown();
+                }
+                return AbelValue::makeInt(static_cast<qint64>(a % b), resultKind);
+            }
+            if (op == QStringLiteral("**")) {
+                quint64 out = 1;
+                for (quint64 i = 0; i < b; ++i)
+                    out *= a;
+                return AbelValue::makeInt(static_cast<qint64>(out), resultKind);
+            }
+            if (op == QStringLiteral("<")) return AbelValue::makeBool(a < b);
+            if (op == QStringLiteral("<=")) return AbelValue::makeBool(a <= b);
+            if (op == QStringLiteral(">")) return AbelValue::makeBool(a > b);
+            if (op == QStringLiteral(">=")) return AbelValue::makeBool(a >= b);
+            if (op == QStringLiteral("<?")) return AbelValue::makeInt(static_cast<qint64>(a < b ? a : b), resultKind);
+            if (op == QStringLiteral(">?")) return AbelValue::makeInt(static_cast<qint64>(a > b ? a : b), resultKind);
+            return std::nullopt;
+        }
+
+        const qint64 a = rawLhs.asInt();
+        const qint64 b = rawRhs.asInt();
+        if (op == QStringLiteral("+")) return AbelValue::makeInt(a + b, resultKind);
+        if (op == QStringLiteral("-")) return AbelValue::makeInt(a - b, resultKind);
+        if (op == QStringLiteral("*")) return AbelValue::makeInt(a * b, resultKind);
+        if (op == QStringLiteral("/")) {
+            if (b == 0) {
+                error(QStringLiteral("E0517"), QStringLiteral("division by zero"), expr.span);
+                return AbelValue::makeUnknown();
+            }
+            return AbelValue::makeInt(a / b, resultKind);
+        }
+        if (op == QStringLiteral("%") || op == QStringLiteral("%%")) {
+            if (b == 0) {
+                error(QStringLiteral("E0518"), QStringLiteral("modulo by zero"), expr.span);
+                return AbelValue::makeUnknown();
+            }
+            qint64 r = a % b;
+            if (op == QStringLiteral("%%") && r < 0)
+                r += b < 0 ? -b : b;
+            return AbelValue::makeInt(r, resultKind);
+        }
+        if (op == QStringLiteral("**")) {
+            if (b < 0) {
+                error(QStringLiteral("E0519"), QStringLiteral("integer power with negative exponent is not supported"), expr.span);
+                return AbelValue::makeUnknown();
+            }
+            qint64 out = 1;
+            for (qint64 i = 0; i < b; ++i)
+                out *= a;
+            return AbelValue::makeInt(out, resultKind);
+        }
+        if (op == QStringLiteral("<")) return AbelValue::makeBool(a < b);
+        if (op == QStringLiteral("<=")) return AbelValue::makeBool(a <= b);
+        if (op == QStringLiteral(">")) return AbelValue::makeBool(a > b);
+        if (op == QStringLiteral(">=")) return AbelValue::makeBool(a >= b);
+        if (op == QStringLiteral("<?")) return AbelValue::makeInt(a < b ? a : b, resultKind);
+        if (op == QStringLiteral(">?")) return AbelValue::makeInt(a > b ? a : b, resultKind);
+        return std::nullopt;
+    };
+
+    if (lhs.type().kind == TypeKind::Any || rhs.type().kind == TypeKind::Any) {
+        AbelValue rawLhs = unboxAny(lhs);
+        AbelValue rawRhs = unboxAny(rhs);
+        if (auto builtin = evalBuiltinDynamic(rawLhs, rawRhs))
+            return *builtin;
+        if (m_ctx->hasError())
+            return AbelValue::makeUnknown();
+        if (auto overloaded = evalUserBinaryOperator(op, lhs, rhs, expr.span))
+            return *overloaded;
+        error(QStringLiteral("E0521"),
+              QStringLiteral("dynamic operator '%1' failed for %2 and %3")
+                  .arg(op, rawLhs.type().displayName(), rawRhs.type().displayName()),
+              expr.span);
+        return AbelValue::makeUnknown();
+    }
+
     if (op == QStringLiteral("+") && lhs.type().kind == TypeKind::Str && rhs.type().kind == TypeKind::Str)
         return AbelValue::makeString(lhs.asString() + rhs.asString());
 

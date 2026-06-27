@@ -1055,6 +1055,36 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsAnyDynamicBinaryOperators()
+    {
+        const QString src = QStringLiteral(R"(
+            fn any operator +(any a, any b) {
+                return build_string(any_debug(a), ":", any_debug(b));
+            }
+
+            fn int main() {
+                any a = 4;
+                any b = 5;
+                any sum = a + b;
+                bool less = a < b;
+                bool neq = a != b;
+                any suffix = "b";
+                any text = "a" + suffix;
+                any custom = true + "x";
+                str text_s = cast<str>(text);
+                str custom_s = cast<str>(custom);
+                if (less && neq) {
+                    return cast<int>(sum) + text_s.len() + custom_s.len();
+                }
+                return 0;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void acceptsImplicitAnyCastsAtTargetTypedPositions()
     {
         const QString src = QStringLiteral(R"(
