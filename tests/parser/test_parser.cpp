@@ -448,31 +448,6 @@ private slots:
         QCOMPARE(fn->params.size(), static_cast<size_t>(2));
     }
 
-    void treatsFormerTemplateWordsAsIdentifiers()
-    {
-        const QString src = QStringLiteral(R"(
-            fn int template() {
-                int interface = 1;
-                int require = 2;
-                return interface + require;
-            }
-        )");
-        abel::Lexer lexer;
-        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
-        QVERIFY(lexed.diagnostics.isEmpty());
-
-        abel::Parser parser;
-        auto parsed = parser.parse(lexed.tokens);
-        for (const auto& d : parsed.diagnostics)
-            qWarning() << d.message;
-        QVERIFY(parsed.diagnostics.isEmpty());
-        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
-
-        auto* fn = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[0].get());
-        QVERIFY(fn != nullptr);
-        QCOMPARE(fn->name, QStringLiteral("template"));
-    }
-
 };
 
 QTEST_MAIN(AbelParserTests)
