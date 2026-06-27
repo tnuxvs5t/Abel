@@ -1,0 +1,60 @@
+{
+  "name": "abel-vscode",
+  "displayName": "Abel",
+  "description": "VSCode language support for Abel via abel-lsp.",
+  "version": "0.1.0",
+  "publisher": "abel",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:abel"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "abel",
+        "aliases": [
+          "Abel",
+          "abel"
+        ],
+        "extensions": [
+          ".abel"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "abel",
+        "scopeName": "source.abel",
+        "path": "./syntaxes/abel.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Abel",
+      "properties": {
+        "abel.lsp.path": {
+          "type": "string",
+          "default": "abel-lsp",
+          "description": "Path to the abel-lsp executable."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

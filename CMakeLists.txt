@@ -95,6 +95,40 @@ set_target_properties(abel PROPERTIES
     INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR};${ABEL_QT_LIBRARY_DIR}"
 )
 
+add_library(abellspcore STATIC
+    src/abellsp/lsp_protocol.h
+    src/abellsp/lsp_protocol.cpp
+    src/abellsp/lsp_analyzer.h
+    src/abellsp/lsp_analyzer.cpp
+    src/abellsp/lsp_server.h
+    src/abellsp/lsp_server.cpp
+)
+
+target_include_directories(abellspcore
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(abellspcore
+    PUBLIC
+        abelcore
+        Qt6::Core
+)
+
+add_executable(abel-lsp
+    src/abellsp/main.cpp
+)
+
+target_link_libraries(abel-lsp
+    PRIVATE
+        abellspcore
+        Qt6::Core
+)
+
+set_target_properties(abel-lsp PROPERTIES
+    INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR};${ABEL_QT_LIBRARY_DIR}"
+)
+
 add_library(math_backend MODULE
     plugins/examples/math_backend/math_backend.cpp
 )
@@ -110,7 +144,7 @@ set_target_properties(math_backend PROPERTIES
     OUTPUT_NAME math_backend
 )
 
-install(TARGETS abelcore abel
+install(TARGETS abelcore abel abel-lsp
     EXPORT AbelTargets
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -256,6 +290,20 @@ target_compile_definitions(abel_package_manifest_tests
 )
 
 add_test(NAME abel_package_manifest_tests COMMAND abel_package_manifest_tests)
+
+add_executable(abel_lsp_tests
+    tests/lsp/test_lsp_protocol.cpp
+)
+
+target_link_libraries(abel_lsp_tests
+    PRIVATE
+        abellspcore
+        abelcore
+        Qt6::Core
+        Qt6::Test
+)
+
+add_test(NAME abel_lsp_tests COMMAND abel_lsp_tests)
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_multifile_project.cmake.in"
