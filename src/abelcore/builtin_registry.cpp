@@ -122,7 +122,9 @@ std::optional<QString> stringifyValue(BuiltinFunctionCall& call, const AbelValue
     case TypeKind::Str:
         return value.asString();
     case TypeKind::Any:
-        return stringifyValue(call, value.asAny()->value, span);
+        if (value.isBoxedAny())
+            return stringifyValue(call, value.asAny()->value, span);
+        return value.debugString();
     case TypeKind::Nullptr:
         return QStringLiteral("nullptr");
     case TypeKind::Pointer:
@@ -158,10 +160,12 @@ std::optional<QString> stringifyValue(BuiltinFunctionCall& call, const AbelValue
 
 bool valuesEqual(const AbelValue& lhs, const AbelValue& rhs)
 {
-    if (lhs.type().kind == TypeKind::Any)
+    if (lhs.isBoxedAny())
         return valuesEqual(lhs.asAny()->value, rhs);
-    if (rhs.type().kind == TypeKind::Any)
+    if (rhs.isBoxedAny())
         return valuesEqual(lhs, rhs.asAny()->value);
+    if (lhs.isDynamicObject() || rhs.isDynamicObject())
+        return abelValueEquals(lhs, rhs);
     if ((lhs.type().kind == TypeKind::Pointer && rhs.type().kind == TypeKind::Nullptr)
         || (lhs.type().kind == TypeKind::Nullptr && rhs.type().kind == TypeKind::Pointer)) {
         AbelLocation* ptr = lhs.type().kind == TypeKind::Pointer ? lhs.asPointer() : rhs.asPointer();
@@ -780,17 +784,27 @@ AbelValue builtinChar(BuiltinFunctionCall& call)
 
 QString runtimeTypeName(const AbelValue& value)
 {
-    if (value.type().kind == TypeKind::Any)
+    if (value.isBoxedAny())
         return runtimeTypeName(value.asAny()->value);
+    if (value.isDynamicObject()) {
+        auto object = value.asDynamicObject();
+        return object && !object->kind.isEmpty()
+            ? QStringLiteral("dynamic:%1").arg(object->kind)
+            : QStringLiteral("dynamic");
+    }
     return value.type().displayName();
 }
 
 bool runtimeTypeMatches(const AbelValue& value, const QString& expected)
 {
-    const AbelValue& unwrapped = value.type().kind == TypeKind::Any ? value.asAny()->value : value;
+    const AbelValue& unwrapped = value.isBoxedAny() ? value.asAny()->value : value;
     const AbelType& type = unwrapped.type();
     const QString normalized = expected.trimmed().toLower();
 
+    if (unwrapped.isDynamicObject())
+        return normalized == QStringLiteral("dynamic")
+            || normalized == QStringLiteral("object")
+            || runtimeTypeName(unwrapped).toLower() == normalized;
     if (normalized == QStringLiteral("integer"))
         return type.isInteger();
     if (normalized == QStringLiteral("numeric") || normalized == QStringLiteral("number"))
@@ -831,7 +845,7 @@ AbelValue builtinAny(BuiltinFunctionCall& call)
     if (name == QStringLiteral("any_type"))
         return AbelValue::makeString(runtimeTypeName(value));
     if (name == QStringLiteral("any_debug"))
-        return AbelValue::makeString(value.asAny()->value.debugString());
+        return AbelValue::makeString(value.debugString());
 
     if (name == QStringLiteral("any_is")) {
         auto expected = requireStringArg(call, 1);

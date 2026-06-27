@@ -89,7 +89,13 @@ std::optional<AbelValue> keyValueCopy(const AbelValue& value, QString* error)
 {
     switch (value.type().kind) {
     case TypeKind::Any:
-        return keyValueCopy(value.asAny()->value, error);
+        if (value.isBoxedAny())
+            return keyValueCopy(value.asAny()->value, error);
+        if (error) {
+            *error = QStringLiteral("unsupported AbelValue key type '%1'")
+                         .arg(value.debugString());
+        }
+        return std::nullopt;
     case TypeKind::Bool:
         return AbelValue::makeBool(value.asBool());
     case TypeKind::I8:
@@ -168,7 +174,9 @@ quint64 valueHash(const AbelValue& value)
     case TypeKind::Str:
         return mixString(hash, value.asString());
     case TypeKind::Any:
-        return valueHash(value.asAny()->value);
+        if (value.isBoxedAny())
+            return valueHash(value.asAny()->value);
+        return mixUInt64(hash, reinterpret_cast<quintptr>(value.asDynamicObject().get()));
     case TypeKind::Nullptr:
         return hash;
     case TypeKind::Vector: {
@@ -245,6 +253,8 @@ AbelValue AbelValue::makeVector(const AbelType& elementType, std::vector<AbelVal
 
 AbelValue AbelValue::makeAny(const AbelValue& value)
 {
+    if (value.type().kind == TypeKind::Any)
+        return value;
     auto any = std::make_shared<AbelAnyValue>();
     any->value = value;
     return AbelValue(makeType(TypeKind::Any), any);
@@ -262,6 +272,11 @@ AbelValue AbelValue::makeStruct(const QString& typeName, const std::vector<QStri
 AbelValue AbelValue::makeFunction(const AbelType& type, FunctionPtr function)
 {
     return AbelValue(type, std::move(function));
+}
+
+AbelValue AbelValue::makeDynamicObject(DynamicObjectPtr object)
+{
+    return AbelValue(makeType(TypeKind::Any), std::move(object));
 }
 
 AbelValue AbelValue::makeUnknown()
@@ -321,6 +336,21 @@ AbelValue::FunctionPtr AbelValue::asFunction() const
     return std::get<FunctionPtr>(m_payload);
 }
 
+AbelValue::DynamicObjectPtr AbelValue::asDynamicObject() const
+{
+    return std::get<DynamicObjectPtr>(m_payload);
+}
+
+bool AbelValue::isBoxedAny() const
+{
+    return m_type.kind == TypeKind::Any && std::holds_alternative<AnyPtr>(m_payload);
+}
+
+bool AbelValue::isDynamicObject() const
+{
+    return m_type.kind == TypeKind::Any && std::holds_alternative<DynamicObjectPtr>(m_payload);
+}
+
 QString AbelValue::debugString() const
 {
     switch (m_type.kind) {
@@ -337,7 +367,16 @@ QString AbelValue::debugString() const
     case TypeKind::F64: return QString::number(asDouble(), 'g', 16);
     case TypeKind::Char: return QString(asChar());
     case TypeKind::Str: return asString();
-    case TypeKind::Any: return asAny()->value.debugString();
+    case TypeKind::Any:
+        if (isBoxedAny())
+            return asAny()->value.debugString();
+        if (isDynamicObject()) {
+            auto object = asDynamicObject();
+            if (object && object->debug)
+                return object->debug();
+            return QStringLiteral("<dynamic %1>").arg(object ? object->kind : QStringLiteral("null"));
+        }
+        return QStringLiteral("<any>");
     case TypeKind::Pointer:
         return asPointer() ? QStringLiteral("<ptr>") : QStringLiteral("nullptr");
     case TypeKind::Reference: return QStringLiteral("<ref>");
@@ -428,10 +467,12 @@ AbelValue convertValue(const AbelValue& value, const AbelType& target)
 
 bool abelValueEquals(const AbelValue& lhs, const AbelValue& rhs)
 {
-    if (lhs.type().kind == TypeKind::Any)
+    if (lhs.isBoxedAny())
         return abelValueEquals(lhs.asAny()->value, rhs);
-    if (rhs.type().kind == TypeKind::Any)
+    if (rhs.isBoxedAny())
         return abelValueEquals(lhs, rhs.asAny()->value);
+    if (lhs.isDynamicObject() || rhs.isDynamicObject())
+        return lhs.isDynamicObject() && rhs.isDynamicObject() && lhs.asDynamicObject() == rhs.asDynamicObject();
     if (lhs.type() != rhs.type())
         return false;
     switch (lhs.type().kind) {
@@ -518,6 +559,13 @@ bool AbelValueKey::operator==(const AbelValueKey& other) const
 size_t qHash(const AbelValueKey& key, size_t seed)
 {
     return static_cast<size_t>(key.stableHash() ^ static_cast<quint64>(seed));
+}
+
+AbelValue unboxAny(const AbelValue& value)
+{
+    if (value.isBoxedAny())
+        return value.asAny()->value;
+    return value;
 }
 
 } // namespace abel

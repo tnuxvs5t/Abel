@@ -291,9 +291,7 @@ bool vectorElementReadOnly(const AbelValue& vectorValue, bool receiverReadOnly)
 
 AbelValue unboxAnyValue(const AbelValue& value)
 {
-    if (value.type().kind == TypeKind::Any)
-        return value.asAny()->value;
-    return value;
+    return unboxAny(value);
 }
 
 TypeKind integerTypeForWidth(int width, bool unsignedResult)
@@ -1716,7 +1714,7 @@ Interpreter::NormalizedPreparedCallArgs Interpreter::normalizePreparedCallArgsFo
             for (const AbelValue& element : vector->elements) {
                 PreparedCallArg spread;
                 spread.span = call.args[i]->span;
-                spread.value = element.type().kind == TypeKind::Any ? element.asAny()->value : element;
+                spread.value = element.isBoxedAny() ? element.asAny()->value : element;
                 variadicTail.push_back(std::move(spread));
             }
             continue;
@@ -3321,6 +3319,34 @@ AbelLocation* Interpreter::evalLocation(const ExprNode& expr)
         }
         const bool baseIsAny = base.type().kind == TypeKind::Any;
         AbelValue rawBase = unboxAnyValue(base);
+        if (rawBase.isDynamicObject()) {
+            auto object = rawBase.asDynamicObject();
+            AbelValue key = unboxAnyValue(evalExpr(*e->index));
+            if (!object || !object->get) {
+                error(QStringLiteral("E0546"),
+                      QStringLiteral("dynamic object '%1' does not support operator []")
+                          .arg(object ? object->kind : QStringLiteral("null")),
+                      e->span);
+                return nullptr;
+            }
+            auto read = [this, object, key, span = e->span]() {
+                return object->get(key, *m_ctx, span);
+            };
+            auto write = [this, object, key, span = e->span](const AbelValue& value) {
+                if (!object->set) {
+                    error(QStringLiteral("E0546"),
+                          QStringLiteral("dynamic object '%1' does not support operator []=")
+                              .arg(object ? object->kind : QStringLiteral("null")),
+                          span);
+                    return;
+                }
+                object->set(key, value, *m_ctx, span);
+            };
+            return m_ctx->createCustomLocation(std::move(read),
+                                               std::move(write),
+                                               baseReadOnly,
+                                               makeType(TypeKind::Any));
+        }
         if (rawBase.type().kind != TypeKind::Vector || !rawBase.type().pointee) {
             error(QStringLiteral("E0546"),
                   baseIsAny
@@ -3410,6 +3436,24 @@ AbelValue Interpreter::evalBinary(const BinaryExprNode& expr)
 
     const QString& op = expr.op;
     auto evalBuiltinDynamic = [&](const AbelValue& rawLhs, const AbelValue& rawRhs) -> std::optional<AbelValue> {
+        if (op == QStringLiteral("==") || op == QStringLiteral("!=")) {
+            auto dynamicEquals = [&](const AbelValue& lhsValue, const AbelValue& rhsValue) -> std::optional<bool> {
+                if (!lhsValue.isDynamicObject())
+                    return std::nullopt;
+                auto object = lhsValue.asDynamicObject();
+                if (!object || !object->equals)
+                    return std::nullopt;
+                return object->equals(rhsValue, *m_ctx, expr.span);
+            };
+            std::optional<bool> eq = dynamicEquals(rawLhs, rawRhs);
+            if (!eq && rawRhs.isDynamicObject())
+                eq = dynamicEquals(rawRhs, rawLhs);
+            if (eq)
+                return AbelValue::makeBool(op == QStringLiteral("==") ? *eq : !*eq);
+            if (m_ctx->hasError())
+                return AbelValue::makeUnknown();
+        }
+
         if (op == QStringLiteral("+") && rawLhs.type().kind == TypeKind::Str && rawRhs.type().kind == TypeKind::Str)
             return AbelValue::makeString(rawLhs.asString() + rawRhs.asString());
 
@@ -3804,7 +3848,7 @@ std::optional<AbelValue> Interpreter::dynamicCastValue(const AbelValue& value,
                                                        const QString& context)
 {
     const bool fromAny = value.type().kind == TypeKind::Any;
-    const AbelValue source = fromAny ? value.asAny()->value : value;
+    const AbelValue source = unboxAnyValue(value);
 
     auto actualName = [&]() {
         QString actual = fromAny
@@ -4071,7 +4115,7 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
                 }
                 auto vector = value.asVector();
                 for (const AbelValue& element : vector->elements) {
-                    call.args.push_back(element.type().kind == TypeKind::Any ? element.asAny()->value : element);
+                    call.args.push_back(element.isBoxedAny() ? element.asAny()->value : element);
                     call.argSpans.push_back(argSpan);
                 }
             } else {
@@ -4243,7 +4287,7 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
                 }
                 auto vector = value.asVector();
                 for (const AbelValue& element : vector->elements) {
-                    call.args.push_back(element.type().kind == TypeKind::Any ? element.asAny()->value : element);
+                    call.args.push_back(element.isBoxedAny() ? element.asAny()->value : element);
                     call.argSpans.push_back(arg->span);
                 }
             } else {
@@ -5009,8 +5053,7 @@ AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
         error(QStringLiteral("E0526"), QStringLiteral("left side of assignment is not an lvalue"), expr.span);
         return AbelValue::makeUnknown();
     }
-    AbelValue current = lhs->read();
-    const AbelType targetType = lhs->declaredType.kind != TypeKind::Unknown ? lhs->declaredType : current.type();
+    const AbelType targetType = lhs->declaredType.kind != TypeKind::Unknown ? lhs->declaredType : lhs->read().type();
     AbelValue rhs = convertOrError(evalExpr(*expr.rhs), targetType, expr.rhs->span);
     if (lhs->isReadOnly) {
         error(QStringLiteral("E0526"), QStringLiteral("cannot assign to readonly lvalue"), expr.span);

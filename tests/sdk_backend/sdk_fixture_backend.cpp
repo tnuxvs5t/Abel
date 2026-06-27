@@ -4,6 +4,7 @@
 #include <QChar>
 #include <QHash>
 
+#include <memory>
 #include <optional>
 
 class SdkFixtureBackend final : public abel::AbelBackendPluginBase {
@@ -87,6 +88,50 @@ public:
                 return abel::AbelValue::makeUnknown();
             }
             return found.value();
+        });
+        bind(QStringLiteral("SdkSystem.dynamic_map"), []() {
+            auto store = std::make_shared<QHash<QString, abel::AbelValue>>();
+            auto object = std::make_shared<abel::AbelDynamicObject>();
+            object->kind = QStringLiteral("sdk.dynamic_map");
+            object->get = [store](const abel::AbelValue& key,
+                                  abel::AbelRuntimeContext& ctx,
+                                  const abel::SourceSpan& span) {
+                if (key.type().kind != abel::TypeKind::Str) {
+                    ctx.error(QStringLiteral("E0640"),
+                              QStringLiteral("sdk.dynamic_map key must be str, got %1").arg(key.type().displayName()),
+                              span);
+                    return abel::AbelValue::makeUnknown();
+                }
+                auto found = store->constFind(key.asString());
+                if (found == store->constEnd()) {
+                    ctx.error(QStringLiteral("E0640"),
+                              QStringLiteral("sdk.dynamic_map missing key '%1'").arg(key.asString()),
+                              span);
+                    return abel::AbelValue::makeUnknown();
+                }
+                return found.value();
+            };
+            object->set = [store](const abel::AbelValue& key,
+                                  const abel::AbelValue& value,
+                                  abel::AbelRuntimeContext& ctx,
+                                  const abel::SourceSpan& span) {
+                if (key.type().kind != abel::TypeKind::Str) {
+                    ctx.error(QStringLiteral("E0641"),
+                              QStringLiteral("sdk.dynamic_map key must be str, got %1").arg(key.type().displayName()),
+                              span);
+                    return;
+                }
+                store->insert(key.asString(), abel::unboxAny(value));
+            };
+            object->equals = [object](const abel::AbelValue& other,
+                                      abel::AbelRuntimeContext&,
+                                      const abel::SourceSpan&) -> std::optional<bool> {
+                return other.isDynamicObject() && other.asDynamicObject() == object;
+            };
+            object->debug = [] {
+                return QStringLiteral("<sdk.dynamic_map>");
+            };
+            return abel::AbelValue::makeDynamicObject(object);
         });
     }
 

@@ -21,6 +21,7 @@ struct AbelVectorValue;
 struct AbelAnyValue;
 struct AbelStructValue;
 struct AbelFunctionValue;
+struct AbelDynamicObject;
 class AbelRuntimeContext;
 struct FunctionDeclNode;
 struct LambdaExprNode;
@@ -31,7 +32,8 @@ public:
     using AnyPtr = std::shared_ptr<AbelAnyValue>;
     using StructPtr = std::shared_ptr<AbelStructValue>;
     using FunctionPtr = std::shared_ptr<AbelFunctionValue>;
-    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*, VectorPtr, AnyPtr, StructPtr, FunctionPtr>;
+    using DynamicObjectPtr = std::shared_ptr<AbelDynamicObject>;
+    using Payload = std::variant<std::monostate, bool, qint64, double, QString, QChar, AbelLocation*, VectorPtr, AnyPtr, StructPtr, FunctionPtr, DynamicObjectPtr>;
 
     AbelValue() = default;
 
@@ -48,6 +50,7 @@ public:
     static AbelValue makeAny(const AbelValue& value);
     static AbelValue makeStruct(const QString& typeName, const std::vector<QString>& fieldOrder, QHash<QString, AbelValue> fields);
     static AbelValue makeFunction(const AbelType& type, FunctionPtr function);
+    static AbelValue makeDynamicObject(DynamicObjectPtr object);
     static AbelValue makeUnknown();
 
     const AbelType& type() const { return m_type; }
@@ -63,6 +66,10 @@ public:
     AnyPtr asAny() const;
     StructPtr asStruct() const;
     FunctionPtr asFunction() const;
+    DynamicObjectPtr asDynamicObject() const;
+
+    bool isBoxedAny() const;
+    bool isDynamicObject() const;
 
     QString debugString() const;
 
@@ -105,6 +112,19 @@ struct AbelAnyValue {
     AbelValue value;
 };
 
+struct AbelDynamicObject {
+    using Get = std::function<AbelValue(const AbelValue& key, AbelRuntimeContext& ctx, const SourceSpan& span)>;
+    using Set = std::function<void(const AbelValue& key, const AbelValue& value, AbelRuntimeContext& ctx, const SourceSpan& span)>;
+    using Equals = std::function<std::optional<bool>(const AbelValue& other, AbelRuntimeContext& ctx, const SourceSpan& span)>;
+    using Debug = std::function<QString()>;
+
+    QString kind = QStringLiteral("dynamic");
+    Get get;
+    Set set;
+    Equals equals;
+    Debug debug;
+};
+
 struct AbelStructValue {
     QString typeName;
     std::vector<QString> fieldOrder;
@@ -129,5 +149,6 @@ struct AbelFunctionValue {
 
 AbelValue defaultValueForType(const AbelType& type);
 AbelValue convertValue(const AbelValue& value, const AbelType& target);
+AbelValue unboxAny(const AbelValue& value);
 
 } // namespace abel

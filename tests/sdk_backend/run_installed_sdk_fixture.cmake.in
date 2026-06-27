@@ -35,7 +35,8 @@ file(WRITE "${PROJECT_DIR}/abel.package.json" [=[
         "map_len",
         "map_contains",
         "map_set",
-        "map_get"
+        "map_get",
+        "dynamic_map"
       ]
     }
   ]
@@ -56,6 +57,7 @@ backend SdkSystem {
     fn bool map_contains(long h, any key);
     fn void map_set(long h, any key, any value);
     fn any map_get(long h, any key);
+    fn any dynamic_map();
 }
 
 fn int inc(int x) {
@@ -88,13 +90,25 @@ fn int main() {
     any f = inc;
     any da = 2;
     any db = 3;
+    any dm = SdkSystem::dynamic_map();
+    dm["bonus"] = 10;
+    int dynamic_bonus = 0;
+    if (cast<int>(dm["bonus"]) == 10
+        && dm == dm
+        && any_is(dm, "dynamic:sdk.dynamic_map")
+        && any_debug(dm) == "<sdk.dynamic_map>") {
+        dynamic_bonus = 10;
+    } else {
+        dynamic_bonus = 100;
+    }
     return SdkSystem::add(cs.len(), cast<int>(SdkSystem::sum_i64(xs)))
         + SdkSystem::guard(0)
         + joined_bonus
         + SdkSystem::count("S", 4, false)
         + map_bonus
         + cast<int>(SdkSystem::call_int(f, 40))
-        + cast<int>(da + db);
+        + cast<int>(da + db)
+        + dynamic_bonus;
 }
 ]=])
 
@@ -118,6 +132,6 @@ execute_process(
     OUTPUT_VARIABLE run_output
     ERROR_VARIABLE run_error
 )
-if (NOT run_result EQUAL 75)
-    message(FATAL_ERROR "installed abel run expected exit 75, got ${run_result}:\n${run_output}\n${run_error}")
+if (NOT run_result EQUAL 85)
+    message(FATAL_ERROR "installed abel run expected exit 85, got ${run_result}:\n${run_output}\n${run_error}")
 endif()

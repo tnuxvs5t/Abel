@@ -56,7 +56,7 @@ public:
 private:
     static AbelValue unboxAny(const AbelValue& value)
     {
-        if (value.type().kind == TypeKind::Any)
+        if (value.isBoxedAny())
             return value.asAny()->value;
         return value;
     }
@@ -101,7 +101,7 @@ public:
 private:
     const AbelValue& callableValue() const
     {
-        if (m_value.type().kind == TypeKind::Any)
+        if (m_value.isBoxedAny())
             return m_value.asAny()->value;
         return m_value;
     }

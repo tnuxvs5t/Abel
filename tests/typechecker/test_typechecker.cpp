@@ -1103,15 +1103,16 @@ private slots:
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
 
-        auto badIndex = checkSource(QStringLiteral(R"(
+        auto dynamicStringKey = checkSource(QStringLiteral(R"(
             fn int main() {
                 any raw = 1;
                 any value = raw["x"];
                 return 0;
             }
         )"));
-        QVERIFY(!badIndex.diagnostics.isEmpty());
-        QVERIFY(countMessagesContaining(badIndex, QStringLiteral("dynamic index must be integer or any")) >= 1);
+        for (const auto& d : dynamicStringKey.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(dynamicStringKey.diagnostics.isEmpty());
     }
 
     void acceptsImplicitAnyCastsAtTargetTypedPositions()

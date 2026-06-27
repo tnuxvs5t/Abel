@@ -4,6 +4,8 @@ namespace abel {
 
 AbelValue AbelLocation::read() const
 {
+    if (customRead)
+        return customRead();
     if (vector)
         return vector->elements[index];
     if (object)
@@ -13,7 +15,9 @@ AbelValue AbelLocation::read() const
 
 void AbelLocation::write(const AbelValue& value)
 {
-    if (vector)
+    if (customWrite)
+        customWrite(value);
+    else if (vector)
         vector->elements[index] = value;
     else if (object)
         object->fields.insert(fieldName, value);
@@ -109,6 +113,21 @@ AbelLocation* AbelRuntimeContext::createStructFieldLocation(AbelStructValue* obj
     } else if (object && object->fields.contains(fieldName)) {
         location->declaredType = object->fields.value(fieldName).type();
     }
+    location->isReadOnly = isReadOnly;
+    AbelLocation* loc = location.get();
+    m_locations.push_back(std::move(location));
+    return loc;
+}
+
+AbelLocation* AbelRuntimeContext::createCustomLocation(std::function<AbelValue()> read,
+                                                       std::function<void(const AbelValue&)> write,
+                                                       bool isReadOnly,
+                                                       AbelType declaredType)
+{
+    auto location = std::make_unique<AbelLocation>();
+    location->customRead = std::move(read);
+    location->customWrite = std::move(write);
+    location->declaredType = std::move(declaredType);
     location->isReadOnly = isReadOnly;
     AbelLocation* loc = location.get();
     m_locations.push_back(std::move(location));

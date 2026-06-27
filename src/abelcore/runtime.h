@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QList>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -54,6 +55,8 @@ struct AbelLocation {
     size_t index = 0;
     QString fieldName;
     bool isReadOnly = false;
+    std::function<AbelValue()> customRead;
+    std::function<void(const AbelValue&)> customWrite;
 
     AbelValue read() const;
     void write(const AbelValue& value);
@@ -72,6 +75,10 @@ public:
                                             const QString& fieldName,
                                             bool isReadOnly = false,
                                             AbelType declaredType = makeType(TypeKind::Unknown));
+    AbelLocation* createCustomLocation(std::function<AbelValue()> read,
+                                       std::function<void(const AbelValue&)> write,
+                                       bool isReadOnly = false,
+                                       AbelType declaredType = makeType(TypeKind::Unknown));
     AbelLocation* createAliasLocation(AbelLocation* source, bool isReadOnly);
     bool defineVariable(const QString& name, AbelLocation* location, bool isConst, bool isReference, const SourceSpan& span);
     bool defineValueVariable(const QString& name, const AbelValue& value, bool isConst, const SourceSpan& span);

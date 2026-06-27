@@ -9,6 +9,8 @@
 
 #include <QtTest/QtTest>
 
+#include <memory>
+
 class AbelBackendResourceTests final : public QObject {
     Q_OBJECT
 
@@ -413,6 +415,173 @@ private slots:
         }
         QVERIFY(sawBackend);
         QVERIFY(sawFunction);
+    }
+
+    void backendDynamicObjectParticipatesInIndexAndEquality()
+    {
+        abel::BackendRegistry registry;
+        QVERIFY(registry.registerFunction({
+            QStringLiteral("Dyn"),
+            QStringLiteral("make_map"),
+            abel::makeType(abel::TypeKind::Any),
+            {},
+            false,
+        }));
+        QVERIFY(registry.bindFunction(QStringLiteral("Dyn"),
+                                      QStringLiteral("make_map"),
+                                      [](const abel::BackendCall&, abel::AbelRuntimeContext&) {
+                                          using Store = QHash<QString, abel::AbelValue>;
+                                          auto store = std::make_shared<Store>();
+                                          auto object = std::make_shared<abel::AbelDynamicObject>();
+                                          object->kind = QStringLiteral("sdk.map");
+                                          object->get = [store](const abel::AbelValue& key,
+                                                                abel::AbelRuntimeContext& ctx,
+                                                                const abel::SourceSpan& span) {
+                                              if (key.type().kind != abel::TypeKind::Str) {
+                                                  ctx.error(QStringLiteral("E0640"),
+                                                            QStringLiteral("sdk.map key must be str, got %1")
+                                                                .arg(key.type().displayName()),
+                                                            span);
+                                                  return abel::AbelValue::makeUnknown();
+                                              }
+                                              auto found = store->constFind(key.asString());
+                                              if (found == store->constEnd()) {
+                                                  ctx.error(QStringLiteral("E0640"),
+                                                            QStringLiteral("sdk.map missing key '%1'").arg(key.asString()),
+                                                            span);
+                                                  return abel::AbelValue::makeUnknown();
+                                              }
+                                              return found.value();
+                                          };
+                                          object->set = [store](const abel::AbelValue& key,
+                                                                const abel::AbelValue& value,
+                                                                abel::AbelRuntimeContext& ctx,
+                                                                const abel::SourceSpan& span) {
+                                              if (key.type().kind != abel::TypeKind::Str) {
+                                                  ctx.error(QStringLiteral("E0641"),
+                                                            QStringLiteral("sdk.map key must be str, got %1")
+                                                                .arg(key.type().displayName()),
+                                                            span);
+                                                  return;
+                                              }
+                                              store->insert(key.asString(), abel::unboxAny(value));
+                                          };
+                                          object->equals = [object](const abel::AbelValue& other,
+                                                                    abel::AbelRuntimeContext&,
+                                                                    const abel::SourceSpan&) -> std::optional<bool> {
+                                              return other.isDynamicObject() && other.asDynamicObject() == object;
+                                          };
+                                          object->debug = [] {
+                                              return QStringLiteral("<sdk.map>");
+                                          };
+                                          return abel::AbelValue::makeDynamicObject(object);
+                                      }));
+
+        const QString src = QStringLiteral(R"(
+            backend Dyn {
+                fn any make_map();
+            }
+
+            fn int main() {
+                any obj = Dyn::make_map();
+                obj["answer"] = 5;
+                obj["text"] = "ok";
+                any same = obj;
+                bool eq = obj == same;
+                bool neq = obj != "not object";
+                if (eq && neq && any_is(obj, "dynamic:sdk.map") && any_debug(obj) == "<sdk.map>") {
+                    str text = cast<str>(obj["text"]);
+                    return cast<int>(obj["answer"]) + text.len();
+                }
+                return 0;
+            }
+        )");
+
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<dynamic-object-test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+
+        abel::Interpreter interpreter;
+        auto result = interpreter.run(*parsed.program, &registry);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 7);
+    }
+
+    void backendDynamicObjectIndexDiagnosticsAreStable()
+    {
+        abel::BackendRegistry registry;
+        QVERIFY(registry.registerFunction({
+            QStringLiteral("Dyn"),
+            QStringLiteral("make_readonly"),
+            abel::makeType(abel::TypeKind::Any),
+            {},
+            false,
+        }));
+        QVERIFY(registry.bindFunction(QStringLiteral("Dyn"),
+                                      QStringLiteral("make_readonly"),
+                                      [](const abel::BackendCall&, abel::AbelRuntimeContext&) {
+                                          auto object = std::make_shared<abel::AbelDynamicObject>();
+                                          object->kind = QStringLiteral("readonly");
+                                          object->get = [](const abel::AbelValue&,
+                                                           abel::AbelRuntimeContext& ctx,
+                                                           const abel::SourceSpan& span) {
+                                              ctx.error(QStringLiteral("E0640"), QStringLiteral("readonly missing key"), span);
+                                              return abel::AbelValue::makeUnknown();
+                                          };
+                                          return abel::AbelValue::makeDynamicObject(object);
+                                      }));
+
+        const QString readSrc = QStringLiteral(R"(
+            backend Dyn {
+                fn any make_readonly();
+            }
+
+            fn int main() {
+                any obj = Dyn::make_readonly();
+                any x = obj["missing"];
+                return cast<int>(x);
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<dynamic-object-read-test>"), readSrc);
+        QVERIFY(lexed.diagnostics.isEmpty());
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        QVERIFY(parsed.diagnostics.isEmpty());
+        abel::Interpreter interpreter;
+        auto readResult = interpreter.run(*parsed.program, &registry);
+        QVERIFY(!readResult.diagnostics.isEmpty());
+        QCOMPARE(readResult.diagnostics.front().code, QStringLiteral("E0640"));
+        QVERIFY(readResult.diagnostics.front().message.contains(QStringLiteral("missing key")));
+
+        const QString writeSrc = QStringLiteral(R"(
+            backend Dyn {
+                fn any make_readonly();
+            }
+
+            fn int main() {
+                any obj = Dyn::make_readonly();
+                obj["x"] = 1;
+                return 0;
+            }
+        )");
+        auto writeLexed = lexer.lex(QStringLiteral("<dynamic-object-write-test>"), writeSrc);
+        QVERIFY(writeLexed.diagnostics.isEmpty());
+        auto writeParsed = parser.parse(writeLexed.tokens);
+        QVERIFY(writeParsed.diagnostics.isEmpty());
+        abel::Interpreter writeInterpreter;
+        auto writeResult = writeInterpreter.run(*writeParsed.program, &registry);
+        QVERIFY(!writeResult.diagnostics.isEmpty());
+        QCOMPARE(writeResult.diagnostics.front().code, QStringLiteral("E0546"));
+        QVERIFY(writeResult.diagnostics.front().message.contains(QStringLiteral("operator []=")));
     }
 
     void parsesValidResourceNodeJson()
