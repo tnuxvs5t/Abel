@@ -1392,6 +1392,104 @@ private slots:
         QCOMPARE(result.exitCode, 13);
     }
 
+    void dynamicTupleAndStrMapLiteralsWork()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                int value;
+            }
+
+            fn int inc(int x) {
+                return x + 1;
+            }
+
+            fn int main() {
+                any t = [[1, "x", Box(5), inc]];
+                any m = [{"name" = "Abel", "version" = 12, "tuple" = t}];
+                t[0] = 7;
+                m["version"] = cast<int>(m["version"]) + 1;
+                Box b = cast<Box>(t[2]);
+                func int(int) f = cast<func int(int)>(t[3]);
+                if (any_is(t, "dynamic:tuple")
+                    && any_is(m, "dynamic:strmap")
+                    && any_debug(t) == "<tuple len=4>"
+                    && any_debug(m) == "<strmap len=3>"
+                    && cast<str>(m["name"]) == "Abel") {
+                    return cast<int>(t[0]) + cast<int>(m["version"]) + b.value + f(16);
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 42);
+    }
+
+    void generalizedPipeExpressionsWork()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                any row = [{"name" = "Nitori", "score" = 40}];
+                int a = 3 |> _ + 4;
+                any pair = 5 |> [[_, _ + 1]];
+                any projected = row |> [{"name" = _["name"], "passed" = _["score"] >= 40}];
+                row |> (_["score"] = cast<int>(_["score"]) + 2);
+                int x = 10;
+                x |> (_ = _ + 5);
+                int doubled = x |> _ + _;
+                if (cast<str>(projected["name"]) == "Nitori"
+                    && cast<bool>(projected["passed"])
+                    && x == 15) {
+                    return a + cast<int>(pair[0]) + cast<int>(pair[1]) + cast<int>(row["score"]) + doubled;
+                }
+                return 0;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 90);
+    }
+
+    void dynamicTupleAndStrMapDiagnosticsAreStable()
+    {
+        auto badTupleIndex = runSource(QStringLiteral(R"(
+            fn int main() {
+                any t = [[1]];
+                any x = t["bad"];
+                return cast<int>(x);
+            }
+        )"));
+        QVERIFY(!badTupleIndex.diagnostics.isEmpty());
+        QCOMPARE(badTupleIndex.diagnostics.front().code, QStringLiteral("E0642"));
+        QVERIFY(badTupleIndex.diagnostics.front().message.contains(QStringLiteral("tuple index must be integer")));
+
+        auto tupleOutOfRange = runSource(QStringLiteral(R"(
+            fn int main() {
+                any t = [[1]];
+                any x = t[3];
+                return cast<int>(x);
+            }
+        )"));
+        QVERIFY(!tupleOutOfRange.diagnostics.isEmpty());
+        QCOMPARE(tupleOutOfRange.diagnostics.front().code, QStringLiteral("E0643"));
+        QVERIFY(tupleOutOfRange.diagnostics.front().message.contains(QStringLiteral("out of range")));
+
+        auto missingKey = runSource(QStringLiteral(R"(
+            fn int main() {
+                any m = [{"x" = 1}];
+                any y = m["missing"];
+                return cast<int>(y);
+            }
+        )"));
+        QVERIFY(!missingKey.diagnostics.isEmpty());
+        QCOMPARE(missingKey.diagnostics.front().code, QStringLiteral("E0645"));
+        QVERIFY(missingKey.diagnostics.front().message.contains(QStringLiteral("missing key")));
+    }
+
     void badAnyVectorDynamicIndexingReportsRuntimeError()
     {
         auto nonVector = runSource(QStringLiteral(R"(

@@ -70,6 +70,7 @@ private:
     std::unique_ptr<ExprNode> parsePostfix();
     void parseCallArguments(CallExprNode& call);
     std::unique_ptr<ExprNode> parsePrimary();
+    std::unique_ptr<ExprNode> parseBracketLiteral();
     std::unique_ptr<ExprNode> parseLambda();
 
     bool looksLikeType() const;

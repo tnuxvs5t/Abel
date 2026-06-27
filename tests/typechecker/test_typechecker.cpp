@@ -1404,6 +1404,57 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsDynamicTupleAndStrMapLiterals()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                any t = [[1, "x", true]];
+                any m = [{"name" = "Abel", "version" = 12, "tuple" = t}];
+                any nested = [[t, m, [{"inner" = [[1, 2]]}]]];
+                t[0] = 7;
+                m["version"] = 13;
+                return cast<int>(t[0]) + cast<int>(m["version"]);
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void acceptsGeneralizedPipeExpressions()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                any row = [{"name" = "Nitori", "score" = 40}];
+                int a = 3 |> _ + 4;
+                any pair = 5 |> [[_, _ + 1]];
+                any projected = row |> [{"name" = _["name"], "passed" = _["score"] >= 40}];
+                row |> (_["score"] = cast<int>(_["score"]) + 2);
+                int x = 10;
+                x |> (_ = _ + 5);
+                int doubled = x |> _ + _;
+                return a + cast<int>(pair[0]) + cast<int>(row["score"]);
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsDuplicateStrMapLiteralKeys()
+    {
+        auto result = checkSource(QStringLiteral(R"(
+            fn int main() {
+                any m = [{"x" = 1, "x" = 2}];
+                return 0;
+            }
+        )"));
+        QVERIFY(!result.diagnostics.isEmpty());
+        QVERIFY(countMessagesContaining(result, QStringLiteral("duplicate strmap key 'x'")) >= 1);
+    }
+
     void rejectsDebugBuiltinMisuse()
     {
         auto badCond = checkSource(QStringLiteral("fn int main() { debug_assert(1); return 0; }"));

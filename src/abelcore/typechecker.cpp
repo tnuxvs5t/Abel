@@ -62,6 +62,18 @@ int countPipeHoles(const ExprNode& expr)
             count += countPipeHoles(*value);
         return count;
     }
+    if (auto* tuple = dynamic_cast<const AnyTupleLiteralExprNode*>(&expr)) {
+        int count = 0;
+        for (const auto& value : tuple->values)
+            count += countPipeHoles(*value);
+        return count;
+    }
+    if (auto* map = dynamic_cast<const StrMapLiteralExprNode*>(&expr)) {
+        int count = 0;
+        for (const auto& entry : map->entries)
+            count += countPipeHoles(*entry.value);
+        return count;
+    }
     return 0;
 }
 
@@ -1950,6 +1962,8 @@ ExprType TypeChecker::checkExpr(const ExprNode& expr)
     if (auto* e = dynamic_cast<const LambdaExprNode*>(&expr)) return checkLambda(*e);
     if (auto* e = dynamic_cast<const FieldAccessExprNode*>(&expr)) return checkFieldAccess(*e);
     if (auto* e = dynamic_cast<const IndexExprNode*>(&expr)) return checkIndex(*e);
+    if (auto* e = dynamic_cast<const AnyTupleLiteralExprNode*>(&expr)) return checkAnyTupleLiteral(*e);
+    if (auto* e = dynamic_cast<const StrMapLiteralExprNode*>(&expr)) return checkStrMapLiteral(*e);
     if (dynamic_cast<const ThisExprNode*>(&expr)) {
         if (m_currentStruct.isEmpty())
             return errorExpr(expr.span, QStringLiteral("this is only available inside struct methods"));
@@ -2233,6 +2247,26 @@ ExprType TypeChecker::checkPipe(const BinaryExprNode& expr)
         ExprType out = checkExpr(*expr.rhs);
         m_pipeHoleExpr = previous;
         return out;
+    }
+    if (countPipeHoles(*expr.rhs) > 0) {
+        if (auto* call = dynamic_cast<CallExprNode*>(expr.rhs.get())) {
+            if (dynamic_cast<NameExprNode*>(call->callee.get()) || dynamic_cast<StaticAccessExprNode*>(call->callee.get())) {
+                // Keep v1.1 structured pipe calls on the old normalization path so named/default/spread
+                // and mutable-ref alias diagnostics stay identical.
+            } else {
+                const std::optional<ExprType> previous = m_pipeHoleExpr;
+                m_pipeHoleExpr = lhs;
+                ExprType out = checkExpr(*expr.rhs);
+                m_pipeHoleExpr = previous;
+                return out;
+            }
+        } else {
+            const std::optional<ExprType> previous = m_pipeHoleExpr;
+            m_pipeHoleExpr = lhs;
+            ExprType out = checkExpr(*expr.rhs);
+            m_pipeHoleExpr = previous;
+            return out;
+        }
     }
     if (auto* name = dynamic_cast<NameExprNode*>(expr.rhs.get()))
         return checkPipeTarget(name->name, name->span, lhs, {}, expr.span);
@@ -4423,6 +4457,28 @@ ExprType TypeChecker::checkInitListAgainst(const InitListExprNode& init, const A
             error(value->span, QStringLiteral("cannot put %1 into %2").arg(element.type.displayName(), target.displayName()));
     }
     return {target, ValueCategory::PRValue, false};
+}
+
+ExprType TypeChecker::checkAnyTupleLiteral(const AnyTupleLiteralExprNode& expr)
+{
+    for (const auto& value : expr.values)
+        checkExpr(*value);
+    return {makeType(TypeKind::Any), ValueCategory::PRValue, false};
+}
+
+ExprType TypeChecker::checkStrMapLiteral(const StrMapLiteralExprNode& expr)
+{
+    QSet<QString> seen;
+    for (const auto& entry : expr.entries) {
+        if (seen.contains(entry.key)) {
+            error(entry.keySpan, QStringLiteral("duplicate strmap key '%1'").arg(entry.key));
+        } else {
+            seen.insert(entry.key);
+        }
+        if (entry.value)
+            checkExpr(*entry.value);
+    }
+    return {makeType(TypeKind::Any), ValueCategory::PRValue, false};
 }
 
 void TypeChecker::checkParameterArgument(const AbelType& paramType,

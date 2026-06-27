@@ -475,6 +475,34 @@ private slots:
                 }
             )")
             << 25;
+
+        QTest::newRow("17_v12_hydraulic_dynamic_literals_and_pipe")
+            << QStringLiteral("v1.2 hydraulic dynamic literals + generalized pipe")
+            << QStringLiteral(R"(
+                struct Box {
+                    int value;
+                    init(int v) { value = v; }
+                }
+
+                fn int main() {
+                    any row = [{"name" = "Nitori", "score" = 39, "box" = Box(4)}];
+                    any pair = row |> [[_["name"], _["score"] + 3]];
+                    any projected = row |> [{"name" = _["name"], "ok" = _["score"] < 42}];
+                    row |> (_["score"] = cast<int>(_["score"]) + 3);
+                    int water = 2;
+                    water |> (_ = _ + _);
+                    Box b = cast<Box>(row["box"]);
+                    if (cast<str>(pair[0]) == "Nitori"
+                        && cast<int>(pair[1]) == 42
+                        && cast<bool>(projected["ok"])
+                        && any_is(row, "dynamic:strmap")
+                        && water == 4) {
+                        return cast<int>(row["score"]) + b.value + water;
+                    }
+                    return 0;
+                }
+            )")
+            << 50;
     }
 
     void heavyPrograms()

@@ -911,6 +911,8 @@ void Parser::parseCallArguments(CallExprNode& call)
 
 std::unique_ptr<ExprNode> Parser::parsePrimary()
 {
+    if (check(TokenKind::LBracket))
+        return parseBracketLiteral();
     if (match(TokenKind::Integer) || match(TokenKind::Float) || match(TokenKind::String) || match(TokenKind::Char)) {
         auto lit = std::make_unique<LiteralExprNode>();
         const Token& tok = previous();
@@ -971,6 +973,50 @@ std::unique_ptr<ExprNode> Parser::parsePrimary()
     dummy->kind = LiteralExprNode::Kind::Int;
     dummy->text = QStringLiteral("0");
     dummy->span = peek().span;
+    return dummy;
+}
+
+std::unique_ptr<ExprNode> Parser::parseBracketLiteral()
+{
+    const Token open = consume(TokenKind::LBracket, QStringLiteral("expected '['"));
+    if (match(TokenKind::LBracket)) {
+        auto tuple = std::make_unique<AnyTupleLiteralExprNode>();
+        const SourceSpan startSpan = open.span;
+        if (!check(TokenKind::RBracket)) {
+            do {
+                tuple->values.push_back(parseExpression());
+            } while (match(TokenKind::Comma));
+        }
+        consume(TokenKind::RBracket, QStringLiteral("expected ']' after anytuple literal"));
+        const Token close = consume(TokenKind::RBracket, QStringLiteral("expected ']' after anytuple literal"));
+        tuple->span = mergeSpans(startSpan, close.span);
+        return tuple;
+    }
+    if (match(TokenKind::LBrace)) {
+        auto map = std::make_unique<StrMapLiteralExprNode>();
+        const SourceSpan startSpan = open.span;
+        if (!check(TokenKind::RBrace)) {
+            do {
+                StrMapLiteralExprNode::Entry entry;
+                const Token key = consume(TokenKind::String, QStringLiteral("expected string literal key in strmap literal"));
+                entry.key = key.text;
+                entry.keySpan = key.span;
+                consume(TokenKind::Equal, QStringLiteral("expected '=' after strmap key"));
+                entry.value = parseExpression();
+                map->entries.push_back(std::move(entry));
+            } while (match(TokenKind::Comma));
+        }
+        consume(TokenKind::RBrace, QStringLiteral("expected '}' after strmap literal"));
+        const Token close = consume(TokenKind::RBracket, QStringLiteral("expected ']' after strmap literal"));
+        map->span = mergeSpans(startSpan, close.span);
+        return map;
+    }
+
+    errorAt(open, QStringLiteral("expected '[...]' anytuple or '[{...}]' strmap literal"));
+    auto dummy = std::make_unique<LiteralExprNode>();
+    dummy->kind = LiteralExprNode::Kind::Int;
+    dummy->text = QStringLiteral("0");
+    dummy->span = open.span;
     return dummy;
 }
 

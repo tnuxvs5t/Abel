@@ -413,6 +413,28 @@ private slots:
         QVERIFY(spreadCall->argSpreads[1]);
     }
 
+    void parsesDynamicTupleAndStrMapLiterals()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                any t = [[1, "x", true]];
+                any m = [{"name" = "Abel", "version" = 12, "ok" = true}];
+                any nested = [[t, m, [{"inner" = [[1, 2]]}]]];
+                return cast<int>(t[0]) + cast<int>(m["version"]);
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
+    }
+
     void parsesUserBinaryOperatorDeclaration()
     {
         const QString src = QStringLiteral(R"(

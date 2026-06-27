@@ -255,6 +255,8 @@ private:
                                     int totalPipeHoles = 0);
     ExprType checkIndex(const IndexExprNode& expr);
     ExprType checkInitListAgainst(const InitListExprNode& init, const AbelType& target);
+    ExprType checkAnyTupleLiteral(const AnyTupleLiteralExprNode& expr);
+    ExprType checkStrMapLiteral(const StrMapLiteralExprNode& expr);
     void checkParameterArgument(const AbelType& paramType,
                                 const ExprType& arg,
                                 const SourceSpan& argSpan,

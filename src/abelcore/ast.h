@@ -91,6 +91,19 @@ struct InitListExprNode final : ExprNode {
     std::vector<std::unique_ptr<ExprNode>> values;
 };
 
+struct AnyTupleLiteralExprNode final : ExprNode {
+    std::vector<std::unique_ptr<ExprNode>> values;
+};
+
+struct StrMapLiteralExprNode final : ExprNode {
+    struct Entry {
+        QString key;
+        SourceSpan keySpan;
+        std::unique_ptr<ExprNode> value;
+    };
+    std::vector<Entry> entries;
+};
+
 struct LambdaExprNode final : ExprNode {
     QString captureText;
     std::unique_ptr<TypeNode> returnType;

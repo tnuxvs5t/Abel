@@ -193,6 +193,8 @@ private:
     AbelValue evalUnary(const UnaryExprNode& expr);
     AbelValue evalCast(const CastExprNode& expr);
     AbelValue evalPipe(const BinaryExprNode& expr);
+    AbelValue evalAnyTupleLiteral(const AnyTupleLiteralExprNode& expr);
+    AbelValue evalStrMapLiteral(const StrMapLiteralExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);
     AbelValue evalStaticCall(const StaticAccessExprNode& callee,
                              const CallExprNode& call,

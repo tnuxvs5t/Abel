@@ -81,6 +81,18 @@ int countPipeHoles(const ExprNode& expr)
             count += countPipeHoles(*value);
         return count;
     }
+    if (auto* tuple = dynamic_cast<const AnyTupleLiteralExprNode*>(&expr)) {
+        int count = 0;
+        for (const auto& value : tuple->values)
+            count += countPipeHoles(*value);
+        return count;
+    }
+    if (auto* map = dynamic_cast<const StrMapLiteralExprNode*>(&expr)) {
+        int count = 0;
+        for (const auto& entry : map->entries)
+            count += countPipeHoles(*entry.value);
+        return count;
+    }
     return 0;
 }
 
@@ -3171,6 +3183,10 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
         return evalCall(*e);
     if (auto* e = dynamic_cast<const LambdaExprNode*>(&expr))
         return evalLambda(*e);
+    if (auto* e = dynamic_cast<const AnyTupleLiteralExprNode*>(&expr))
+        return evalAnyTupleLiteral(*e);
+    if (auto* e = dynamic_cast<const StrMapLiteralExprNode*>(&expr))
+        return evalStrMapLiteral(*e);
     if (auto* e = dynamic_cast<const IndexExprNode*>(&expr)) {
         AbelLocation* loc = evalLocation(*e);
         return loc ? loc->read() : AbelValue::makeUnknown();
@@ -3927,6 +3943,37 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
         m_pipeHoleTempLocation = previousPipeHoleTempLocation;
         return out;
     }
+    if (countPipeHoles(*expr.rhs) > 0) {
+        if (auto* call = dynamic_cast<CallExprNode*>(expr.rhs.get())) {
+            if (dynamic_cast<NameExprNode*>(call->callee.get()) || dynamic_cast<StaticAccessExprNode*>(call->callee.get())) {
+                // Keep v1.1 structured pipe calls on the old prepared-call path.
+            } else {
+                const bool previousHasPipeHoleArg = m_hasPipeHoleArg;
+                const PreparedCallArg previousPipeHoleArg = m_pipeHoleArg;
+                AbelLocation* const previousPipeHoleTempLocation = m_pipeHoleTempLocation;
+                m_hasPipeHoleArg = true;
+                m_pipeHoleArg = preparePipeHoleArg();
+                m_pipeHoleTempLocation = nullptr;
+                AbelValue out = evalExpr(*expr.rhs);
+                m_hasPipeHoleArg = previousHasPipeHoleArg;
+                m_pipeHoleArg = previousPipeHoleArg;
+                m_pipeHoleTempLocation = previousPipeHoleTempLocation;
+                return out;
+            }
+        } else {
+            const bool previousHasPipeHoleArg = m_hasPipeHoleArg;
+            const PreparedCallArg previousPipeHoleArg = m_pipeHoleArg;
+            AbelLocation* const previousPipeHoleTempLocation = m_pipeHoleTempLocation;
+            m_hasPipeHoleArg = true;
+            m_pipeHoleArg = preparePipeHoleArg();
+            m_pipeHoleTempLocation = nullptr;
+            AbelValue out = evalExpr(*expr.rhs);
+            m_hasPipeHoleArg = previousHasPipeHoleArg;
+            m_pipeHoleArg = previousPipeHoleArg;
+            m_pipeHoleTempLocation = previousPipeHoleTempLocation;
+            return out;
+        }
+    }
 
     QString targetName;
     const std::vector<std::unique_ptr<ExprNode>>* restArgs = nullptr;
@@ -4140,6 +4187,114 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
 
     error(QStringLiteral("E0595"), QStringLiteral("unknown pipe target '%1'").arg(targetName), expr.rhs->span);
     return AbelValue::makeUnknown();
+}
+
+AbelValue Interpreter::evalAnyTupleLiteral(const AnyTupleLiteralExprNode& expr)
+{
+    auto elements = std::make_shared<std::vector<AbelValue>>();
+    elements->reserve(expr.values.size());
+    for (const auto& value : expr.values) {
+        AbelValue evaluated = evalExpr(*value);
+        if (evaluated.type().kind == TypeKind::Unknown)
+            return AbelValue::makeUnknown();
+        elements->push_back(unboxAnyValue(evaluated));
+    }
+
+    auto object = std::make_shared<AbelDynamicObject>();
+    object->kind = QStringLiteral("tuple");
+    object->get = [elements](const AbelValue& key, AbelRuntimeContext& ctx, const SourceSpan& span) {
+        AbelValue rawKey = unboxAny(key);
+        if (!rawKey.type().isInteger()) {
+            ctx.error(QStringLiteral("E0642"),
+                      QStringLiteral("tuple index must be integer, got %1").arg(rawKey.type().displayName()),
+                      span);
+            return AbelValue::makeUnknown();
+        }
+        const qint64 index = rawKey.asInt();
+        if (index < 0 || static_cast<size_t>(index) >= elements->size()) {
+            ctx.error(QStringLiteral("E0643"),
+                      QStringLiteral("tuple index %1 out of range for length %2")
+                          .arg(index)
+                          .arg(elements->size()),
+                      span);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeAny((*elements)[static_cast<size_t>(index)]);
+    };
+    object->set = [elements](const AbelValue& key, const AbelValue& value, AbelRuntimeContext& ctx, const SourceSpan& span) {
+        AbelValue rawKey = unboxAny(key);
+        if (!rawKey.type().isInteger()) {
+            ctx.error(QStringLiteral("E0642"),
+                      QStringLiteral("tuple index must be integer, got %1").arg(rawKey.type().displayName()),
+                      span);
+            return;
+        }
+        const qint64 index = rawKey.asInt();
+        if (index < 0 || static_cast<size_t>(index) >= elements->size()) {
+            ctx.error(QStringLiteral("E0643"),
+                      QStringLiteral("tuple index %1 out of range for length %2")
+                          .arg(index)
+                          .arg(elements->size()),
+                      span);
+            return;
+        }
+        (*elements)[static_cast<size_t>(index)] = unboxAny(value);
+    };
+    object->equals = [object](const AbelValue& other, AbelRuntimeContext&, const SourceSpan&) -> std::optional<bool> {
+        return other.isDynamicObject() && other.asDynamicObject() == object;
+    };
+    object->debug = [elements] {
+        return QStringLiteral("<tuple len=%1>").arg(elements->size());
+    };
+    return AbelValue::makeDynamicObject(object);
+}
+
+AbelValue Interpreter::evalStrMapLiteral(const StrMapLiteralExprNode& expr)
+{
+    auto values = std::make_shared<QHash<QString, AbelValue>>();
+    for (const auto& entry : expr.entries) {
+        AbelValue evaluated = evalExpr(*entry.value);
+        if (evaluated.type().kind == TypeKind::Unknown)
+            return AbelValue::makeUnknown();
+        values->insert(entry.key, unboxAnyValue(evaluated));
+    }
+
+    auto object = std::make_shared<AbelDynamicObject>();
+    object->kind = QStringLiteral("strmap");
+    object->get = [values](const AbelValue& key, AbelRuntimeContext& ctx, const SourceSpan& span) {
+        AbelValue rawKey = unboxAny(key);
+        if (rawKey.type().kind != TypeKind::Str) {
+            ctx.error(QStringLiteral("E0644"),
+                      QStringLiteral("strmap key must be str, got %1").arg(rawKey.type().displayName()),
+                      span);
+            return AbelValue::makeUnknown();
+        }
+        auto found = values->constFind(rawKey.asString());
+        if (found == values->constEnd()) {
+            ctx.error(QStringLiteral("E0645"),
+                      QStringLiteral("strmap missing key '%1'").arg(rawKey.asString()),
+                      span);
+            return AbelValue::makeUnknown();
+        }
+        return AbelValue::makeAny(found.value());
+    };
+    object->set = [values](const AbelValue& key, const AbelValue& value, AbelRuntimeContext& ctx, const SourceSpan& span) {
+        AbelValue rawKey = unboxAny(key);
+        if (rawKey.type().kind != TypeKind::Str) {
+            ctx.error(QStringLiteral("E0644"),
+                      QStringLiteral("strmap key must be str, got %1").arg(rawKey.type().displayName()),
+                      span);
+            return;
+        }
+        values->insert(rawKey.asString(), unboxAny(value));
+    };
+    object->equals = [object](const AbelValue& other, AbelRuntimeContext&, const SourceSpan&) -> std::optional<bool> {
+        return other.isDynamicObject() && other.asDynamicObject() == object;
+    };
+    object->debug = [values] {
+        return QStringLiteral("<strmap len=%1>").arg(values->size());
+    };
+    return AbelValue::makeDynamicObject(object);
 }
 
 AbelValue Interpreter::evalUnary(const UnaryExprNode& expr)
@@ -5033,7 +5188,7 @@ AbelValue Interpreter::evalBuiltinMethod(const FieldAccessExprNode& callee,
 AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
 {
     auto* name = dynamic_cast<NameExprNode*>(expr.lhs.get());
-    if (name) {
+    if (name && !(name->name == QStringLiteral("_") && m_hasPipeHoleArg)) {
         VariableSlot* slot = m_ctx->lookupVariable(name->name);
         if (!slot) {
             error(QStringLiteral("E0527"), QStringLiteral("unknown variable '%1'").arg(name->name), expr.span);
