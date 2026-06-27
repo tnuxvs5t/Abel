@@ -243,6 +243,10 @@ private:
     std::optional<QString> stringifyValue(const AbelValue& value, const SourceSpan& span);
     void attachStringifier(BuiltinFunctionCall& call);
     std::optional<QString> readScanToken(const SourceSpan& span);
+    std::optional<AbelValue> dynamicCastValue(const AbelValue& value,
+                                              const AbelType& target,
+                                              const SourceSpan& span,
+                                              const QString& context = QString());
 
     bool isDeclInCurrentModule(const DeclNode& decl, const QString& packageName = QString()) const;
     bool isModuleImported(const QString& moduleName) const;

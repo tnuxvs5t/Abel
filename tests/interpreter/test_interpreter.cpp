@@ -1191,6 +1191,80 @@ private slots:
         QCOMPARE(result.exitCode, 1);
     }
 
+    void anyFunctionCastRestoresCallable()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int inc(int x) {
+                return x + 1;
+            }
+
+            fn int main() {
+                any f = inc;
+                func int(int) g = cast<func int(int)>(f);
+                return g(41);
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 42);
+    }
+
+    void badAnyFunctionCastReportsRuntimeError()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int inc(int x) {
+                return x + 1;
+            }
+
+            fn int main() {
+                any f = inc;
+                func int(str) bad = cast<func int(str)>(f);
+                return bad("x");
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.diagnostics.front().code, QStringLiteral("E0591"));
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("cannot cast any containing func")));
+        QCOMPARE(result.exitCode, 1);
+    }
+
+    void anyVectorCastConvertsElements()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<any> xs = {1, 2, 3};
+                any raw = xs;
+                vector<int> ys = cast<vector<int>>(raw);
+                return ys[0] + ys[1] + ys[2];
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 6);
+    }
+
+    void badAnyVectorCastReportsElementIndex()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<any> xs = {1, "bad", 3};
+                any raw = xs;
+                vector<int> ys = cast<vector<int>>(raw);
+                return ys.len();
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.diagnostics.front().code, QStringLiteral("E0591"));
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("vector element 1")));
+        QCOMPARE(result.exitCode, 1);
+    }
+
     void anyVariadicUserFunctionPacksArgs()
     {
         const QString src = QStringLiteral(R"(

@@ -1020,6 +1020,41 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsAnyFunctionCast()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int inc(int x) {
+                return x + 1;
+            }
+
+            fn int main() {
+                any f = inc;
+                func int(int) g = cast<func int(int)>(f);
+                return g(1);
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void acceptsAnyVectorCast()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                vector<any> xs = {1, 2, 3};
+                any raw = xs;
+                vector<int> ys = cast<vector<int>>(raw);
+                return ys[0];
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void acceptsPipeHolesForFunctionsAndFunctionValues()
     {
         const QString src = QStringLiteral(R"(

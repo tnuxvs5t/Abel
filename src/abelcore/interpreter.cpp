@@ -3524,14 +3524,8 @@ AbelValue Interpreter::evalCast(const CastExprNode& expr)
     const AbelType target = typeFromAstInCurrentPackage(*expr.targetType);
 
     if (source.type().kind == TypeKind::Any) {
-        const AbelValue inner = source.asAny()->value;
-        if (!canAssignValue(target, inner.type())) {
-            error(QStringLiteral("E0591"),
-                  QStringLiteral("cannot cast any containing %1 to %2").arg(inner.type().displayName(), target.displayName()),
-                  expr.span);
-            return AbelValue::makeUnknown();
-        }
-        return convertValue(inner, target);
+        auto converted = dynamicCastValue(source, target, expr.span);
+        return converted.value_or(AbelValue::makeUnknown());
     }
 
     if (!canAssignValue(target, source.type())) {
@@ -3539,6 +3533,54 @@ AbelValue Interpreter::evalCast(const CastExprNode& expr)
               QStringLiteral("cannot cast %1 to %2").arg(source.type().displayName(), target.displayName()),
               expr.expr->span);
         return AbelValue::makeUnknown();
+    }
+    return convertValue(source, target);
+}
+
+std::optional<AbelValue> Interpreter::dynamicCastValue(const AbelValue& value,
+                                                       const AbelType& target,
+                                                       const SourceSpan& span,
+                                                       const QString& context)
+{
+    const bool fromAny = value.type().kind == TypeKind::Any;
+    const AbelValue source = fromAny ? value.asAny()->value : value;
+
+    auto actualName = [&]() {
+        QString actual = fromAny
+            ? QStringLiteral("any containing %1").arg(source.type().displayName())
+            : source.type().displayName();
+        if (!context.isEmpty())
+            actual = QStringLiteral("%1 %2").arg(context, actual);
+        return actual;
+    };
+
+    if (target.kind == TypeKind::Vector && target.pointee) {
+        if (source.type().kind != TypeKind::Vector) {
+            error(QStringLiteral("E0591"),
+                  QStringLiteral("cannot cast %1 to %2").arg(actualName(), target.displayName()),
+                  span);
+            return std::nullopt;
+        }
+        const auto vector = source.asVector();
+        std::vector<AbelValue> elements;
+        elements.reserve(vector->elements.size());
+        for (size_t i = 0; i < vector->elements.size(); ++i) {
+            auto converted = dynamicCastValue(vector->elements[i],
+                                              *target.pointee,
+                                              span,
+                                              QStringLiteral("vector element %1").arg(i));
+            if (!converted)
+                return std::nullopt;
+            elements.push_back(std::move(*converted));
+        }
+        return AbelValue::makeVector(*target.pointee, std::move(elements));
+    }
+
+    if (!canAssignValue(target, source.type())) {
+        error(QStringLiteral("E0591"),
+              QStringLiteral("cannot cast %1 to %2").arg(actualName(), target.displayName()),
+              span);
+        return std::nullopt;
     }
     return convertValue(source, target);
 }
