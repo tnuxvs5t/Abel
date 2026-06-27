@@ -197,8 +197,6 @@ private:
                                        const std::vector<ExprType>& args,
                                        const std::vector<SourceSpan>& argSpans,
                                        const SourceSpan& span,
-                                       const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs = nullptr,
-                                       bool hasExplicitTypeArgs = false,
                                        const std::vector<bool>* pipeHoleArgs = nullptr);
     ExprType checkStructuredFunctionOverloadCall(const QString& displayName,
                                                  const QList<const FunctionDeclNode*>& candidates,

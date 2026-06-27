@@ -132,18 +132,14 @@ private:
     const FunctionDeclNode* selectFunctionOverload(const QString& displayName,
                                                    const QList<const FunctionDeclNode*>& candidates,
                                                    const std::vector<PreparedCallArg>& args,
-                                                   const SourceSpan& span,
-                                                   const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs = nullptr,
-                                                   bool hasExplicitTypeArgs = false);
+                                                   const SourceSpan& span);
     ExecResult callFunctionPrepared(const FunctionDeclNode& fn,
                                     const std::vector<PreparedCallArg>& args,
                                     const SourceSpan& span);
     ExecResult callFunctionOverloadExpr(const QString& displayName,
                                         const QList<const FunctionDeclNode*>& candidates,
                                         const std::vector<std::unique_ptr<ExprNode>>& args,
-                                        const SourceSpan& span,
-                                        const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs = nullptr,
-                                        bool hasExplicitTypeArgs = false);
+                                        const SourceSpan& span);
     ExecResult callStructuredFunctionOverloadExpr(const QString& displayName,
                                                   const QList<const FunctionDeclNode*>& candidates,
                                                   const CallExprNode& call);

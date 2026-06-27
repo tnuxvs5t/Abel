@@ -23,7 +23,6 @@ struct TypeNode : AstNode {
     bool isReference = false;
     std::unique_ptr<TypeNode> elementType; // vector<T> element or func return type
     std::vector<std::unique_ptr<TypeNode>> functionParamTypes;
-    std::vector<std::unique_ptr<TypeNode>> typeArguments; // parser recovery for retired named generic syntax
 
     QString displayName() const;
 };
@@ -65,8 +64,6 @@ struct CastExprNode final : ExprNode {
 
 struct CallExprNode final : ExprNode {
     std::unique_ptr<ExprNode> callee;
-    bool hasExplicitTypeArgs = false;
-    std::vector<std::unique_ptr<TypeNode>> explicitTypeArgs;
     std::vector<std::unique_ptr<ExprNode>> args;
     std::vector<QString> argNames; // empty for positional
     std::vector<bool> argSpreads;

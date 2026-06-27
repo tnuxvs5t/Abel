@@ -120,9 +120,6 @@ std::unique_ptr<TypeNode> cloneTypeNode(const TypeNode& node)
     out->functionParamTypes.reserve(node.functionParamTypes.size());
     for (const auto& param : node.functionParamTypes)
         out->functionParamTypes.push_back(cloneTypeNode(*param));
-    out->typeArguments.reserve(node.typeArguments.size());
-    for (const auto& arg : node.typeArguments)
-        out->typeArguments.push_back(cloneTypeNode(*arg));
     return out;
 }
 
@@ -1141,15 +1138,6 @@ AbelType Interpreter::typeFromAstInPackage(const TypeNode& node, const QString& 
         return applyTypeDecorations(base, node);
     }
 
-    if (!node.typeArguments.empty()) {
-        if (m_ctx)
-            m_ctx->error(QStringLiteral("E0584"),
-                         QStringLiteral("generic type syntax for '%1' is retired in v1.1-H; only vector<T>, func types, and cast<T>(x) remain")
-                             .arg(node.name),
-                         node.span);
-        return applyTypeDecorations(makeType(TypeKind::Unknown), node);
-    }
-
     if (const TypeAliasDeclNode* alias = resolveTypeAlias(node.name, packageName)) {
         const QString key = declarationQualifiedName(*alias, alias->name);
         if (m_resolvingTypeAliases.contains(key)) {
@@ -1832,15 +1820,8 @@ std::optional<int> Interpreter::scorePreparedArgument(const AbelType& paramType,
 const FunctionDeclNode* Interpreter::selectFunctionOverload(const QString& displayName,
                                                             const QList<const FunctionDeclNode*>& candidates,
                                                             const std::vector<PreparedCallArg>& args,
-                                                            const SourceSpan& span,
-                                                            const std::vector<std::unique_ptr<TypeNode>>*,
-                                                            bool hasExplicitTypeArgs)
+                                                            const SourceSpan& span)
 {
-    if (hasExplicitTypeArgs) {
-        error(QStringLiteral("E0544"), QStringLiteral("explicit type arguments are retired in v1.1-H"), span);
-        return nullptr;
-    }
-
     const FunctionDeclNode* singleOrdinary = nullptr;
     int ordinaryCount = 0;
     for (const FunctionDeclNode* fn : candidates) {
@@ -2022,9 +2003,7 @@ ExecResult Interpreter::callFunctionPrepared(const FunctionDeclNode& fn,
 ExecResult Interpreter::callFunctionOverloadExpr(const QString& displayName,
                                                  const QList<const FunctionDeclNode*>& candidates,
                                                  const std::vector<std::unique_ptr<ExprNode>>& args,
-                                                 const SourceSpan& span,
-                                                 const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
-                                                 bool hasExplicitTypeArgs)
+                                                 const SourceSpan& span)
 {
     std::vector<PreparedCallArg> prepared = prepareFunctionArgs(args);
     if (m_ctx->hasError())
@@ -2032,9 +2011,7 @@ ExecResult Interpreter::callFunctionOverloadExpr(const QString& displayName,
     const FunctionDeclNode* fn = selectFunctionOverload(displayName,
                                                         candidates,
                                                         prepared,
-                                                        span,
-                                                        explicitTypeArgs,
-                                                        hasExplicitTypeArgs);
+                                                        span);
     if (!fn)
         return ExecResult::returned(AbelValue::makeUnknown());
     return callFunctionPrepared(*fn, prepared, span);
@@ -2087,7 +2064,7 @@ ExecResult Interpreter::callStructuredFunctionOverloadPrepared(const QString& di
             ++ordinaryCount;
         }
     }
-    if (!call.hasExplicitTypeArgs && ordinaryCount == 1) {
+    if (ordinaryCount == 1) {
         NormalizedPreparedCallArgs normalized = normalizePreparedCallArgsForParams(*singleOrdinary,
                                                                                    displayName,
                                                                                    singleOrdinary->params,
@@ -2125,9 +2102,6 @@ ExecResult Interpreter::callStructuredFunctionOverloadPrepared(const QString& di
                                                                                    false,
                                                                                    rawPipeHoles);
         if (!normalized.ok)
-            continue;
-
-        if (call.hasExplicitTypeArgs)
             continue;
 
         const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
@@ -2215,7 +2189,7 @@ ExecResult Interpreter::callFunctionOverloadPipeExpr(const QString& displayName,
     std::vector<PreparedCallArg> prepared = prepareFunctionPipeArgs(firstArg, restArgs);
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
-    const FunctionDeclNode* fn = selectFunctionOverload(displayName, candidates, prepared, span, nullptr, false);
+    const FunctionDeclNode* fn = selectFunctionOverload(displayName, candidates, prepared, span);
     if (!fn)
         return ExecResult::returned(AbelValue::makeUnknown());
     return callFunctionPrepared(*fn, prepared, span);
@@ -2355,11 +2329,6 @@ ExecResult Interpreter::callStructFunctionOverloadExpr(const QString& displayNam
     }
 
     AbelValue receiver = self->read();
-    if (call.hasExplicitTypeArgs) {
-        error(QStringLiteral("E0579"), QStringLiteral("explicit type arguments are retired in v1.1-H"), span);
-        return ExecResult::returned(AbelValue::makeUnknown());
-    }
-
     std::vector<PreparedCallArg> rawArgs = prepareFunctionArgs(call.args);
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
@@ -3681,12 +3650,6 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
     auto makeSyntheticPipeCall = [&](const ExprNode* callee, const std::vector<PreparedCallArg>& prepared) {
         CallExprNode call;
         call.span = expr.span;
-        if (sourceCall) {
-            call.hasExplicitTypeArgs = sourceCall->hasExplicitTypeArgs;
-            call.explicitTypeArgs.reserve(sourceCall->explicitTypeArgs.size());
-            for (const auto& typeArg : sourceCall->explicitTypeArgs)
-                call.explicitTypeArgs.push_back(cloneTypeNode(*typeArg));
-        }
         if (callee) {
             call.callee = cloneCallableExprNode(*callee);
         } else {
@@ -3749,10 +3712,6 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
 
     if (sourceCall) {
         if (const TypeAliasDeclNode* alias = resolveTypeAlias(targetName, m_currentPackage)) {
-            if (sourceCall->hasExplicitTypeArgs) {
-                error(QStringLiteral("E0544"), QStringLiteral("explicit type arguments are retired in v1.1-H"), expr.span);
-                return AbelValue::makeUnknown();
-            }
             AbelType aliased = typeFromAstForDecl(*alias->targetType, *alias);
             if (aliased.kind != TypeKind::Struct) {
                 error(QStringLiteral("E0544"),
@@ -3777,10 +3736,6 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
             if (m_ctx->hasError())
                 return AbelValue::makeUnknown();
             CallExprNode call = makeSyntheticPipeCall(sourceCall->callee.get(), prepared);
-            if (sourceCall->hasExplicitTypeArgs) {
-                error(QStringLiteral("E0544"), QStringLiteral("explicit type arguments are retired in v1.1-H"), expr.span);
-                return AbelValue::makeUnknown();
-            }
             return evalStructConstructor(targetName, *info, call, nullptr, &prepared, &holeFlags);
         }
     }
@@ -3921,10 +3876,6 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         return AbelValue::makeUnknown();
     }
     if (const VariableSlot* slot = m_ctx->lookupVariable(name->name)) {
-        if (expr.hasExplicitTypeArgs) {
-            error(QStringLiteral("E0544"), QStringLiteral("explicit type arguments are retired in v1.1-H"), expr.span);
-            return AbelValue::makeUnknown();
-        }
         if (callHasStructuredArgs(expr)) {
             error(QStringLiteral("E0586"), QStringLiteral("function value calls only accept positional arguments"), expr.span);
             return AbelValue::makeUnknown();
@@ -3936,10 +3887,6 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
         return AbelValue::makeUnknown();
     }
     if (const TypeAliasDeclNode* alias = resolveTypeAlias(name->name, m_currentPackage)) {
-        if (expr.hasExplicitTypeArgs) {
-            error(QStringLiteral("E0544"), QStringLiteral("explicit type arguments are retired in v1.1-H"), expr.span);
-            return AbelValue::makeUnknown();
-        }
         AbelType aliased = typeFromAstForDecl(*alias->targetType, *alias);
         if (aliased.kind != TypeKind::Struct) {
             error(QStringLiteral("E0544"),
@@ -3956,10 +3903,6 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
     }
     if (const StructRuntimeInfo* info = resolveStruct(name->name))
     {
-        if (expr.hasExplicitTypeArgs) {
-            error(QStringLiteral("E0544"), QStringLiteral("explicit type arguments are retired in v1.1-H"), expr.span);
-            return AbelValue::makeUnknown();
-        }
         return evalStructConstructor(name->name, *info, expr);
     }
 
@@ -3970,10 +3913,6 @@ AbelValue Interpreter::evalCall(const CallExprNode& expr)
     }
 
     if (m_builtins.hasFunction(name->name)) {
-        if (expr.hasExplicitTypeArgs) {
-            error(QStringLiteral("E0544"), QStringLiteral("explicit type arguments are retired in v1.1-H"), expr.span);
-            return AbelValue::makeUnknown();
-        }
         if (callHasNamedArgs(expr)) {
             error(QStringLiteral("E0544"), QStringLiteral("builtin function calls do not support named arguments"), expr.span);
             return AbelValue::makeUnknown();

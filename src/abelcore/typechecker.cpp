@@ -101,9 +101,6 @@ std::unique_ptr<TypeNode> cloneTypeNode(const TypeNode& node)
     out->functionParamTypes.reserve(node.functionParamTypes.size());
     for (const auto& param : node.functionParamTypes)
         out->functionParamTypes.push_back(cloneTypeNode(*param));
-    out->typeArguments.reserve(node.typeArguments.size());
-    for (const auto& arg : node.typeArguments)
-        out->typeArguments.push_back(cloneTypeNode(*arg));
     return out;
 }
 
@@ -1487,14 +1484,6 @@ AbelType TypeChecker::typeFromAstInPackage(const TypeNode& node, const QString& 
         AbelType base = makeFunctionType(typeFromAstInPackage(*node.elementType, packageName, diagnose), std::move(params));
         return applyTypeDecorations(base, node);
     }
-    if (!node.typeArguments.empty()) {
-        if (diagnose)
-            error(node.span,
-                  QStringLiteral("generic type syntax for '%1' is retired in v1.1-H; only vector<T>, func types, and cast<T>(x) remain")
-                      .arg(node.name));
-        return applyTypeDecorations(makeType(TypeKind::Unknown), node);
-    }
-
     if (const TypeAliasDeclNode* alias = resolveTypeAlias(node.name, packageName, node.span, diagnose)) {
         const QString key = declarationQualifiedName(*alias, alias->name);
         if (m_resolvingTypeAliases.contains(key)) {
@@ -2304,8 +2293,6 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
 
     if (sourceCall) {
         if (const TypeAliasDeclNode* alias = resolveTypeAlias(name, m_currentPackage, nameSpan, false)) {
-            if (sourceCall->hasExplicitTypeArgs)
-                return errorExpr(span, QStringLiteral("explicit type arguments are retired in v1.1-H"));
             AbelType aliased = typeFromAstForDecl(*alias->targetType, *alias);
             if (aliased.kind != TypeKind::Struct)
                 return errorExpr(span, QStringLiteral("type alias '%1' does not name a constructible struct").arg(name));
@@ -2320,8 +2307,6 @@ ExprType TypeChecker::checkPipeTarget(const QString& name,
         if (const StructInfo* info = resolveStruct(name, nameSpan)) {
             auto built = buildPipeArgs(lhs, args, span, sourceCall);
             CallExprNode call = makeSyntheticPipeCall(sourceCall->callee.get(), sourceCall, built, span);
-            if (sourceCall->hasExplicitTypeArgs)
-                return errorExpr(span, QStringLiteral("explicit type arguments are retired in v1.1-H"));
             return checkStructConstructorCall(name, *info, call, nullptr, &built.checked, &built.holes);
         }
 
@@ -2585,12 +2570,6 @@ CallExprNode TypeChecker::makeSyntheticPipeCall(const ExprNode* callee,
 {
     CallExprNode call;
     call.span = span;
-    if (source) {
-        call.hasExplicitTypeArgs = source->hasExplicitTypeArgs;
-        call.explicitTypeArgs.reserve(source->explicitTypeArgs.size());
-        for (const auto& typeArg : source->explicitTypeArgs)
-            call.explicitTypeArgs.push_back(cloneTypeNode(*typeArg));
-    }
     if (callee) {
         call.callee = cloneCallableExprNode(*callee);
     } else {
@@ -2652,8 +2631,6 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
                                                 const std::vector<ExprType>& args,
                                                 const std::vector<SourceSpan>& argSpans,
                                                 const SourceSpan& span,
-                                                const std::vector<std::unique_ptr<TypeNode>>* explicitTypeArgs,
-                                                bool hasExplicitTypeArgs,
                                                 const std::vector<bool>* pipeHoleArgs)
 {
     Q_ASSERT(args.size() == argSpans.size());
@@ -2674,9 +2651,6 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
         if (!fn || fn->isOperator)
             continue;
         considered.push_back(fn);
-
-        if (hasExplicitTypeArgs)
-            continue;
 
         const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
         const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
@@ -2960,9 +2934,6 @@ ExprType TypeChecker::checkStructuredFunctionOverloadCallWithArgs(const QString&
         if (!normalized.ok)
             continue;
 
-        if (call.hasExplicitTypeArgs)
-            continue;
-
         const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
         const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
         int score = variadic ? 4 : 0;
@@ -3067,9 +3038,6 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
                                               const std::vector<bool>* rawPipeHoles,
                                               int totalPipeHoles)
 {
-    if (call.hasExplicitTypeArgs)
-        return errorExpr(span, QStringLiteral("explicit type arguments are retired in v1.1-H"));
-
     std::vector<ExprType> checked;
     checked.reserve(call.args.size());
     for (const auto& argExpr : call.args)
@@ -3341,8 +3309,6 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (const VariableInfo* variable = lookupVariable(name->name)) {
-        if (expr.hasExplicitTypeArgs)
-            return errorExpr(expr.span, QStringLiteral("explicit type arguments are retired in v1.1-H"));
         if (callHasStructuredArgs(expr))
             return errorExpr(expr.span, QStringLiteral("function value calls only accept positional arguments"));
         const AbelType calleeType = valueTypeOfVariable(variable->type);
@@ -3352,8 +3318,6 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (const TypeAliasDeclNode* alias = resolveTypeAlias(name->name, m_currentPackage, name->span, false)) {
-        if (expr.hasExplicitTypeArgs)
-            return errorExpr(expr.span, QStringLiteral("explicit type arguments are retired in v1.1-H"));
         AbelType aliased = typeFromAstForDecl(*alias->targetType, *alias);
         if (aliased.kind != TypeKind::Struct)
             return errorExpr(expr.span, QStringLiteral("type alias '%1' does not name a constructible struct").arg(name->name));
@@ -3364,8 +3328,6 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (const StructInfo* info = resolveStruct(name->name, name->span)) {
-        if (expr.hasExplicitTypeArgs)
-            return errorExpr(expr.span, QStringLiteral("explicit type arguments are retired in v1.1-H"));
         return checkStructConstructorCall(name->name, *info, expr);
     }
     if (m_structs.contains(name->name)) {
@@ -3375,8 +3337,6 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (m_functions.contains(name->name)) {
-        if (expr.hasExplicitTypeArgs)
-            return errorExpr(expr.span, QStringLiteral("explicit type arguments are retired in v1.1-H"));
         const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name->name, name->span);
         if (candidates.isEmpty())
             return unknownExprType();
@@ -3384,8 +3344,6 @@ ExprType TypeChecker::checkCall(const CallExprNode& expr)
     }
 
     if (m_builtins.hasFunction(name->name)) {
-        if (expr.hasExplicitTypeArgs)
-            return errorExpr(expr.span, QStringLiteral("explicit type arguments are retired in v1.1-H"));
         if (callHasNamedArgs(expr))
             return errorExpr(expr.span, QStringLiteral("builtin function calls do not support named arguments"));
         const bool spreadBuiltin = name->name == QStringLiteral("build_string")

@@ -974,14 +974,18 @@ std::unique_ptr<ExprNode> Parser::parsePostfix()
             auto call = std::make_unique<CallExprNode>();
             const SourceSpan startSpan = expr->span;
             call->callee = std::move(expr);
-            call->hasExplicitTypeArgs = true;
+            errorAt(peek(), QStringLiteral("explicit type arguments are retired in v1.1-H"));
             consume(TokenKind::Less, QStringLiteral("expected '<'"));
-            if (!check(TokenKind::Greater)) {
-                do {
-                    call->explicitTypeArgs.push_back(parseType());
-                } while (match(TokenKind::Comma));
+            int depth = 1;
+            while (!atEnd() && depth > 0) {
+                if (match(TokenKind::Less)) {
+                    ++depth;
+                } else if (match(TokenKind::Greater)) {
+                    --depth;
+                } else {
+                    ++m_pos;
+                }
             }
-            consume(TokenKind::Greater, QStringLiteral("expected '>' after explicit template arguments"));
             consume(TokenKind::LParen, QStringLiteral("expected '(' after explicit template arguments"));
             parseCallArguments(*call);
             const Token close = consume(TokenKind::RParen, QStringLiteral("expected ')'"));
