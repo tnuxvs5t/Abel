@@ -186,6 +186,19 @@ target_link_libraries(abel_interpreter_tests
 
 add_test(NAME abel_interpreter_tests COMMAND abel_interpreter_tests)
 
+add_executable(abel_complex_program_tests
+    tests/complex/test_complex_programs.cpp
+)
+
+target_link_libraries(abel_complex_program_tests
+    PRIVATE
+        abelcore
+        Qt6::Core
+        Qt6::Test
+)
+
+add_test(NAME abel_complex_program_tests COMMAND abel_complex_program_tests)
+
 add_executable(abel_builtin_tests
     tests/builtin/test_builtin_registry.cpp
 )
