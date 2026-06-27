@@ -1055,6 +1055,41 @@ private slots:
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsImplicitAnyCastsAtTargetTypedPositions()
+    {
+        const QString src = QStringLiteral(R"(
+            backend MathSystem {
+                fn int fast_add(int a, int b);
+            }
+
+            fn int take(int x) {
+                return x + 1;
+            }
+
+            fn int ret(any x) {
+                return x;
+            }
+
+            fn int main() {
+                any a = 5;
+                int x = a;
+                a = 6;
+                x = a;
+                int y = take(a);
+                int z = ret(a);
+                vector<any> xs = {1, 2};
+                any raw = xs;
+                vector<int> ys = raw;
+                int b = MathSystem::fast_add(a, 1);
+                return x + y + z + ys[1] + b;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void acceptsPipeHolesForFunctionsAndFunctionValues()
     {
         const QString src = QStringLiteral(R"(

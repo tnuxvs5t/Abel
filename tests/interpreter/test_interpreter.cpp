@@ -1265,6 +1265,56 @@ private slots:
         QCOMPARE(result.exitCode, 1);
     }
 
+    void implicitAnyCastsWorkAtTargetTypedRuntimePositions()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int take(int x) {
+                return x + 1;
+            }
+
+            fn int ret(any x) {
+                return x;
+            }
+
+            fn int main() {
+                any a = 5;
+                int x = a;
+                a = 6;
+                x = a;
+                int y = take(a);
+                int z = ret(a);
+                vector<any> xs = {1, 2};
+                any raw = xs;
+                vector<int> ys = raw;
+                return x + y + z + ys[1];
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 21);
+    }
+
+    void badImplicitAnyCastReportsRuntimeError()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int take(int x) {
+                return x;
+            }
+
+            fn int main() {
+                any bad = "bad";
+                return take(bad);
+            }
+        )");
+        auto result = runSource(src);
+        QVERIFY(!result.diagnostics.isEmpty());
+        QCOMPARE(result.diagnostics.front().code, QStringLiteral("E0591"));
+        QVERIFY(result.diagnostics.front().message.contains(QStringLiteral("any containing str")));
+        QCOMPARE(result.exitCode, 1);
+    }
+
     void anyVariadicUserFunctionPacksArgs()
     {
         const QString src = QStringLiteral(R"(

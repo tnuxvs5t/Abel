@@ -4642,6 +4642,8 @@ bool TypeChecker::requireBackendVisible(const BackendBlockNode& backend, const S
 
 bool TypeChecker::isAssignable(const AbelType& target, const AbelType& source) const
 {
+    if (!target.isReference() && source.kind == TypeKind::Any)
+        return true;
     return canAssignValue(target, source);
 }
 

@@ -1812,6 +1812,8 @@ std::optional<int> Interpreter::scorePreparedArgument(const AbelType& paramType,
         referred.isConst = false;
         return referred == arg.value.type() ? 1 : 2;
     }
+    if (arg.value.type().kind == TypeKind::Any)
+        return paramType.kind == TypeKind::Any ? 0 : 3;
     if (!canAssignValue(paramType, arg.value.type()))
         return std::nullopt;
     return paramType == arg.value.type() ? 0 : 1;
@@ -4988,6 +4990,10 @@ AbelValue Interpreter::convertOrError(const AbelValue& value, const AbelType& ta
         error(QStringLiteral("E0530"), QStringLiteral("unsupported target type '%1'").arg(target.displayName()), span);
         return AbelValue::makeUnknown();
     }
+    if (!target.isReference() && value.type().kind == TypeKind::Any) {
+        auto converted = dynamicCastValue(value, target, span);
+        return converted.value_or(AbelValue::makeUnknown());
+    }
     if (!canAssignValue(target, value.type())) {
         error(QStringLiteral("E0531"),
               QStringLiteral("cannot assign %1 to %2").arg(value.type().displayName(), target.displayName()),
@@ -5023,6 +5029,8 @@ std::optional<int> Interpreter::scoreValueArgument(const AbelType& paramType, co
         referred.isConst = false;
         return referred == arg.type() ? 1 : 2;
     }
+    if (arg.type().kind == TypeKind::Any)
+        return paramType.kind == TypeKind::Any ? 0 : 3;
     if (!canAssignValue(paramType, arg.type()))
         return std::nullopt;
     return paramType == arg.type() ? 0 : 1;
