@@ -25,7 +25,8 @@ export function activate(context: vscode.ExtensionContext) {
     };
 
     client = new LanguageClient('abel-lsp', 'Abel Language Server', serverOptions, clientOptions);
-    context.subscriptions.push(client.start());
+    context.subscriptions.push(client);
+    client.start();
 }
 
 export function deactivate(): Thenable<void> | undefined {

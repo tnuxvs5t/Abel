@@ -14,4 +14,6 @@ build/
 *.log
 core
 core.*
-
+vscode/abel-vscode/node_modules/
+vscode/abel-vscode/out/
+vscode/abel-vscode/*.vsix
