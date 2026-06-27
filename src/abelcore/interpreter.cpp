@@ -1920,6 +1920,8 @@ ExecResult Interpreter::callFunctionPrepared(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeUnknown());
     }
 
+    RuntimeFrameGuard frame(*m_ctx, true, functionFrameSymbol(fn), span);
+
     struct BoundArg {
         AbelValue value;
         AbelLocation* location = nullptr;
@@ -1970,7 +1972,6 @@ ExecResult Interpreter::callFunctionPrepared(const FunctionDeclNode& fn,
     if (m_ctx->hasError())
         return ExecResult::returned(AbelValue::makeUnknown());
 
-    RuntimeFrameGuard frame(*m_ctx, true, functionFrameSymbol(fn), span);
     for (size_t i = 0; i < fixedCount; ++i) {
         const ParameterNode& p = *fn.params[i];
         if (bound[i].byReference)
@@ -2000,6 +2001,100 @@ ExecResult Interpreter::callFunctionPrepared(const FunctionDeclNode& fn,
         return ExecResult::returned(AbelValue::makeVoid());
     error(QStringLiteral("E0543"), QStringLiteral("function '%1' ended without return").arg(fn.name), fn.span);
     return ExecResult::returned(AbelValue::makeUnknown());
+}
+
+AbelValue Interpreter::invokeFunctionValueRaw(const AbelValue& fnValue,
+                                              const std::vector<AbelValue>& args,
+                                              AbelRuntimeContext& ctx,
+                                              const SourceSpan& span)
+{
+    struct ContextRestore {
+        AbelRuntimeContext*& slot;
+        AbelRuntimeContext* saved;
+        ~ContextRestore() { slot = saved; }
+    } restore{m_ctx, m_ctx};
+    m_ctx = &ctx;
+
+    if (fnValue.type().kind != TypeKind::Function || !fnValue.type().pointee) {
+        ctx.error(QStringLiteral("E0580"), QStringLiteral("callee is not a function value"), span);
+        return AbelValue::makeUnknown();
+    }
+    auto function = fnValue.asFunction();
+    if (!function) {
+        ctx.error(QStringLiteral("E0581"), QStringLiteral("invalid function value"), span);
+        return AbelValue::makeUnknown();
+    }
+    if (args.size() != fnValue.type().params.size()) {
+        ctx.error(QStringLiteral("E0582"), QStringLiteral("function value called with wrong argument count"), span);
+        return AbelValue::makeUnknown();
+    }
+
+    std::vector<PreparedCallArg> prepared(args.size());
+    for (size_t i = 0; i < args.size(); ++i) {
+        prepared[i].value = args[i];
+        prepared[i].span = span;
+    }
+    if (function->function)
+        return callFunctionPrepared(*function->function, prepared, span).value;
+
+    if (!function->lambda || !function->lambda->ownedBody) {
+        ctx.error(QStringLiteral("E0581"), QStringLiteral("invalid function value"), span);
+        return AbelValue::makeUnknown();
+    }
+
+    std::vector<AbelValue> values(args.size());
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (fnValue.type().params[i].isReference()) {
+            ctx.error(QStringLiteral("E0583"),
+                      QStringLiteral("backend callable argument cannot bind reference parameter %1").arg(i),
+                      span);
+            continue;
+        }
+        values[i] = convertOrError(args[i], fnValue.type().params[i], span);
+    }
+    if (ctx.hasError())
+        return AbelValue::makeUnknown();
+
+    const LambdaExprNode& lambda = *function->lambda;
+    DeclContextGuard context(m_currentPackage,
+                             m_currentModule,
+                             m_currentImports,
+                             m_currentImportAliases,
+                             function->packageName,
+                             function->moduleName,
+                             function->importedModules,
+                             function->importedModuleAliases);
+    CurrentStructGuard structGuard(m_currentStruct, function->currentStruct);
+    RuntimeFrameGuard frame(ctx, true, lambdaFrameSymbol(), span);
+    for (auto it = function->valueCaptures.constBegin(); it != function->valueCaptures.constEnd(); ++it)
+        ctx.defineValueVariable(it.key(), it.value(), true, lambda.span);
+    for (auto it = function->refCaptures.constBegin(); it != function->refCaptures.constEnd(); ++it)
+        ctx.defineVariable(it.key(), it.value(), function->refConstness.value(it.key(), false), true, lambda.span);
+    for (size_t i = 0; i < args.size(); ++i) {
+        const QString& name = lambda.paramNames[static_cast<qsizetype>(i)];
+        ctx.defineValueVariable(name,
+                                values[i],
+                                isReadOnlyBinding(fnValue.type().params[i], fnValue.type().params[i].isConst),
+                                lambda.span);
+    }
+    if (ctx.hasError())
+        return AbelValue::makeUnknown();
+
+    ExecResult flow = execBlock(*lambda.ownedBody);
+    if (ctx.hasError())
+        return AbelValue::makeUnknown();
+
+    const AbelType& returnType = *fnValue.type().pointee;
+    if (flow.kind == FlowKind::Return)
+        return convertOrError(flow.value, returnType, flow.span);
+    if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
+        ctx.error(QStringLiteral("E0584"), QStringLiteral("break/continue cannot leave lambda"), lambda.span);
+        return AbelValue::makeUnknown();
+    }
+    if (returnType.kind == TypeKind::Void)
+        return AbelValue::makeVoid();
+    ctx.error(QStringLiteral("E0585"), QStringLiteral("lambda ended without return"), lambda.span);
+    return AbelValue::makeUnknown();
 }
 
 ExecResult Interpreter::callFunctionOverloadExpr(const QString& displayName,
@@ -4279,7 +4374,18 @@ AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)
 
     if (m_ctx->hasError())
         return AbelValue::makeUnknown();
-    return AbelValue::makeFunction(makeFunctionType(returnType, std::move(params)), std::move(function));
+    AbelType type = makeFunctionType(returnType, std::move(params));
+    AbelValue value = AbelValue::makeFunction(type, function);
+    std::weak_ptr<AbelFunctionValue> weakFunction = function;
+    function->invoke = [this, type, weakFunction](const std::vector<AbelValue>& args, AbelRuntimeContext& ctx, const SourceSpan& span) {
+        auto locked = weakFunction.lock();
+        if (!locked) {
+            ctx.error(QStringLiteral("E0581"), QStringLiteral("invalid function value"), span);
+            return AbelValue::makeUnknown();
+        }
+        return invokeFunctionValueRaw(AbelValue::makeFunction(type, locked), args, ctx, span);
+    };
+    return value;
 }
 
 AbelValue Interpreter::makeFunctionValue(const FunctionDeclNode& fn)
@@ -4296,7 +4402,18 @@ AbelValue Interpreter::makeFunctionValue(const FunctionDeclNode& fn)
     function->currentStruct.clear();
     function->importedModules = fn.importedModules;
     function->importedModuleAliases = fn.importedModuleAliases;
-    return AbelValue::makeFunction(makeFunctionType(typeFromAstForDecl(*fn.returnType, fn), std::move(params)), std::move(function));
+    AbelType type = makeFunctionType(typeFromAstForDecl(*fn.returnType, fn), std::move(params));
+    AbelValue value = AbelValue::makeFunction(type, function);
+    std::weak_ptr<AbelFunctionValue> weakFunction = function;
+    function->invoke = [this, type, weakFunction](const std::vector<AbelValue>& args, AbelRuntimeContext& ctx, const SourceSpan& span) {
+        auto locked = weakFunction.lock();
+        if (!locked) {
+            ctx.error(QStringLiteral("E0581"), QStringLiteral("invalid function value"), span);
+            return AbelValue::makeUnknown();
+        }
+        return invokeFunctionValueRaw(AbelValue::makeFunction(type, locked), args, ctx, span);
+    };
+    return value;
 }
 
 AbelValue Interpreter::evalStructConstructor(const QString& name,

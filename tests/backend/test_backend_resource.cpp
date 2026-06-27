@@ -267,6 +267,154 @@ private slots:
         QVERIFY(ctx.diagnostics().front().message.contains(QStringLiteral("test object")));
     }
 
+    void backendBinderDescribesAndRejectsCallableArguments()
+    {
+        auto fn = [](abel::AbelCallable f, int x, abel::AbelRuntimeContext& ctx) {
+            return f.call({abel::AbelValue::makeInt(x)}, ctx);
+        };
+        auto desc = abel::AbelBackendBinder::describe(QStringLiteral("Dyn.call_int"), fn);
+        QCOMPARE(desc.returnType.kind, abel::TypeKind::Any);
+        QCOMPARE(desc.params.size(), static_cast<size_t>(2));
+        QCOMPARE(desc.params[0].kind, abel::TypeKind::Any);
+        QCOMPARE(desc.params[1].kind, abel::TypeKind::I32);
+
+        abel::AbelRuntimeContext ctx;
+        auto runtime = abel::AbelBackendBinder::bind(fn);
+        QList<abel::AbelValue> args{
+            abel::AbelValue::makeInt(1),
+            abel::AbelValue::makeInt(2),
+        };
+        auto value = runtime(args, ctx);
+        QCOMPARE(value.type().kind, abel::TypeKind::Unknown);
+        QVERIFY(ctx.hasError());
+        QCOMPARE(ctx.diagnostics().front().code, QStringLiteral("E0621"));
+        QVERIFY(ctx.diagnostics().front().message.contains(QStringLiteral("expects callable")));
+    }
+
+    void backendCanCallAbelFunctionValue()
+    {
+        abel::BackendRegistry registry;
+        QVERIFY(registry.registerFunction({
+            QStringLiteral("Dyn"),
+            QStringLiteral("call_int"),
+            abel::makeType(abel::TypeKind::Any),
+            {abel::makeType(abel::TypeKind::Any), abel::makeType(abel::TypeKind::I32)},
+            false,
+        }));
+        auto runtime = abel::AbelBackendBinder::bind([](abel::AbelCallable f, int x, abel::AbelRuntimeContext& ctx) {
+            return f.call({abel::AbelValue::makeInt(x)}, ctx);
+        });
+        QVERIFY(registry.bindFunction(QStringLiteral("Dyn"),
+                                      QStringLiteral("call_int"),
+                                      [runtime](const abel::BackendCall& call, abel::AbelRuntimeContext& ctx) mutable {
+                                          QList<abel::AbelValue> args;
+                                          args.reserve(static_cast<qsizetype>(call.args.size()));
+                                          for (const auto& arg : call.args)
+                                              args.push_back(arg);
+                                          return runtime(args, ctx);
+                                      }));
+
+        const QString src = QStringLiteral(R"(
+            backend Dyn {
+                fn any call_int(any f, int x);
+            }
+
+            fn int inc(int x) {
+                return x + 1;
+            }
+
+            fn int main() {
+                any f = inc;
+                any y = Dyn::call_int(f, 41);
+                int base = 5;
+                func int(int) add_base = lambda [base] int(int x) {
+                    return x + base;
+                };
+                any g = add_base;
+                any z = Dyn::call_int(g, 10);
+                return cast<int>(y) + cast<int>(z);
+            }
+        )");
+
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<callable-backend-test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+
+        abel::Interpreter interpreter;
+        auto result = interpreter.run(*parsed.program, &registry);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 57);
+    }
+
+    void backendCallableDiagnosticsKeepStackFrames()
+    {
+        abel::BackendRegistry registry;
+        QVERIFY(registry.registerFunction({
+            QStringLiteral("Dyn"),
+            QStringLiteral("call_str"),
+            abel::makeType(abel::TypeKind::Any),
+            {abel::makeType(abel::TypeKind::Any), abel::makeType(abel::TypeKind::Str)},
+            false,
+        }));
+        auto runtime = abel::AbelBackendBinder::bind([](abel::AbelCallable f, QString s, abel::AbelRuntimeContext& ctx) {
+            return f.call({abel::AbelValue::makeString(s)}, ctx);
+        });
+        QVERIFY(registry.bindFunction(QStringLiteral("Dyn"),
+                                      QStringLiteral("call_str"),
+                                      [runtime](const abel::BackendCall& call, abel::AbelRuntimeContext& ctx) mutable {
+                                          QList<abel::AbelValue> args;
+                                          args.reserve(static_cast<qsizetype>(call.args.size()));
+                                          for (const auto& arg : call.args)
+                                              args.push_back(arg);
+                                          return runtime(args, ctx);
+                                      }));
+
+        const QString src = QStringLiteral(R"(
+            backend Dyn {
+                fn any call_str(any f, str s);
+            }
+
+            fn int inc(int x) {
+                return x + 1;
+            }
+
+            fn int main() {
+                any f = inc;
+                any y = Dyn::call_str(f, "bad");
+                return cast<int>(y);
+            }
+        )");
+
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<callable-diagnostic-test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        QVERIFY(parsed.diagnostics.isEmpty());
+
+        abel::Interpreter interpreter;
+        auto result = interpreter.run(*parsed.program, &registry);
+        QVERIFY(!result.diagnostics.isEmpty());
+        const auto& diagnostic = result.diagnostics.front();
+        bool sawBackend = false;
+        bool sawFunction = false;
+        for (const auto& frame : diagnostic.stackTrace) {
+            sawBackend = sawBackend || frame.symbol == QStringLiteral("backend Dyn::call_str");
+            sawFunction = sawFunction || frame.symbol == QStringLiteral("fn inc");
+        }
+        QVERIFY(sawBackend);
+        QVERIFY(sawFunction);
+    }
+
     void parsesValidResourceNodeJson()
     {
         const QString text = QStringLiteral(R"({

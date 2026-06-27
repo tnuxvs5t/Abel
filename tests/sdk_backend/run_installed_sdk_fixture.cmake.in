@@ -30,6 +30,7 @@ file(WRITE "${PROJECT_DIR}/abel.package.json" [=[
         "guard",
         "join",
         "count",
+        "call_int",
         "map_create",
         "map_len",
         "map_contains",
@@ -49,11 +50,16 @@ backend SdkSystem {
     fn int guard(int x);
     fn str join(any... args);
     fn int count(any... args);
+    fn any call_int(any f, int x);
     fn long map_create();
     fn int map_len(long h);
     fn bool map_contains(long h, any key);
     fn void map_set(long h, any key, any value);
     fn any map_get(long h, any key);
+}
+
+fn int inc(int x) {
+    return x + 1;
 }
 
 fn int main() {
@@ -79,11 +85,13 @@ fn int main() {
     } else {
         map_bonus = 100;
     }
+    any f = inc;
     return SdkSystem::add(cs.len(), cast<int>(SdkSystem::sum_i64(xs)))
         + SdkSystem::guard(0)
         + joined_bonus
         + SdkSystem::count("S", 4, false)
-        + map_bonus;
+        + map_bonus
+        + cast<int>(SdkSystem::call_int(f, 40));
 }
 ]=])
 
@@ -107,6 +115,6 @@ execute_process(
     OUTPUT_VARIABLE run_output
     ERROR_VARIABLE run_error
 )
-if (NOT run_result EQUAL 29)
-    message(FATAL_ERROR "installed abel run expected exit 29, got ${run_result}:\n${run_output}\n${run_error}")
+if (NOT run_result EQUAL 70)
+    message(FATAL_ERROR "installed abel run expected exit 70, got ${run_result}:\n${run_output}\n${run_error}")
 endif()

@@ -44,6 +44,9 @@ public:
         bindVariadic(QStringLiteral("SdkSystem.count"), [](std::vector<abel::AbelValue> args) {
             return static_cast<int>(args.size());
         });
+        bind(QStringLiteral("SdkSystem.call_int"), [](abel::AbelCallable f, int x, abel::AbelRuntimeContext& ctx) {
+            return f.call({abel::AbelValue::makeInt(x)}, ctx);
+        });
         bind(QStringLiteral("SdkSystem.map_create"), [this]() -> qint64 {
             return m_maps.create();
         });

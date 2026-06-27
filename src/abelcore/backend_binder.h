@@ -64,6 +64,59 @@ private:
     QList<AbelValue> m_values;
 };
 
+class AbelCallable {
+public:
+    AbelCallable() = default;
+    explicit AbelCallable(AbelValue value)
+        : m_value(std::move(value))
+    {
+    }
+
+    bool valid() const
+    {
+        auto function = callableFunction();
+        return function && function->invoke;
+    }
+
+    const AbelType& type() const
+    {
+        return callableValue().type();
+    }
+
+    AbelValue value() const
+    {
+        return callableValue();
+    }
+
+    AbelValue call(const std::vector<AbelValue>& args, AbelRuntimeContext& ctx, const SourceSpan& span = {}) const
+    {
+        auto function = callableFunction();
+        if (!function || !function->invoke) {
+            ctx.error(QStringLiteral("E0625"), QStringLiteral("invalid Abel callable"), span);
+            return AbelValue::makeUnknown();
+        }
+        return function->invoke(args, ctx, span);
+    }
+
+private:
+    const AbelValue& callableValue() const
+    {
+        if (m_value.type().kind == TypeKind::Any)
+            return m_value.asAny()->value;
+        return m_value;
+    }
+
+    AbelValue::FunctionPtr callableFunction() const
+    {
+        const AbelValue& value = callableValue();
+        if (value.type().kind != TypeKind::Function)
+            return {};
+        return value.asFunction();
+    }
+
+    AbelValue m_value = AbelValue::makeUnknown();
+};
+
 class AbelBackendBinder {
 public:
     using Runtime = std::function<AbelValue(QList<AbelValue>&, AbelRuntimeContext&)>;
@@ -270,6 +323,8 @@ private:
             return makeType(TypeKind::Char);
         } else if constexpr (std::is_same_v<Bare, QString>) {
             return makeType(TypeKind::Str);
+        } else if constexpr (std::is_same_v<Bare, AbelCallable>) {
+            return makeType(TypeKind::Any);
         } else if constexpr (std::is_same_v<Bare, AbelValue>) {
             return makeType(TypeKind::Any);
         } else {
@@ -345,6 +400,8 @@ private:
             return value.asChar().toLatin1();
         } else if constexpr (std::is_same_v<Bare, QString>) {
             return value.asString();
+        } else if constexpr (std::is_same_v<Bare, AbelCallable>) {
+            return AbelCallable(value);
         } else if constexpr (std::is_same_v<Bare, AbelValue>) {
             return value;
         } else {
@@ -358,6 +415,8 @@ private:
         using Bare = std::remove_cvref_t<T>;
         if constexpr (std::is_same_v<Bare, AbelValue>) {
             return std::forward<T>(value);
+        } else if constexpr (std::is_same_v<Bare, AbelCallable>) {
+            return value.value();
         } else if constexpr (std::is_same_v<Bare, bool>) {
             return AbelValue::makeBool(value);
         } else if constexpr (std::is_same_v<Bare, qint8>) {
@@ -476,6 +535,14 @@ private:
                 stringValue = value.asString();
             } else if constexpr (std::is_same_v<Bare, AbelValue>) {
                 valueValue = value;
+            } else if constexpr (std::is_same_v<Bare, AbelCallable>) {
+                callableValue = AbelCallable(value);
+                if (!callableValue.valid()) {
+                    ctx.error(QStringLiteral("E0621"),
+                              QStringLiteral("backend argument %1 expects callable").arg(index),
+                              {});
+                    return;
+                }
             } else if constexpr (IsStdVector<Bare>::value) {
                 using Element = typename IsStdVector<Bare>::Element;
                 const AbelType elementType = nativeScalarType<Element>();
@@ -536,6 +603,11 @@ private:
                     return static_cast<T>(valueValue);
                 else
                     return valueValue;
+            } else if constexpr (std::is_same_v<Bare, AbelCallable>) {
+                if constexpr (std::is_lvalue_reference_v<T>)
+                    return static_cast<T>(callableValue);
+                else
+                    return callableValue;
             } else if constexpr (IsStdVector<Bare>::value) {
                 return static_cast<T>(vectorValue);
             } else {
@@ -579,6 +651,7 @@ private:
         char char8Value = '\0';
         QString stringValue;
         AbelValue valueValue = AbelValue::makeUnknown();
+        AbelCallable callableValue;
         VectorStorage vectorValue;
         AbelValue::VectorPtr sourceVector;
     };

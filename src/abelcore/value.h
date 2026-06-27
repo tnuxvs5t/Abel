@@ -7,6 +7,7 @@
 #include <QList>
 #include <QString>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <variant>
@@ -14,11 +15,13 @@
 
 namespace abel {
 
+struct SourceSpan;
 struct AbelLocation;
 struct AbelVectorValue;
 struct AbelAnyValue;
 struct AbelStructValue;
 struct AbelFunctionValue;
+class AbelRuntimeContext;
 struct FunctionDeclNode;
 struct LambdaExprNode;
 
@@ -109,6 +112,8 @@ struct AbelStructValue {
 };
 
 struct AbelFunctionValue {
+    using Invoke = std::function<AbelValue(const std::vector<AbelValue>&, AbelRuntimeContext&, const SourceSpan&)>;
+
     const LambdaExprNode* lambda = nullptr;
     const FunctionDeclNode* function = nullptr;
     QString packageName;
@@ -119,6 +124,7 @@ struct AbelFunctionValue {
     QHash<QString, AbelValue> valueCaptures;
     QHash<QString, AbelLocation*> refCaptures;
     QHash<QString, bool> refConstness;
+    Invoke invoke;
 };
 
 AbelValue defaultValueForType(const AbelType& type);

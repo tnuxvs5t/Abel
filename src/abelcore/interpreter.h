@@ -136,6 +136,10 @@ private:
     ExecResult callFunctionPrepared(const FunctionDeclNode& fn,
                                     const std::vector<PreparedCallArg>& args,
                                     const SourceSpan& span);
+    AbelValue invokeFunctionValueRaw(const AbelValue& fnValue,
+                                     const std::vector<AbelValue>& args,
+                                     AbelRuntimeContext& ctx,
+                                     const SourceSpan& span);
     ExecResult callFunctionOverloadExpr(const QString& displayName,
                                         const QList<const FunctionDeclNode*>& candidates,
                                         const std::vector<std::unique_ptr<ExprNode>>& args,
