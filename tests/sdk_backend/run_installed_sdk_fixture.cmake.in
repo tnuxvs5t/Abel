@@ -101,6 +101,20 @@ fn int main() {
     } else {
         dynamic_bonus = 100;
     }
+    any row = [{"name" = "Nitori", "score" = 39}];
+    any pair = row |> [[_["name"], _["score"] + 3]];
+    row |> (_["score"] = cast<int>(_["score"]) + 3);
+    int hydraulic_bonus = 0;
+    if (cast<str>(pair[0]) == "Nitori"
+        && cast<int>(pair[1]) == 42
+        && cast<int>(row["score"]) == 42
+        && any_is(row, "dynamic:strmap")
+        && any_is(pair, "dynamic:tuple")
+        && SdkSystem::count(row, pair, "water") == 3) {
+        hydraulic_bonus = 17;
+    } else {
+        hydraulic_bonus = 100;
+    }
     return SdkSystem::add(cs.len(), cast<int>(SdkSystem::sum_i64(xs)))
         + SdkSystem::guard(0)
         + joined_bonus
@@ -108,7 +122,8 @@ fn int main() {
         + map_bonus
         + cast<int>(SdkSystem::call_int(f, 40))
         + cast<int>(da + db)
-        + dynamic_bonus;
+        + dynamic_bonus
+        + hydraulic_bonus;
 }
 ]=])
 
@@ -132,8 +147,8 @@ execute_process(
     OUTPUT_VARIABLE run_output
     ERROR_VARIABLE run_error
 )
-if (NOT run_result EQUAL 85)
-    message(FATAL_ERROR "installed abel run expected exit 85, got ${run_result}:\n${run_output}\n${run_error}")
+if (NOT run_result EQUAL 102)
+    message(FATAL_ERROR "installed abel run expected exit 102, got ${run_result}:\n${run_output}\n${run_error}")
 endif()
 
 file(WRITE "${PROJECT_DIR}/src/main.abel" [=[

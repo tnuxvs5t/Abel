@@ -1335,3 +1335,67 @@ string(FIND "${fixture_bad_signature_stderr}" "test fixture 'setup' must be decl
 if(fixture_bad_signature_pos EQUAL -1)
     message(FATAL_ERROR "abel test did not diagnose bad setup signature:\n${fixture_bad_signature_stdout}\n${fixture_bad_signature_stderr}")
 endif()
+
+set(waterworks_project_dir "@CMAKE_BINARY_DIR@/cli-multifile-project-waterworks")
+file(REMOVE_RECURSE "${waterworks_project_dir}")
+file(MAKE_DIRECTORY "${waterworks_project_dir}/src/lib")
+
+file(WRITE "${waterworks_project_dir}/abel.package.json" [=[
+{
+  "name": "cli-multifile-project-waterworks",
+  "version": "0.1.0",
+  "entry": "src/main.abel"
+}
+]=])
+
+file(WRITE "${waterworks_project_dir}/src/lib/water.abel" [=[
+module cli.lib.water;
+
+export fn any row(str name, int score) {
+    return [{"name" = name, "score" = score}];
+}
+
+export fn any pair(any r) {
+    return r |> [[_["name"], _["score"] + 3]];
+}
+]=])
+
+file(WRITE "${waterworks_project_dir}/src/main.abel" [=[
+module cli.main;
+use cli.lib.water as Water;
+
+fn int main() {
+    any row = Water::row("Nitori", 39);
+    any pair = Water::pair(row);
+    row |> (_["score"] = cast<int>(_["score"]) + 3);
+    str name = cast<str>(pair[0]);
+    if (name == "Nitori"
+        && cast<int>(pair[1]) == 42
+        && cast<int>(row["score"]) == 42
+        && any_is(row, "dynamic:strmap")
+        && any_is(pair, "dynamic:tuple")) {
+        return name.len() + cast<int>(row["score"]) - 4;
+    }
+    return 1;
+}
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" check "${waterworks_project_dir}"
+    RESULT_VARIABLE waterworks_check_result
+    OUTPUT_VARIABLE waterworks_check_stdout
+    ERROR_VARIABLE waterworks_check_stderr
+)
+if(NOT waterworks_check_result EQUAL 0)
+    message(FATAL_ERROR "abel check rejected v1.2 waterworks project:\n${waterworks_check_stdout}\n${waterworks_check_stderr}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_BINARY_DIR@/abel" run "${waterworks_project_dir}"
+    RESULT_VARIABLE waterworks_run_result
+    OUTPUT_VARIABLE waterworks_run_stdout
+    ERROR_VARIABLE waterworks_run_stderr
+)
+if(NOT waterworks_run_result EQUAL 44)
+    message(FATAL_ERROR "abel run expected waterworks project exit code 44, got ${waterworks_run_result}:\n${waterworks_run_stdout}\n${waterworks_run_stderr}")
+endif()

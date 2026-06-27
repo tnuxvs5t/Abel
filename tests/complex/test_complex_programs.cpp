@@ -503,6 +503,173 @@ private slots:
                 }
             )")
             << 50;
+
+        QTest::newRow("18_v12_nested_hydraulic_routes")
+            << QStringLiteral("v1.2 nested tuple/strmap routes")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any flow = [[
+                        [{"name" = "alpha", "v" = 5}],
+                        [{"name" = "beta", "v" = 7}]
+                    ]];
+                    any first = flow[0];
+                    first["v"] = cast<int>(first["v"]) + 10;
+                    any out = flow |> [[_[0]["name"], _[1]["v"], _[0]["v"] + _[1]["v"]]];
+                    if (cast<str>(out[0]) == "alpha") {
+                        return cast<int>(out[1]) + cast<int>(out[2]);
+                    }
+                    return 0;
+                }
+            )")
+            << 29;
+
+        QTest::newRow("19_v12_struct_payload_in_strmap")
+            << QStringLiteral("v1.2 strmap carries struct payload")
+            << QStringLiteral(R"(
+                struct Gate {
+                    int bias;
+                    init(int b) { bias = b; }
+                    const fn int push(int x) { return x + bias; }
+                }
+
+                fn int main() {
+                    any row = [{"x" = 10, "gate" = Gate(6)}];
+                    Gate g = cast<Gate>(row["gate"]);
+                    row["x"] = g.push(cast<int>(row["x"]));
+                    any pair = row |> [[_["x"], _["x"] * 2]];
+                    return cast<int>(pair[0]) + cast<int>(pair[1]);
+                }
+            )")
+            << 48;
+
+        QTest::newRow("20_v12_vector_of_dynamic_rows")
+            << QStringLiteral("v1.2 vector<any> dynamic rows")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any a = [{"n" = "a", "s" = 3}];
+                    any b = [{"n" = "b", "s" = 5}];
+                    any c = [{"n" = "c", "s" = 7}];
+                    vector<any> rows = {a, b, c};
+                    int sum = 0;
+                    for (r in rows) {
+                        sum = sum + cast<int>(r["s"]);
+                    }
+                    str name = cast<str>(rows[2]["n"]);
+                    return sum + name.len();
+                }
+            )")
+            << 16;
+
+        QTest::newRow("21_v12_pipe_projection_record")
+            << QStringLiteral("v1.2 generalized pipe projects record")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any row = [{"name" = "kappa", "score" = 37}];
+                    any projected = row |> [{"label" = build_string(_["name"], ":", _["score"]), "ok" = _["score"] >= 37}];
+                    int bonus = 0;
+                    if (cast<bool>(projected["ok"])) {
+                        bonus = 10;
+                    }
+                    str label = cast<str>(projected["label"]);
+                    return label.len() + bonus;
+                }
+            )")
+            << 18;
+
+        QTest::newRow("22_v12_callback_inside_tuple")
+            << QStringLiteral("v1.2 tuple carries callback")
+            << QStringLiteral(R"(
+                fn int add2(int x) { return x + 2; }
+
+                fn int apply(any packet, int x) {
+                    func int(int) f = cast<func int(int)>(packet[0]);
+                    return f(x) + cast<int>(packet[1]);
+                }
+
+                fn int main() {
+                    any packet = [[add2, 5]];
+                    return apply(packet, 35);
+                }
+            )")
+            << 42;
+
+        QTest::newRow("23_v12_pipe_writeback_from_tuple")
+            << QStringLiteral("v1.2 pipe assignment writes lvalue from dynamic tuple")
+            << QStringLiteral(R"(
+                fn int main() {
+                    int x = 4;
+                    any t = [[x, x + 1]];
+                    t[0] = 10;
+                    x |> (_ = cast<int>(t[0]) + cast<int>(t[1]));
+                    return x;
+                }
+            )")
+            << 15;
+
+        QTest::newRow("24_v12_strmap_set_new_key_and_tuple_set")
+            << QStringLiteral("v1.2 strmap set and tuple set")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any m = [{"a" = 1}];
+                    m["b"] = 2;
+                    any t = [[m["a"], m["b"]]];
+                    t[1] = cast<int>(t[1]) + 20;
+                    return cast<int>(t[0]) + cast<int>(t[1]);
+                }
+            )")
+            << 23;
+
+        QTest::newRow("25_v12_dynamic_identity_and_debug")
+            << QStringLiteral("v1.2 dynamic identity equality and debug")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any t = [[1]];
+                    any same = t;
+                    any other = [[1]];
+                    int ok = 0;
+                    if (t == same) {
+                        ok = ok + 10;
+                    }
+                    if (t != other) {
+                        ok = ok + 20;
+                    }
+                    if (any_debug(t) == "<tuple len=1>") {
+                        ok = ok + 3;
+                    }
+                    return ok;
+                }
+            )")
+            << 33;
+
+        QTest::newRow("26_v12_dynamic_type_dispatch")
+            << QStringLiteral("v1.2 any_type/any_is on nested water objects")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any m = [{"tuple" = [[2, 3]], "tag" = "x"}];
+                    any t = m["tuple"];
+                    if (any_type(m) == "dynamic:strmap" && any_is(t, "dynamic:tuple")) {
+                        return cast<int>(t[0]) * 10 + cast<int>(t[1]);
+                    }
+                    return 0;
+                }
+            )")
+            << 23;
+
+        QTest::newRow("27_v12_old_and_new_pipe_mix")
+            << QStringLiteral("v1.2 old callable pipe and generalized pipe coexist")
+            << QStringLiteral(R"(
+                fn int inc(int x, int by = 1) { return x + by; }
+                fn int count(any... xs) { return xs.len(); }
+
+                fn int main() {
+                    vector<any> tail = {1, 2};
+                    int a = 3 |> inc(x: _, by: 4);
+                    int b = tail |> count("head", ..._);
+                    any packet = a |> [[_, b, _ + b]];
+                    return cast<int>(packet[0]) + cast<int>(packet[1]) + cast<int>(packet[2]);
+                }
+            )")
+            << 20;
     }
 
     void heavyPrograms()
@@ -630,6 +797,67 @@ private slots:
                 }
             )")
             << QStringLiteral("not visible");
+
+        QTest::newRow("25_v12_tuple_bad_index_type")
+            << QStringLiteral("v1.2 tuple bad index type")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any t = [[1, 2]];
+                    return cast<int>(t["bad"]);
+                }
+            )")
+            << QStringLiteral("tuple index must be integer");
+
+        QTest::newRow("26_v12_tuple_index_out_of_range")
+            << QStringLiteral("v1.2 tuple index out of range")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any t = [[1]];
+                    return cast<int>(t[9]);
+                }
+            )")
+            << QStringLiteral("out of range");
+
+        QTest::newRow("27_v12_strmap_bad_key_type")
+            << QStringLiteral("v1.2 strmap bad key type")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any m = [{"x" = 1}];
+                    return cast<int>(m[0]);
+                }
+            )")
+            << QStringLiteral("strmap key must be str");
+
+        QTest::newRow("28_v12_strmap_missing_key")
+            << QStringLiteral("v1.2 strmap missing key")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any m = [{"x" = 1}];
+                    return cast<int>(m["missing"]);
+                }
+            )")
+            << QStringLiteral("missing key");
+
+        QTest::newRow("29_v12_strmap_requires_literal_key")
+            << QStringLiteral("v1.2 strmap literal key must be string literal")
+            << QStringLiteral(R"(
+                fn int main() {
+                    str k = "x";
+                    any m = [{k = 1}];
+                    return 0;
+                }
+            )")
+            << QStringLiteral("expected string literal key");
+
+        QTest::newRow("30_v12_strmap_duplicate_key")
+            << QStringLiteral("v1.2 strmap duplicate key")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any m = [{"x" = 1, "x" = 2}];
+                    return 0;
+                }
+            )")
+            << QStringLiteral("duplicate strmap key");
     }
 
     void cornerPrograms()
