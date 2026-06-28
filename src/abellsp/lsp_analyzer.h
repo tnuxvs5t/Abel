@@ -102,6 +102,11 @@ public:
                        const QString& newName,
                        const QHash<QString, QString>& openDocuments,
                        const QString& workspaceRoot = {}) const;
+    QJsonObject prepareRename(const QString& filePath,
+                              int zeroBasedLine,
+                              int zeroBasedCharacter,
+                              const QHash<QString, QString>& openDocuments,
+                              const QString& workspaceRoot = {}) const;
 
 private:
     struct ParsedProgram {

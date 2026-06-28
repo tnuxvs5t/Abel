@@ -51,7 +51,9 @@ QJsonObject nullResultCapabilities()
     capabilities.insert(QStringLiteral("referencesProvider"), true);
     capabilities.insert(QStringLiteral("documentHighlightProvider"), true);
     capabilities.insert(QStringLiteral("foldingRangeProvider"), true);
-    capabilities.insert(QStringLiteral("renameProvider"), true);
+    QJsonObject renameProvider;
+    renameProvider.insert(QStringLiteral("prepareProvider"), true);
+    capabilities.insert(QStringLiteral("renameProvider"), renameProvider);
 
     QJsonObject semanticTokensProvider;
     QJsonObject legend;
@@ -249,6 +251,15 @@ QJsonObject Server::handleRequest(const QJsonObject& message, const QString& met
                                    params.value(QStringLiteral("newName")).toString(),
                                    m_openDocuments,
                                    m_workspaceRoot);
+    } else if (method == QStringLiteral("textDocument/prepareRename")) {
+        const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
+        const QJsonObject position = params.value(QStringLiteral("position")).toObject();
+        const QJsonObject prepared = m_analyzer.prepareRename(path,
+                                                              position.value(QStringLiteral("line")).toInt(),
+                                                              position.value(QStringLiteral("character")).toInt(),
+                                                              m_openDocuments,
+                                                              m_workspaceRoot);
+        result = prepared.isEmpty() ? QJsonValue() : QJsonValue(prepared);
     } else {
         result = QJsonValue();
     }

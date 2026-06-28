@@ -1527,4 +1527,55 @@ QJsonObject Analyzer::rename(const QString& filePath,
     return workspaceEdit;
 }
 
+QJsonObject Analyzer::prepareRename(const QString& filePath,
+                                    int zeroBasedLine,
+                                    int zeroBasedCharacter,
+                                    const QHash<QString, QString>& openDocuments,
+                                    const QString& workspaceRoot) const
+{
+    const QString abs = QFileInfo(filePath).absoluteFilePath();
+    const AnalyzerResult analyzed = analyzeFile(abs, openDocuments, workspaceRoot);
+    if (!analyzed.analysis)
+        return {};
+
+    SourceSpan target;
+    QString placeholder;
+    const int oneBasedLine = zeroBasedLine + 1;
+    const int oneBasedColumn = zeroBasedCharacter + 1;
+    if (const AnalysisBinding* binding = analyzed.analysis->bindingAt(abs, oneBasedLine, oneBasedColumn)) {
+        if (const AnalysisSymbol* symbol = analyzed.analysis->symbolById(binding->symbol)) {
+            target = binding->use;
+            placeholder = symbol->name;
+        }
+    } else {
+        for (const AnalysisSymbol& symbol : analyzed.analysis->symbols()) {
+            if (!containsPosition(symbol.declaration, abs, zeroBasedLine, zeroBasedCharacter))
+                continue;
+            QList<Diagnostic> declarationLexDiagnostics;
+            const QList<SourceSpan> declarationNameSpans = tokenSpansInFile(symbol.declaration.file,
+                                                                            symbol.name,
+                                                                            openDocuments,
+                                                                            declarationLexDiagnostics);
+            for (const SourceSpan& span : declarationNameSpans) {
+                if (!containsPosition(symbol.declaration, span.file, span.startLine - 1, span.startColumn - 1))
+                    continue;
+                if (!containsPosition(span, abs, zeroBasedLine, zeroBasedCharacter))
+                    continue;
+                target = span;
+                placeholder = symbol.name;
+                break;
+            }
+            break;
+        }
+    }
+
+    if (target.file.isEmpty() || placeholder.isEmpty())
+        return {};
+
+    QJsonObject prepared;
+    prepared.insert(QStringLiteral("range"), rangeFromSpan(target));
+    prepared.insert(QStringLiteral("placeholder"), placeholder);
+    return prepared;
+}
+
 } // namespace abel::lsp

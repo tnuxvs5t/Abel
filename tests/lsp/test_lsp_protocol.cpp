@@ -179,6 +179,14 @@ private slots:
                                  .value(QStringLiteral("line")).toInt();
             QVERIFY(line == 5 || line == 6);
         }
+
+        const QJsonObject prepared = analyzer.prepareRename(filePath, 6, 12, openDocs);
+        QCOMPARE(prepared.value(QStringLiteral("placeholder")).toString(), QStringLiteral("local"));
+        QCOMPARE(prepared.value(QStringLiteral("range")).toObject()
+                     .value(QStringLiteral("start")).toObject()
+                     .value(QStringLiteral("line")).toInt(),
+                 6);
+        QVERIFY(analyzer.prepareRename(filePath, 4, 1, openDocs).isEmpty());
     }
 
     void analyzesPackageWithOpenOverlay()
@@ -246,7 +254,8 @@ private slots:
         QCOMPARE(capabilities.value(QStringLiteral("definitionProvider")).toBool(), true);
         QCOMPARE(capabilities.value(QStringLiteral("workspaceSymbolProvider")).toBool(), true);
         QCOMPARE(capabilities.value(QStringLiteral("referencesProvider")).toBool(), true);
-        QCOMPARE(capabilities.value(QStringLiteral("renameProvider")).toBool(), true);
+        QCOMPARE(capabilities.value(QStringLiteral("renameProvider")).toObject()
+                     .value(QStringLiteral("prepareProvider")).toBool(), true);
         QCOMPARE(capabilities.value(QStringLiteral("documentHighlightProvider")).toBool(), true);
         QCOMPARE(capabilities.value(QStringLiteral("foldingRangeProvider")).toBool(), true);
         QVERIFY(capabilities.value(QStringLiteral("signatureHelpProvider")).toObject()
