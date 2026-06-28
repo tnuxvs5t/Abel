@@ -35,6 +35,44 @@
         "path": "./syntaxes/abel.tmLanguage.json"
       }
     ],
+    "semanticTokenScopes": [
+      {
+        "language": "abel",
+        "scopes": {
+          "keyword": [
+            "keyword.control.abel",
+            "keyword.declaration.abel"
+          ],
+          "type": [
+            "entity.name.type.abel",
+            "storage.type.abel"
+          ],
+          "function": [
+            "entity.name.function.abel"
+          ],
+          "variable": [
+            "variable.other.readwrite.abel"
+          ],
+          "property": [
+            "variable.other.property.abel"
+          ],
+          "string": [
+            "string.quoted.double.abel"
+          ],
+          "number": [
+            "constant.numeric.abel"
+          ],
+          "operator": [
+            "keyword.operator.abel"
+          ]
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "[abel]": {
+        "editor.semanticHighlighting.enabled": true
+      }
+    },
     "configuration": {
       "title": "Abel",
       "properties": {
