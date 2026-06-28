@@ -17,6 +17,36 @@ bool isSourceLocationBuiltinName(const QString& name)
         || name == QStringLiteral("__COLUMN__");
 }
 
+QString analysisParamsDisplay(const std::vector<std::unique_ptr<ParameterNode>>& params)
+{
+    QStringList parts;
+    for (const auto& param : params) {
+        QString part;
+        if (param->variadic)
+            part += QStringLiteral("...");
+        part += param->type ? param->type->displayName() : QStringLiteral("<unknown>");
+        if (!param->name.isEmpty())
+            part += QStringLiteral(" ") + param->name;
+        if (param->defaultValue)
+            part += QStringLiteral(" = ...");
+        parts.push_back(part);
+    }
+    return parts.join(QStringLiteral(", "));
+}
+
+QString analysisFunctionDisplay(const FunctionDeclNode& fn, const QString& prefix = {})
+{
+    const QString returnType = fn.returnType ? fn.returnType->displayName() : QStringLiteral("void");
+    const QString name = fn.isOperator ? QStringLiteral("operator %1").arg(fn.operatorSymbol) : fn.name;
+    return QStringLiteral("%1fn %2 %3(%4)")
+        .arg(prefix, returnType, name, analysisParamsDisplay(fn.params));
+}
+
+QString analysisConstructorDisplay(const ConstructorDeclNode& ctor)
+{
+    return QStringLiteral("init(%1)").arg(analysisParamsDisplay(ctor.params));
+}
+
 bool isPipeHoleExpr(const ExprNode& expr)
 {
     auto* name = dynamic_cast<const NameExprNode*>(&expr);
@@ -715,6 +745,11 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program, const TypeCheckOp
 {
     m_options = options;
     m_analysis = m_options.collectAnalysis ? std::make_shared<AnalysisIndex>() : nullptr;
+    m_analysisFunctionSymbols.clear();
+    m_analysisStructSymbols.clear();
+    m_analysisFieldSymbols.clear();
+    m_analysisConstructorSymbols.clear();
+    m_analysisBackendSymbols.clear();
     m_functions.clear();
     m_functionDecls.clear();
     m_enums.clear();
@@ -783,7 +818,7 @@ void TypeChecker::collectAnalysisDeclarationSymbols(const ProgramNode& program)
                    const QString& detail,
                    const SourceSpan& span,
                    const QString& container = {},
-                   const AbelType& type = makeType(TypeKind::Unknown)) {
+                   const AbelType& type = makeType(TypeKind::Unknown)) -> AnalysisSymbolId {
         AnalysisSymbol symbol;
         symbol.kind = kind;
         symbol.name = name;
@@ -792,7 +827,7 @@ void TypeChecker::collectAnalysisDeclarationSymbols(const ProgramNode& program)
         symbol.type = type;
         symbol.declaration = span;
         symbol.scope = span;
-        m_analysis->addSymbol(std::move(symbol));
+        return m_analysis->addSymbol(std::move(symbol));
     };
 
     for (const auto& decl : program.declarations) {
@@ -805,25 +840,47 @@ void TypeChecker::collectAnalysisDeclarationSymbols(const ProgramNode& program)
             for (const auto& param : fn->params)
                 params.push_back(typeFromAstForDecl(*param->type, *fn));
             const AbelType fnType = makeFunctionType(typeFromAstForDecl(*fn->returnType, *fn), std::move(params));
-            add(AnalysisSymbolKind::Function, name, fnType.displayName(), fn->span, fn->moduleName, fnType);
+            const AnalysisSymbolId id = add(AnalysisSymbolKind::Function, name, analysisFunctionDisplay(*fn), fn->span, fn->moduleName, fnType);
+            m_analysisFunctionSymbols.insert(fn, id);
         } else if (auto* s = dynamic_cast<StructDeclNode*>(decl.get())) {
-            add(AnalysisSymbolKind::Struct, s->name, QStringLiteral("struct %1").arg(s->name), s->span, s->moduleName, makeStructType(s->name));
-            for (const auto& field : s->fields)
-                add(AnalysisSymbolKind::Field,
-                    field->name,
-                    field->type ? field->type->displayName() : QStringLiteral("<unknown>"),
-                    field->span,
-                    s->name,
-                    field->type ? typeFromAstForDecl(*field->type, *s) : makeType(TypeKind::Unknown));
-            for (const auto& ctor : s->constructors)
-                add(AnalysisSymbolKind::Constructor, QStringLiteral("init"), QStringLiteral("init"), ctor->span, s->name, makeStructType(s->name));
+            const AnalysisSymbolId structId = add(AnalysisSymbolKind::Struct,
+                                                  s->name,
+                                                  QStringLiteral("struct %1").arg(s->name),
+                                                  s->span,
+                                                  s->moduleName,
+                                                  makeStructType(s->name));
+            m_analysisStructSymbols.insert(s, structId);
+            for (const auto& field : s->fields) {
+                const AnalysisSymbolId id = add(AnalysisSymbolKind::Field,
+                                                field->name,
+                                                field->type ? field->type->displayName() : QStringLiteral("<unknown>"),
+                                                field->span,
+                                                s->name,
+                                                field->type ? typeFromAstForDecl(*field->type, *s) : makeType(TypeKind::Unknown));
+                m_analysisFieldSymbols.insert(field.get(), id);
+            }
+            for (const auto& ctor : s->constructors) {
+                const AnalysisSymbolId id = add(AnalysisSymbolKind::Constructor,
+                                                QStringLiteral("init"),
+                                                analysisConstructorDisplay(*ctor),
+                                                ctor->span,
+                                                s->name,
+                                                makeStructType(s->name));
+                m_analysisConstructorSymbols.insert(ctor.get(), id);
+            }
             for (const auto& method : s->methods) {
                 std::vector<AbelType> params;
                 params.reserve(method->params.size());
                 for (const auto& param : method->params)
                     params.push_back(typeFromAstForDecl(*param->type, *method));
                 const AbelType methodType = makeFunctionType(typeFromAstForDecl(*method->returnType, *method), std::move(params));
-                add(AnalysisSymbolKind::Method, method->name, methodType.displayName(), method->span, s->name, methodType);
+                const AnalysisSymbolId id = add(AnalysisSymbolKind::Method,
+                                                method->name,
+                                                analysisFunctionDisplay(*method),
+                                                method->span,
+                                                s->name,
+                                                methodType);
+                m_analysisFunctionSymbols.insert(method.get(), id);
             }
         } else if (auto* e = dynamic_cast<EnumDeclNode*>(decl.get())) {
             add(AnalysisSymbolKind::Enum, e->name, QStringLiteral("enum %1").arg(e->name), e->span, e->moduleName, makeType(TypeKind::I32, e->name));
@@ -835,14 +892,25 @@ void TypeChecker::collectAnalysisDeclarationSymbols(const ProgramNode& program)
                 alias->moduleName,
                 alias->targetType ? typeFromAstForDecl(*alias->targetType, *alias) : makeType(TypeKind::Unknown));
         } else if (auto* backend = dynamic_cast<BackendBlockNode*>(decl.get())) {
-            add(AnalysisSymbolKind::Backend, backend->name, QStringLiteral("backend %1").arg(backend->name), backend->span, backend->moduleName);
+            const AnalysisSymbolId backendId = add(AnalysisSymbolKind::Backend,
+                                                   backend->name,
+                                                   QStringLiteral("backend %1").arg(backend->name),
+                                                   backend->span,
+                                                   backend->moduleName);
+            m_analysisBackendSymbols.insert(backend, backendId);
             for (const auto& fn : backend->functions) {
                 std::vector<AbelType> params;
                 params.reserve(fn->params.size());
                 for (const auto& param : fn->params)
                     params.push_back(typeFromAstForDecl(*param->type, *fn));
                 const AbelType fnType = makeFunctionType(typeFromAstForDecl(*fn->returnType, *fn), std::move(params));
-                add(AnalysisSymbolKind::BackendFunction, fn->name, fnType.displayName(), fn->span, backend->name, fnType);
+                const AnalysisSymbolId id = add(AnalysisSymbolKind::BackendFunction,
+                                                fn->name,
+                                                analysisFunctionDisplay(*fn, QStringLiteral("backend ")),
+                                                fn->span,
+                                                backend->name,
+                                                fnType);
+                m_analysisFunctionSymbols.insert(fn.get(), id);
             }
         }
     }
@@ -871,6 +939,41 @@ void TypeChecker::recordAnalysisBinding(const SourceSpan& use, AnalysisSymbolId 
     binding.symbol = symbol;
     binding.kind = kind;
     m_analysis->addBinding(std::move(binding));
+}
+
+void TypeChecker::recordAnalysisFunctionBinding(const SourceSpan& use, const FunctionDeclNode* fn, AnalysisBindingKind kind)
+{
+    if (!m_analysis || !fn)
+        return;
+    recordAnalysisBinding(use, m_analysisFunctionSymbols.value(fn, 0), kind);
+}
+
+void TypeChecker::recordAnalysisConstructorBinding(const SourceSpan& use, const ConstructorDeclNode* ctor)
+{
+    if (!m_analysis || !ctor)
+        return;
+    recordAnalysisBinding(use, m_analysisConstructorSymbols.value(ctor, 0), AnalysisBindingKind::Constructor);
+}
+
+void TypeChecker::recordAnalysisStructBinding(const SourceSpan& use, const StructDeclNode* decl, AnalysisBindingKind kind)
+{
+    if (!m_analysis || !decl)
+        return;
+    recordAnalysisBinding(use, m_analysisStructSymbols.value(decl, 0), kind);
+}
+
+void TypeChecker::recordAnalysisFieldBinding(const SourceSpan& use, const FieldDeclNode* field)
+{
+    if (!m_analysis || !field)
+        return;
+    recordAnalysisBinding(use, m_analysisFieldSymbols.value(field, 0), AnalysisBindingKind::Field);
+}
+
+void TypeChecker::recordAnalysisBackendBinding(const SourceSpan& use, const BackendBlockNode* backend, AnalysisBindingKind kind)
+{
+    if (!m_analysis || !backend)
+        return;
+    recordAnalysisBinding(use, m_analysisBackendSymbols.value(backend, 0), kind);
 }
 
 void TypeChecker::collectEnums(const ProgramNode& program)
@@ -2108,6 +2211,7 @@ ExprType TypeChecker::checkExprImpl(const ExprNode& expr)
                 params.reserve(fn->params.size());
                 for (const auto& param : fn->params)
                     params.push_back(typeFromAstForDecl(*param->type, *fn));
+                recordAnalysisFunctionBinding(e->span, fn, AnalysisBindingKind::FunctionValue);
                 return {makeFunctionType(typeFromAstForDecl(*fn->returnType, *fn), std::move(params)), ValueCategory::PRValue, false};
             }
             if (valueCandidates.size() > 1)
@@ -2155,6 +2259,7 @@ ExprType TypeChecker::checkName(const NameExprNode& expr)
             params.reserve(fn->params.size());
             for (const auto& param : fn->params)
                 params.push_back(typeFromAstForDecl(*param->type, *fn));
+            recordAnalysisFunctionBinding(expr.span, fn, AnalysisBindingKind::FunctionValue);
             return {makeFunctionType(typeFromAstForDecl(*fn->returnType, *fn), std::move(params)), ValueCategory::PRValue, false};
         }
         if (valueCandidates.size() > 1)
@@ -2884,6 +2989,7 @@ ExprType TypeChecker::checkFunctionOverloadCall(const QString& displayName,
 
     const Match match = matches.front();
     const FunctionDeclNode* fn = match.fn;
+    recordAnalysisFunctionBinding(span, fn, AnalysisBindingKind::Function);
     const bool variadic = !fn->params.empty() && fn->params.back()->variadic;
     const size_t fixedCount = variadic ? fn->params.size() - 1 : fn->params.size();
     int mutableRefHoleCount = 0;
@@ -3169,6 +3275,7 @@ ExprType TypeChecker::checkStructuredFunctionOverloadCallWithArgs(const QString&
 
     Match match = std::move(matches.front());
     const FunctionDeclNode* fn = match.fn;
+    recordAnalysisFunctionBinding(call.callee ? call.callee->span : call.span, fn, AnalysisBindingKind::Function);
 
     NormalizedCallArgs normalized = normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true, rawPipeHoles);
     if (!normalized.ok)
@@ -3266,6 +3373,7 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
                                        ? QStringLiteral("default value for method parameter '%1'").arg(param.name)
                                        : QStringLiteral("method parameter '%1'").arg(param.name));
         }
+        recordAnalysisFunctionBinding(call.callee ? call.callee->span : span, method, AnalysisBindingKind::Method);
         return callReturnExprType(typeFromAstForDecl(*method->returnType, *method));
     }
 
@@ -3377,6 +3485,7 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
                                    ? QStringLiteral("default value for method parameter '%1'").arg(param.name)
                                    : QStringLiteral("method parameter '%1'").arg(param.name));
     }
+    recordAnalysisFunctionBinding(call.callee ? call.callee->span : span, method, AnalysisBindingKind::Method);
     return callReturnExprType(typeFromAstForDecl(*method->returnType, *method));
 }
 
@@ -3834,6 +3943,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
         if (argc == 0) {
             if (!isDefaultConstructible(resultType))
                 return errorExpr(call.span, QStringLiteral("constructor '%1' is not default-constructible").arg(displayName));
+            recordAnalysisStructBinding(call.callee ? call.callee->span : call.span, info.decl, AnalysisBindingKind::Constructor);
         } else {
             if (argc != info.fields.size())
                 return errorExpr(call.span, QStringLiteral("constructor '%1' expects 0 or %2 argument(s)").arg(displayName).arg(info.fields.size()));
@@ -3848,6 +3958,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                 if (!isUnknownType(arg.type) && !isAssignable(field.type, arg.type))
                     error(call.args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
             }
+            recordAnalysisStructBinding(call.callee ? call.callee->span : call.span, info.decl, AnalysisBindingKind::Constructor);
         }
         return {resultType, ValueCategory::PRValue, false};
     }
@@ -3895,6 +4006,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
         }
         if (mutableRefHoleCount > 1)
             return errorExpr(call.span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
+        recordAnalysisConstructorBinding(call.callee ? call.callee->span : call.span, ctor);
         return {resultType, ValueCategory::PRValue, false};
     }
 
@@ -4002,6 +4114,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
     }
     if (mutableRefHoleCount > 1)
         return errorExpr(call.span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
+    recordAnalysisConstructorBinding(call.callee ? call.callee->span : call.span, ctor);
     return {resultType, ValueCategory::PRValue, false};
 }
 
@@ -4049,6 +4162,7 @@ ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
         }
         return unknownExprType();
     }
+    recordAnalysisBackendBinding(backendSpan, backend->decl, AnalysisBindingKind::Backend);
     const FunctionDeclNode* fn = backend->functions.value(member, nullptr);
     if (!fn)
         return errorExpr(backendSpan, QStringLiteral("unknown backend function '%1::%2'").arg(backendName, member));
@@ -4098,6 +4212,7 @@ ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
     if (mutableRefHoleCount > 1)
         return errorExpr(call.span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
 
+    recordAnalysisFunctionBinding(call.callee ? call.callee->span : call.span, fn, AnalysisBindingKind::BackendFunction);
     const AbelType returnType = typeFromAstForDecl(*fn->returnType, *fn);
     return callReturnExprType(returnType);
 }
@@ -4718,6 +4833,7 @@ normalFieldAccess:
     const FieldInfo field = fieldInfoForStructField(*info, objectType, *fieldDecl);
     if (field.isPrivate && m_currentStruct != structTypeName(*info->decl) && m_currentStruct != objectType.spelling)
         return errorExpr(expr.span, QStringLiteral("field '%1' is private").arg(expr.field));
+    recordAnalysisFieldBinding(expr.span, fieldDecl);
     return {field.type, ValueCategory::LValue, mutableBase && !field.isConst};
 }
 

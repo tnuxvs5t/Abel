@@ -407,6 +407,30 @@ QString analysisSymbolDetail(const AnalysisSymbol& symbol)
     return symbol.name;
 }
 
+QString analysisSymbolHoverLine(const AnalysisSymbol& symbol)
+{
+    const QString detail = analysisSymbolDetail(symbol);
+    switch (symbol.kind) {
+    case AnalysisSymbolKind::Function:
+    case AnalysisSymbolKind::Method:
+    case AnalysisSymbolKind::Constructor:
+    case AnalysisSymbolKind::Backend:
+    case AnalysisSymbolKind::BackendFunction:
+    case AnalysisSymbolKind::Module:
+    case AnalysisSymbolKind::Struct:
+    case AnalysisSymbolKind::Enum:
+    case AnalysisSymbolKind::TypeAlias:
+        return detail;
+    case AnalysisSymbolKind::Field:
+    case AnalysisSymbolKind::Variable:
+    case AnalysisSymbolKind::Parameter:
+        return QStringLiteral("%1 %2").arg(detail, symbol.name);
+    case AnalysisSymbolKind::Unknown:
+        return detail;
+    }
+    return detail;
+}
+
 QJsonObject workspaceSymbolFromIndexed(const IndexedSymbol& symbol)
 {
     QJsonObject object;
@@ -920,8 +944,7 @@ QJsonObject Analyzer::hover(const QString& filePath,
         if (symbol || (expr && token.isEmpty())) {
             QString value;
             if (symbol) {
-                value += QStringLiteral("```abel\n%1 %2\n```")
-                             .arg(symbol->type.displayName(), symbol->name);
+                value += QStringLiteral("```abel\n%1\n```").arg(analysisSymbolHoverLine(*symbol));
                 if (!symbol->container.isEmpty())
                     value += QStringLiteral("\n\ncontainer: `%1`").arg(symbol->container);
             }

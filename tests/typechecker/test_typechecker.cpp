@@ -116,6 +116,66 @@ private slots:
         QVERIFY(sawXBinding);
     }
 
+    void analysisIndexRecordsResolvedSemanticBindings()
+    {
+        const QString src = QStringLiteral(R"(
+            backend Sys {
+                fn int add(int a, int b);
+            }
+
+            struct Box {
+                int value;
+
+                init(int value) {
+                    this.value = value;
+                }
+
+                fn int get() {
+                    return value;
+                }
+            }
+
+            fn int inc(int x) {
+                return x + 1;
+            }
+
+            fn int main() {
+                Box b = Box(1);
+                int y = b.get();
+                int z = b.value;
+                return inc(Sys::add(y, z));
+            }
+        )");
+
+        abel::TypeCheckOptions options;
+        options.collectAnalysis = true;
+        auto result = checkSource(src, options);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QVERIFY(result.analysis);
+
+        auto hasBinding = [&](abel::AnalysisSymbolKind symbolKind,
+                              abel::AnalysisBindingKind bindingKind,
+                              const QString& name) {
+            for (const auto& symbol : result.analysis->symbols()) {
+                if (symbol.kind != symbolKind || symbol.name != name)
+                    continue;
+                for (const auto& binding : result.analysis->bindings()) {
+                    if (binding.symbol == symbol.id && binding.kind == bindingKind)
+                        return true;
+                }
+            }
+            return false;
+        };
+
+        QVERIFY(hasBinding(abel::AnalysisSymbolKind::Function, abel::AnalysisBindingKind::Function, QStringLiteral("inc")));
+        QVERIFY(hasBinding(abel::AnalysisSymbolKind::BackendFunction, abel::AnalysisBindingKind::BackendFunction, QStringLiteral("add")));
+        QVERIFY(hasBinding(abel::AnalysisSymbolKind::Method, abel::AnalysisBindingKind::Method, QStringLiteral("get")));
+        QVERIFY(hasBinding(abel::AnalysisSymbolKind::Field, abel::AnalysisBindingKind::Field, QStringLiteral("value")));
+        QVERIFY(hasBinding(abel::AnalysisSymbolKind::Constructor, abel::AnalysisBindingKind::Constructor, QStringLiteral("init")));
+    }
+
     void acceptsFixedWidthIntegerTypes()
     {
         const QString src = QStringLiteral(R"(

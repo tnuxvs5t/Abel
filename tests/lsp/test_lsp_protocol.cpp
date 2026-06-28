@@ -153,6 +153,9 @@ private slots:
         const QJsonObject hover = analyzer.hover(mainFile.fileName(), 2, 24, {}, root.absolutePath());
         QVERIFY(hover.value(QStringLiteral("contents")).toObject().value(QStringLiteral("value")).toString().contains(QStringLiteral("fn int inc(int x)")));
 
+        const QJsonArray references = analyzer.references(mainFile.fileName(), 2, 24, {}, root.absolutePath());
+        QCOMPARE(references.size(), 2);
+
         const QJsonObject sig = analyzer.signatureHelp(mainFile.fileName(), 2, 28, {}, root.absolutePath());
         QVERIFY(!sig.isEmpty());
         QVERIFY(sig.value(QStringLiteral("signatures")).toArray().first().toObject()

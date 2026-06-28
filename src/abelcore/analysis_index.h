@@ -30,7 +30,13 @@ enum class AnalysisSymbolKind {
 enum class AnalysisBindingKind {
     Unknown,
     Variable,
+    Function,
     FunctionValue,
+    Method,
+    Field,
+    Constructor,
+    Backend,
+    BackendFunction,
     EnumValue,
     Module,
     Type,

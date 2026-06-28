@@ -97,6 +97,11 @@ private:
     int m_loopDepth = 0;
     TypeCheckOptions m_options;
     std::shared_ptr<AnalysisIndex> m_analysis;
+    QHash<const FunctionDeclNode*, AnalysisSymbolId> m_analysisFunctionSymbols;
+    QHash<const StructDeclNode*, AnalysisSymbolId> m_analysisStructSymbols;
+    QHash<const FieldDeclNode*, AnalysisSymbolId> m_analysisFieldSymbols;
+    QHash<const ConstructorDeclNode*, AnalysisSymbolId> m_analysisConstructorSymbols;
+    QHash<const BackendBlockNode*, AnalysisSymbolId> m_analysisBackendSymbols;
 
     struct BuiltPipeArgs {
         std::vector<ExprType> checked;
@@ -293,6 +298,11 @@ private:
     void collectAnalysisDeclarationSymbols(const ProgramNode& program);
     void recordAnalysisExpr(const ExprNode& expr, const ExprType& type);
     void recordAnalysisBinding(const SourceSpan& use, AnalysisSymbolId symbol, AnalysisBindingKind kind);
+    void recordAnalysisFunctionBinding(const SourceSpan& use, const FunctionDeclNode* fn, AnalysisBindingKind kind);
+    void recordAnalysisConstructorBinding(const SourceSpan& use, const ConstructorDeclNode* ctor);
+    void recordAnalysisStructBinding(const SourceSpan& use, const StructDeclNode* decl, AnalysisBindingKind kind);
+    void recordAnalysisFieldBinding(const SourceSpan& use, const FieldDeclNode* field);
+    void recordAnalysisBackendBinding(const SourceSpan& use, const BackendBlockNode* backend, AnalysisBindingKind kind);
 
     bool isSupportedType(const AbelType& type);
     bool isDeclInCurrentModule(const DeclNode& decl, const QString& packageName = QString()) const;
