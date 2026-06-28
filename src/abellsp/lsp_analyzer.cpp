@@ -100,6 +100,111 @@ QJsonObject makeSymbol(const QString& name, int kind, const SourceSpan& span, co
     return object;
 }
 
+QString paramsDisplay(const std::vector<std::unique_ptr<ParameterNode>>& params)
+{
+    QStringList parts;
+    for (const auto& param : params) {
+        QString part;
+        if (param->variadic)
+            part += QStringLiteral("...");
+        part += param->type ? param->type->displayName() : QStringLiteral("<unknown>");
+        if (!param->name.isEmpty())
+            part += QStringLiteral(" ") + param->name;
+        if (param->defaultValue)
+            part += QStringLiteral(" = ...");
+        parts.push_back(part);
+    }
+    return parts.join(QStringLiteral(", "));
+}
+
+QString functionDisplay(const FunctionDeclNode& fn, const QString& prefix = {})
+{
+    const QString returnType = fn.returnType ? fn.returnType->displayName() : QStringLiteral("void");
+    const QString name = fn.isOperator ? QStringLiteral("operator %1").arg(fn.operatorSymbol) : fn.name;
+    return QStringLiteral("%1fn %2 %3(%4)")
+        .arg(prefix, returnType, name, paramsDisplay(fn.params));
+}
+
+QString constructorDisplay(const ConstructorDeclNode& ctor)
+{
+    return QStringLiteral("init(%1)").arg(paramsDisplay(ctor.params));
+}
+
+IndexedSymbol makeIndexed(const QString& name,
+                          const QString& detail,
+                          int kind,
+                          const SourceSpan& span,
+                          const QString& container = {})
+{
+    IndexedSymbol symbol;
+    symbol.name = name;
+    symbol.detail = detail;
+    symbol.containerName = container;
+    symbol.file = QFileInfo(span.file).absoluteFilePath();
+    symbol.kind = kind;
+    symbol.range = span;
+    symbol.selectionRange = span;
+    return symbol;
+}
+
+QList<IndexedSymbol> semanticSymbolsForDecls(const ProgramNode& program)
+{
+    QList<IndexedSymbol> symbols;
+    for (const auto& decl : program.declarations) {
+        if (auto* module = dynamic_cast<ModuleDeclNode*>(decl.get())) {
+            symbols.push_back(makeIndexed(module->name,
+                                          QStringLiteral("module %1").arg(module->name),
+                                          2,
+                                          module->span));
+        } else if (auto* use = dynamic_cast<UseDeclNode*>(decl.get())) {
+            QString detail = use->exported ? QStringLiteral("export use ") : QStringLiteral("use ");
+            detail += use->name;
+            if (!use->alias.isEmpty())
+                detail += QStringLiteral(" as ") + use->alias;
+            symbols.push_back(makeIndexed(use->alias.isEmpty() ? use->name : use->alias, detail, 3, use->span));
+        } else if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get())) {
+            const QString name = fn->isOperator ? QStringLiteral("operator %1").arg(fn->operatorSymbol) : fn->name;
+            symbols.push_back(makeIndexed(name, functionDisplay(*fn), 12, fn->span, fn->moduleName));
+        } else if (auto* s = dynamic_cast<StructDeclNode*>(decl.get())) {
+            symbols.push_back(makeIndexed(s->name, QStringLiteral("struct %1").arg(s->name), 5, s->span, s->moduleName));
+            for (const auto& field : s->fields) {
+                const QString type = field->type ? field->type->displayName() : QStringLiteral("<unknown>");
+                symbols.push_back(makeIndexed(field->name,
+                                              QStringLiteral("%1 %2").arg(type, field->name),
+                                              8,
+                                              field->span,
+                                              s->name));
+            }
+            for (const auto& ctor : s->constructors)
+                symbols.push_back(makeIndexed(QStringLiteral("init"), constructorDisplay(*ctor), 9, ctor->span, s->name));
+            for (const auto& method : s->methods)
+                symbols.push_back(makeIndexed(method->name, functionDisplay(*method), 6, method->span, s->name));
+        } else if (auto* e = dynamic_cast<EnumDeclNode*>(decl.get())) {
+            symbols.push_back(makeIndexed(e->name, QStringLiteral("enum %1").arg(e->name), 10, e->span, e->moduleName));
+        } else if (auto* alias = dynamic_cast<TypeAliasDeclNode*>(decl.get())) {
+            const QString target = alias->targetType ? alias->targetType->displayName() : QStringLiteral("<unknown>");
+            symbols.push_back(makeIndexed(alias->name,
+                                          QStringLiteral("type %1 = %2").arg(alias->name, target),
+                                          13,
+                                          alias->span,
+                                          alias->moduleName));
+        } else if (auto* backend = dynamic_cast<BackendBlockNode*>(decl.get())) {
+            symbols.push_back(makeIndexed(backend->name,
+                                          QStringLiteral("backend %1").arg(backend->name),
+                                          3,
+                                          backend->span,
+                                          backend->moduleName));
+            for (const auto& fn : backend->functions)
+                symbols.push_back(makeIndexed(fn->name,
+                                              functionDisplay(*fn, backend->name + QStringLiteral("::")),
+                                              12,
+                                              fn->span,
+                                              backend->name));
+        }
+    }
+    return symbols;
+}
+
 QJsonArray symbolsForDecls(const ProgramNode& program, const QString& filePath)
 {
     QJsonArray symbols;
@@ -141,6 +246,40 @@ QJsonArray symbolsForDecls(const ProgramNode& program, const QString& filePath)
         }
     }
     return symbols;
+}
+
+bool containsPosition(const SourceSpan& span, const QString& filePath, int zeroBasedLine, int zeroBasedCharacter)
+{
+    if (QFileInfo(span.file).absoluteFilePath() != QFileInfo(filePath).absoluteFilePath())
+        return false;
+    const int line = zeroBasedLine + 1;
+    const int col = zeroBasedCharacter + 1;
+    if (line < span.startLine || line > span.endLine)
+        return false;
+    if (line == span.startLine && col < span.startColumn)
+        return false;
+    if (line == span.endLine && col > span.endColumn)
+        return false;
+    return true;
+}
+
+QJsonObject locationFromSymbol(const IndexedSymbol& symbol)
+{
+    QJsonObject location;
+    location.insert(QStringLiteral("uri"), uriFromPath(symbol.file));
+    location.insert(QStringLiteral("range"), rangeFromSpan(symbol.selectionRange));
+    return location;
+}
+
+QJsonObject workspaceSymbolFromIndexed(const IndexedSymbol& symbol)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("name"), symbol.name);
+    object.insert(QStringLiteral("kind"), symbol.kind);
+    if (!symbol.containerName.isEmpty())
+        object.insert(QStringLiteral("containerName"), symbol.containerName);
+    object.insert(QStringLiteral("location"), locationFromSymbol(symbol));
+    return object;
 }
 
 } // namespace
@@ -187,6 +326,40 @@ QString Analyzer::readSourceText(const QString& filePath,
         return {};
     }
     return QString::fromUtf8(file.readAll());
+}
+
+QString Analyzer::tokenAtPosition(const QString& filePath,
+                                  int zeroBasedLine,
+                                  int zeroBasedCharacter,
+                                  const QHash<QString, QString>& openDocuments)
+{
+    QList<Diagnostic> diagnostics;
+    const QString text = readSourceText(filePath, openDocuments, diagnostics);
+    if (!diagnostics.isEmpty())
+        return {};
+
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    if (zeroBasedLine < 0 || zeroBasedLine >= lines.size())
+        return {};
+    const QString line = lines.at(zeroBasedLine);
+    int pos = qBound(0, zeroBasedCharacter, line.size());
+    if (pos == line.size() && pos > 0)
+        --pos;
+    auto isIdent = [](QChar ch) {
+        return ch.isLetterOrNumber() || ch == QLatin1Char('_');
+    };
+    if (pos < line.size() && !isIdent(line.at(pos)) && pos > 0 && isIdent(line.at(pos - 1)))
+        --pos;
+    if (pos < 0 || pos >= line.size() || !isIdent(line.at(pos)))
+        return {};
+
+    int start = pos;
+    while (start > 0 && isIdent(line.at(start - 1)))
+        --start;
+    int end = pos + 1;
+    while (end < line.size() && isIdent(line.at(end)))
+        ++end;
+    return line.mid(start, end - start);
 }
 
 Analyzer::ParsedProgram Analyzer::parseSources(const QList<PackageSourceFile>& sourceFiles,
@@ -301,7 +474,46 @@ Analyzer::ParsedProgram Analyzer::parseSources(const QList<PackageSourceFile>& s
 
     for (const QString& file : result.analyzedFiles)
         result.documentSymbols.insert(file, symbolsForDecls(*result.program, file));
+    result.symbols = semanticSymbolsForDecls(*result.program);
 
+    return result;
+}
+
+AnalyzerResult Analyzer::analyzeWorkspace(const QString& workspaceRoot,
+                                          const QHash<QString, QString>& openDocuments) const
+{
+    AnalyzerResult result;
+    const QString root = QFileInfo(workspaceRoot).absoluteFilePath();
+
+    QList<PackageSourceFile> sourceFiles;
+    if (!root.isEmpty() && isPackageDirectory(root)) {
+        const PackageGraphResult graph = packageGraphFromDirectory(root);
+        result.diagnostics.append(graph.diagnostics);
+        if (graph.ok()) {
+            sourceFiles = packageGraphSourceFileEntries(graph);
+        } else {
+            return result;
+        }
+    } else if (!openDocuments.isEmpty()) {
+        PackageSourceFile source;
+        source.path = openDocuments.constBegin().key();
+        source.entry = true;
+        sourceFiles.push_back(source);
+    } else {
+        return result;
+    }
+
+    ParsedProgram parsed = parseSources(sourceFiles, openDocuments);
+    result.diagnostics.append(parsed.diagnostics);
+    result.analyzedFiles = parsed.analyzedFiles;
+    result.documentSymbols = parsed.documentSymbols;
+    result.symbols = parsed.symbols;
+    if (!result.diagnostics.isEmpty())
+        return result;
+
+    TypeChecker checker;
+    TypeCheckResult checked = checker.check(*parsed.program);
+    result.diagnostics.append(checked.diagnostics);
     return result;
 }
 
@@ -309,21 +521,15 @@ AnalyzerResult Analyzer::analyzeFile(const QString& filePath,
                                      const QHash<QString, QString>& openDocuments,
                                      const QString& workspaceRoot) const
 {
-    AnalyzerResult result;
     const QString abs = QFileInfo(filePath).absoluteFilePath();
     const QString packageRoot = findPackageRoot(abs, workspaceRoot);
 
+    if (!packageRoot.isEmpty())
+        return analyzeWorkspace(packageRoot, openDocuments);
+
+    AnalyzerResult result;
     QList<PackageSourceFile> sourceFiles;
-    if (!packageRoot.isEmpty()) {
-        const PackageGraphResult graph = packageGraphFromDirectory(packageRoot);
-        result.diagnostics.append(graph.diagnostics);
-        if (graph.ok()) {
-            sourceFiles = packageGraphSourceFileEntries(graph);
-        } else {
-            result.analyzedFiles.insert(abs);
-            return result;
-        }
-    } else {
+    {
         PackageSourceFile source;
         source.path = abs;
         source.entry = true;
@@ -334,6 +540,7 @@ AnalyzerResult Analyzer::analyzeFile(const QString& filePath,
     result.diagnostics.append(parsed.diagnostics);
     result.analyzedFiles = parsed.analyzedFiles;
     result.documentSymbols = parsed.documentSymbols;
+    result.symbols = parsed.symbols;
     if (!result.diagnostics.isEmpty())
         return result;
 
@@ -341,6 +548,98 @@ AnalyzerResult Analyzer::analyzeFile(const QString& filePath,
     TypeCheckResult checked = checker.check(*parsed.program);
     result.diagnostics.append(checked.diagnostics);
     return result;
+}
+
+QJsonObject Analyzer::hover(const QString& filePath,
+                            int zeroBasedLine,
+                            int zeroBasedCharacter,
+                            const QHash<QString, QString>& openDocuments,
+                            const QString& workspaceRoot) const
+{
+    const AnalyzerResult analyzed = analyzeFile(filePath, openDocuments, workspaceRoot);
+    const QString abs = QFileInfo(filePath).absoluteFilePath();
+    const QString token = tokenAtPosition(abs, zeroBasedLine, zeroBasedCharacter, openDocuments);
+
+    const IndexedSymbol* best = nullptr;
+    if (!token.isEmpty()) {
+        for (const IndexedSymbol& symbol : analyzed.symbols) {
+            if (symbol.name == token) {
+                best = &symbol;
+                break;
+            }
+        }
+    }
+    if (!best) {
+        for (const IndexedSymbol& symbol : analyzed.symbols) {
+            if (containsPosition(symbol.selectionRange, abs, zeroBasedLine, zeroBasedCharacter)) {
+                if (!best
+                    || (symbol.selectionRange.endLine - symbol.selectionRange.startLine)
+                        <= (best->selectionRange.endLine - best->selectionRange.startLine)) {
+                    best = &symbol;
+                }
+            }
+        }
+    }
+    if (!best)
+        return {};
+
+    QString value = QStringLiteral("```abel\n%1\n```").arg(best->detail);
+    if (!best->containerName.isEmpty())
+        value += QStringLiteral("\n\ncontainer: `%1`").arg(best->containerName);
+
+    QJsonObject contents;
+    contents.insert(QStringLiteral("kind"), QStringLiteral("markdown"));
+    contents.insert(QStringLiteral("value"), value);
+
+    QJsonObject hover;
+    hover.insert(QStringLiteral("contents"), contents);
+    hover.insert(QStringLiteral("range"), rangeFromSpan(best->selectionRange));
+    return hover;
+}
+
+QJsonArray Analyzer::definitions(const QString& filePath,
+                                 int zeroBasedLine,
+                                 int zeroBasedCharacter,
+                                 const QHash<QString, QString>& openDocuments,
+                                 const QString& workspaceRoot) const
+{
+    QJsonArray out;
+    const AnalyzerResult analyzed = analyzeFile(filePath, openDocuments, workspaceRoot);
+    const QString abs = QFileInfo(filePath).absoluteFilePath();
+    QString token = tokenAtPosition(abs, zeroBasedLine, zeroBasedCharacter, openDocuments);
+
+    if (token.isEmpty()) {
+        for (const IndexedSymbol& symbol : analyzed.symbols) {
+            if (containsPosition(symbol.selectionRange, abs, zeroBasedLine, zeroBasedCharacter)) {
+                token = symbol.name;
+                break;
+            }
+        }
+    }
+    if (token.isEmpty())
+        return out;
+
+    for (const IndexedSymbol& symbol : analyzed.symbols) {
+        if (symbol.name == token)
+            out.push_back(locationFromSymbol(symbol));
+    }
+    return out;
+}
+
+QJsonArray Analyzer::workspaceSymbols(const QString& query,
+                                      const QString& workspaceRoot,
+                                      const QHash<QString, QString>& openDocuments) const
+{
+    QJsonArray out;
+    const AnalyzerResult analyzed = analyzeWorkspace(workspaceRoot, openDocuments);
+    const QString needle = query.trimmed();
+    for (const IndexedSymbol& symbol : analyzed.symbols) {
+        if (needle.isEmpty() || symbol.name.contains(needle, Qt::CaseInsensitive)
+            || symbol.detail.contains(needle, Qt::CaseInsensitive)) {
+            out.push_back(workspaceSymbolFromIndexed(symbol));
+        }
+    }
+    return out;
 }
 
 } // namespace abel::lsp

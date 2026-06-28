@@ -1,5 +1,6 @@
 #include "abellsp/lsp_analyzer.h"
 #include "abellsp/lsp_protocol.h"
+#include "abellsp/lsp_server.h"
 
 #include <QtTest/QtTest>
 
@@ -8,6 +9,8 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QTemporaryDir>
+
+#include <algorithm>
 
 class AbelLspTests final : public QObject {
     Q_OBJECT
@@ -48,6 +51,13 @@ private slots:
         QVERIFY(result.analyzedFiles.contains(filePath));
         QVERIFY(!result.diagnostics.isEmpty());
         QVERIFY(!result.documentSymbols.value(filePath).isEmpty());
+        QVERIFY(std::any_of(result.symbols.begin(), result.symbols.end(), [](const abel::lsp::IndexedSymbol& symbol) {
+            return symbol.name == QStringLiteral("Box") && symbol.detail == QStringLiteral("struct Box");
+        }));
+
+        const QJsonObject hover = analyzer.hover(filePath, 0, 8, openDocs);
+        QVERIFY(!hover.isEmpty());
+        QVERIFY(hover.value(QStringLiteral("contents")).toObject().value(QStringLiteral("value")).toString().contains(QStringLiteral("struct Box")));
     }
 
     void analyzesPackageWithOpenOverlay()
@@ -76,6 +86,36 @@ private slots:
         const auto result = analyzer.analyzeFile(mainFile.fileName(), {}, root.absolutePath());
         QVERIFY2(result.diagnostics.isEmpty(), qPrintable(result.diagnostics.isEmpty() ? QString() : result.diagnostics.front().message));
         QVERIFY(result.analyzedFiles.contains(QFileInfo(utilFile.fileName()).absoluteFilePath()));
+
+        const QJsonArray definitions = analyzer.definitions(mainFile.fileName(), 2, 24, {}, root.absolutePath());
+        QVERIFY(!definitions.isEmpty());
+        QCOMPARE(abel::lsp::pathFromUri(definitions.first().toObject().value(QStringLiteral("uri")).toString()),
+                 QFileInfo(utilFile.fileName()).absoluteFilePath());
+
+        const QJsonObject hover = analyzer.hover(mainFile.fileName(), 2, 24, {}, root.absolutePath());
+        QVERIFY(hover.value(QStringLiteral("contents")).toObject().value(QStringLiteral("value")).toString().contains(QStringLiteral("fn int inc(int x)")));
+
+        const QJsonArray symbols = analyzer.workspaceSymbols(QStringLiteral("inc"), root.absolutePath(), {});
+        QVERIFY(std::any_of(symbols.begin(), symbols.end(), [](const QJsonValue& value) {
+            return value.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("inc");
+        }));
+    }
+
+    void initializeAdvertisesSemanticIndexCapabilities()
+    {
+        abel::lsp::Server server;
+        QJsonObject request;
+        request.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
+        request.insert(QStringLiteral("id"), 1);
+        request.insert(QStringLiteral("method"), QStringLiteral("initialize"));
+        request.insert(QStringLiteral("params"), QJsonObject());
+
+        const QJsonObject response = server.handleMessage(request);
+        const QJsonObject capabilities = response.value(QStringLiteral("result")).toObject()
+                                             .value(QStringLiteral("capabilities")).toObject();
+        QCOMPARE(capabilities.value(QStringLiteral("hoverProvider")).toBool(), true);
+        QCOMPARE(capabilities.value(QStringLiteral("definitionProvider")).toBool(), true);
+        QCOMPARE(capabilities.value(QStringLiteral("workspaceSymbolProvider")).toBool(), true);
     }
 };
 

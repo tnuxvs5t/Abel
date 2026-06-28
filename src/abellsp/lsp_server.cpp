@@ -45,6 +45,9 @@ QJsonObject nullResultCapabilities()
     QJsonObject capabilities;
     capabilities.insert(QStringLiteral("textDocumentSync"), 1);
     capabilities.insert(QStringLiteral("documentSymbolProvider"), true);
+    capabilities.insert(QStringLiteral("hoverProvider"), true);
+    capabilities.insert(QStringLiteral("definitionProvider"), true);
+    capabilities.insert(QStringLiteral("workspaceSymbolProvider"), true);
 
     QJsonObject completionProvider;
     completionProvider.insert(QStringLiteral("resolveProvider"), false);
@@ -149,6 +152,27 @@ QJsonObject Server::handleRequest(const QJsonObject& message, const QString& met
         const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
         AnalyzerResult analyzed = m_analyzer.analyzeFile(path, m_openDocuments, m_workspaceRoot);
         result = analyzed.documentSymbols.value(QFileInfo(path).absoluteFilePath());
+    } else if (method == QStringLiteral("textDocument/hover")) {
+        const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
+        const QJsonObject position = params.value(QStringLiteral("position")).toObject();
+        const QJsonObject hover = m_analyzer.hover(path,
+                                                   position.value(QStringLiteral("line")).toInt(),
+                                                   position.value(QStringLiteral("character")).toInt(),
+                                                   m_openDocuments,
+                                                   m_workspaceRoot);
+        result = hover.isEmpty() ? QJsonValue() : QJsonValue(hover);
+    } else if (method == QStringLiteral("textDocument/definition")) {
+        const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
+        const QJsonObject position = params.value(QStringLiteral("position")).toObject();
+        result = m_analyzer.definitions(path,
+                                        position.value(QStringLiteral("line")).toInt(),
+                                        position.value(QStringLiteral("character")).toInt(),
+                                        m_openDocuments,
+                                        m_workspaceRoot);
+    } else if (method == QStringLiteral("workspace/symbol")) {
+        result = m_analyzer.workspaceSymbols(params.value(QStringLiteral("query")).toString(),
+                                             m_workspaceRoot,
+                                             m_openDocuments);
     } else if (method == QStringLiteral("textDocument/completion")) {
         result = completionItems();
     } else {

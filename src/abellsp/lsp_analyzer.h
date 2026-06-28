@@ -6,6 +6,7 @@
 
 #include <QHash>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QList>
 #include <QSet>
 #include <QString>
@@ -24,10 +25,21 @@ struct AnalyzerDocument {
     QString text;
 };
 
+struct IndexedSymbol {
+    QString name;
+    QString detail;
+    QString containerName;
+    QString file;
+    int kind = 13;
+    SourceSpan range;
+    SourceSpan selectionRange;
+};
+
 struct AnalyzerResult {
     QList<Diagnostic> diagnostics;
     QSet<QString> analyzedFiles;
     QHash<QString, QJsonArray> documentSymbols;
+    QList<IndexedSymbol> symbols;
 };
 
 class Analyzer {
@@ -35,6 +47,22 @@ public:
     AnalyzerResult analyzeFile(const QString& filePath,
                                const QHash<QString, QString>& openDocuments,
                                const QString& workspaceRoot = {}) const;
+    AnalyzerResult analyzeWorkspace(const QString& workspaceRoot,
+                                    const QHash<QString, QString>& openDocuments) const;
+
+    QJsonObject hover(const QString& filePath,
+                      int zeroBasedLine,
+                      int zeroBasedCharacter,
+                      const QHash<QString, QString>& openDocuments,
+                      const QString& workspaceRoot = {}) const;
+    QJsonArray definitions(const QString& filePath,
+                           int zeroBasedLine,
+                           int zeroBasedCharacter,
+                           const QHash<QString, QString>& openDocuments,
+                           const QString& workspaceRoot = {}) const;
+    QJsonArray workspaceSymbols(const QString& query,
+                                const QString& workspaceRoot,
+                                const QHash<QString, QString>& openDocuments) const;
 
 private:
     struct ParsedProgram {
@@ -42,11 +70,16 @@ private:
         QList<Diagnostic> diagnostics;
         QSet<QString> analyzedFiles;
         QHash<QString, QJsonArray> documentSymbols;
+        QList<IndexedSymbol> symbols;
     };
 
     static Diagnostic makeDiagnostic(const QString& code, const QString& message, const QString& file = {});
     static QString findPackageRoot(const QString& filePath, const QString& workspaceRoot);
     static QString readSourceText(const QString& filePath, const QHash<QString, QString>& openDocuments, QList<Diagnostic>& diagnostics);
+    static QString tokenAtPosition(const QString& filePath,
+                                   int zeroBasedLine,
+                                   int zeroBasedCharacter,
+                                   const QHash<QString, QString>& openDocuments);
 
     ParsedProgram parseSources(const QList<PackageSourceFile>& sourceFiles,
                                const QHash<QString, QString>& openDocuments) const;
