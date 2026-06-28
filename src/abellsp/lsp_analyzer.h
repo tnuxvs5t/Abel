@@ -3,6 +3,7 @@
 #include "abelcore/diagnostic.h"
 #include "abelcore/package_manifest.h"
 #include "abelcore/source_span.h"
+#include "abelcore/analysis_index.h"
 
 #include <QHash>
 #include <QJsonArray>
@@ -42,6 +43,7 @@ struct AnalyzerResult {
     QSet<QString> analyzedFiles;
     QHash<QString, QJsonArray> documentSymbols;
     QList<IndexedSymbol> symbols;
+    std::shared_ptr<AnalysisIndex> analysis;
 };
 
 class Analyzer {

@@ -375,6 +375,38 @@ QJsonObject locationFromSymbol(const IndexedSymbol& symbol)
     return location;
 }
 
+QJsonObject locationFromAnalysisSymbol(const AnalysisSymbol& symbol)
+{
+    QJsonObject location;
+    location.insert(QStringLiteral("uri"), uriFromPath(symbol.declaration.file));
+    location.insert(QStringLiteral("range"), rangeFromSpan(symbol.declaration));
+    return location;
+}
+
+QJsonObject locationFromAnalysisBinding(const AnalysisBinding& binding)
+{
+    QJsonObject location;
+    location.insert(QStringLiteral("uri"), uriFromPath(binding.use.file));
+    location.insert(QStringLiteral("range"), rangeFromSpan(binding.use));
+    return location;
+}
+
+QString valueCategoryName(AnalysisValueCategory category)
+{
+    return category == AnalysisValueCategory::LValue
+        ? QStringLiteral("lvalue")
+        : QStringLiteral("prvalue");
+}
+
+QString analysisSymbolDetail(const AnalysisSymbol& symbol)
+{
+    if (!symbol.detail.isEmpty() && symbol.detail != QStringLiteral("<unknown>"))
+        return symbol.detail;
+    if (symbol.type.kind != TypeKind::Unknown)
+        return symbol.type.displayName();
+    return symbol.name;
+}
+
 QJsonObject workspaceSymbolFromIndexed(const IndexedSymbol& symbol)
 {
     QJsonObject object;
@@ -826,8 +858,11 @@ AnalyzerResult Analyzer::analyzeWorkspace(const QString& workspaceRoot,
         return result;
 
     TypeChecker checker;
-    TypeCheckResult checked = checker.check(*parsed.program);
+    TypeCheckOptions options;
+    options.collectAnalysis = true;
+    TypeCheckResult checked = checker.check(*parsed.program, options);
     result.diagnostics.append(checked.diagnostics);
+    result.analysis = checked.analysis;
     return result;
 }
 
@@ -859,8 +894,11 @@ AnalyzerResult Analyzer::analyzeFile(const QString& filePath,
         return result;
 
     TypeChecker checker;
-    TypeCheckResult checked = checker.check(*parsed.program);
+    TypeCheckOptions options;
+    options.collectAnalysis = true;
+    TypeCheckResult checked = checker.check(*parsed.program, options);
     result.diagnostics.append(checked.diagnostics);
+    result.analysis = checked.analysis;
     return result;
 }
 
@@ -872,7 +910,42 @@ QJsonObject Analyzer::hover(const QString& filePath,
 {
     const AnalyzerResult analyzed = analyzeFile(filePath, openDocuments, workspaceRoot);
     const QString abs = QFileInfo(filePath).absoluteFilePath();
+    const int oneBasedLine = zeroBasedLine + 1;
+    const int oneBasedColumn = zeroBasedCharacter + 1;
     const QString token = tokenAtPosition(abs, zeroBasedLine, zeroBasedCharacter, openDocuments);
+    if (analyzed.analysis) {
+        const AnalysisBinding* binding = analyzed.analysis->bindingAt(abs, oneBasedLine, oneBasedColumn);
+        const AnalysisSymbol* symbol = binding ? analyzed.analysis->symbolById(binding->symbol) : nullptr;
+        const AnalysisExprInfo* expr = analyzed.analysis->exprInfoAt(abs, oneBasedLine, oneBasedColumn);
+        if (symbol || (expr && token.isEmpty())) {
+            QString value;
+            if (symbol) {
+                value += QStringLiteral("```abel\n%1 %2\n```")
+                             .arg(symbol->type.displayName(), symbol->name);
+                if (!symbol->container.isEmpty())
+                    value += QStringLiteral("\n\ncontainer: `%1`").arg(symbol->container);
+            }
+            if (expr) {
+                if (!value.isEmpty())
+                    value += QStringLiteral("\n\n");
+                value += QStringLiteral("type: `%1`  \ncategory: `%2`  \nmutable: `%3`")
+                             .arg(expr->type.displayName(),
+                                  valueCategoryName(expr->category),
+                                  expr->isMutable ? QStringLiteral("yes") : QStringLiteral("no"));
+            }
+
+            QJsonObject contents;
+            contents.insert(QStringLiteral("kind"), QStringLiteral("markdown"));
+            contents.insert(QStringLiteral("value"), value);
+            QJsonObject hover;
+            hover.insert(QStringLiteral("contents"), contents);
+            if (binding)
+                hover.insert(QStringLiteral("range"), rangeFromSpan(binding->use));
+            else if (expr)
+                hover.insert(QStringLiteral("range"), rangeFromSpan(expr->span));
+            return hover;
+        }
+    }
 
     const IndexedSymbol* best = bestSymbolForToken(analyzed.symbols, token, abs, zeroBasedLine, zeroBasedCharacter);
     if (!best) {
@@ -912,6 +985,15 @@ QJsonArray Analyzer::definitions(const QString& filePath,
     QJsonArray out;
     const AnalyzerResult analyzed = analyzeFile(filePath, openDocuments, workspaceRoot);
     const QString abs = QFileInfo(filePath).absoluteFilePath();
+    if (analyzed.analysis) {
+        const AnalysisBinding* binding = analyzed.analysis->bindingAt(abs, zeroBasedLine + 1, zeroBasedCharacter + 1);
+        const AnalysisSymbol* symbol = binding ? analyzed.analysis->symbolById(binding->symbol) : nullptr;
+        if (symbol) {
+            out.push_back(locationFromAnalysisSymbol(*symbol));
+            return out;
+        }
+    }
+
     QString token = tokenAtPosition(abs, zeroBasedLine, zeroBasedCharacter, openDocuments);
 
     if (token.isEmpty()) {
@@ -963,6 +1045,18 @@ QJsonArray Analyzer::references(const QString& filePath,
     QJsonArray out;
     const QString abs = QFileInfo(filePath).absoluteFilePath();
     const AnalyzerResult analyzed = analyzeFile(abs, openDocuments, workspaceRoot);
+    if (analyzed.analysis) {
+        const AnalysisBinding* binding = analyzed.analysis->bindingAt(abs, zeroBasedLine + 1, zeroBasedCharacter + 1);
+        if (binding) {
+            const AnalysisSymbol* symbol = analyzed.analysis->symbolById(binding->symbol);
+            if (symbol)
+                out.push_back(locationFromAnalysisSymbol(*symbol));
+            for (const AnalysisBinding& use : analyzed.analysis->bindingsForSymbol(binding->symbol))
+                out.push_back(locationFromAnalysisBinding(use));
+            return out;
+        }
+    }
+
     const QString token = tokenAtPosition(abs, zeroBasedLine, zeroBasedCharacter, openDocuments);
     const IndexedSymbol* selected = bestSymbolForToken(analyzed.symbols, token, abs, zeroBasedLine, zeroBasedCharacter);
     if (!selected)

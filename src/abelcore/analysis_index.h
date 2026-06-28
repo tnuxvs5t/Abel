@@ -76,6 +76,9 @@ public:
     const QList<AnalysisExprInfo>& exprInfos() const { return m_exprInfos; }
 
     const AnalysisSymbol* symbolById(AnalysisSymbolId id) const;
+    const AnalysisBinding* bindingAt(const QString& file, int oneBasedLine, int oneBasedColumn) const;
+    const AnalysisExprInfo* exprInfoAt(const QString& file, int oneBasedLine, int oneBasedColumn) const;
+    QList<AnalysisBinding> bindingsForSymbol(AnalysisSymbolId id) const;
 
 private:
     AnalysisSymbolId m_nextSymbolId = 1;

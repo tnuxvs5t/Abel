@@ -77,6 +77,8 @@ private slots:
 
         const auto result = analyzer.analyzeFile(filePath, openDocs);
         QVERIFY(result.diagnostics.isEmpty());
+        QVERIFY(result.analysis);
+        QVERIFY(!result.analysis->bindings().isEmpty());
         QVERIFY(std::any_of(result.symbols.begin(), result.symbols.end(), [](const abel::lsp::IndexedSymbol& symbol) {
             return symbol.local && symbol.name == QStringLiteral("local") && symbol.detail == QStringLiteral("int local");
         }));
