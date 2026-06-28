@@ -1,5 +1,6 @@
 #pragma once
 
+#include "abelcore/analysis_index.h"
 #include "abelcore/ast.h"
 #include "abelcore/builtin_registry.h"
 #include "abelcore/diagnostic.h"
@@ -9,11 +10,17 @@
 #include <QSet>
 
 #include <optional>
+#include <memory>
 
 namespace abel {
 
 struct TypeCheckResult {
     QList<Diagnostic> diagnostics;
+    std::shared_ptr<AnalysisIndex> analysis;
+};
+
+struct TypeCheckOptions {
+    bool collectAnalysis = false;
 };
 
 enum class ValueCategory {
@@ -30,11 +37,13 @@ struct ExprType {
 class TypeChecker {
 public:
     TypeCheckResult check(const ProgramNode& program);
+    TypeCheckResult check(const ProgramNode& program, const TypeCheckOptions& options);
 
 private:
     struct VariableInfo {
         AbelType type;
         bool isConst = false;
+        AnalysisSymbolId symbol = 0;
     };
 
     struct FieldInfo {
@@ -86,6 +95,8 @@ private:
     QList<QString> m_currentImports;
     QHash<QString, QString> m_currentImportAliases;
     int m_loopDepth = 0;
+    TypeCheckOptions m_options;
+    std::shared_ptr<AnalysisIndex> m_analysis;
 
     struct BuiltPipeArgs {
         std::vector<ExprType> checked;
@@ -163,6 +174,7 @@ private:
     void checkRangeFor(const RangeForStmtNode& stmt);
 
     ExprType checkExpr(const ExprNode& expr);
+    ExprType checkExprImpl(const ExprNode& expr);
     ExprType checkName(const NameExprNode& expr);
     ExprType checkUnary(const UnaryExprNode& expr);
     ExprType checkBinary(const BinaryExprNode& expr);
@@ -278,6 +290,9 @@ private:
     void popScope();
     void defineVariable(const QString& name, const AbelType& type, bool isConst, const SourceSpan& span);
     const VariableInfo* lookupVariable(const QString& name) const;
+    void collectAnalysisDeclarationSymbols(const ProgramNode& program);
+    void recordAnalysisExpr(const ExprNode& expr, const ExprType& type);
+    void recordAnalysisBinding(const SourceSpan& use, AnalysisSymbolId symbol, AnalysisBindingKind kind);
 
     bool isSupportedType(const AbelType& type);
     bool isDeclInCurrentModule(const DeclNode& decl, const QString& packageName = QString()) const;

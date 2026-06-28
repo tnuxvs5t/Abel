@@ -32,6 +32,11 @@ private:
 
     static abel::TypeCheckResult checkSource(const QString& src)
     {
+        return checkSource(src, abel::TypeCheckOptions{});
+    }
+
+    static abel::TypeCheckResult checkSource(const QString& src, const abel::TypeCheckOptions& options)
+    {
         abel::Lexer lexer;
         auto lexed = lexer.lex(QStringLiteral("<test>"), src);
         for (const auto& d : lexed.diagnostics)
@@ -48,7 +53,7 @@ private:
 
         tagInlineModules(*parsed.program);
         abel::TypeChecker checker;
-        return checker.check(*parsed.program);
+        return checker.check(*parsed.program, options);
     }
 
     static int countMessagesContaining(const abel::TypeCheckResult& result, const QString& needle)
@@ -68,6 +73,47 @@ private slots:
         for (const auto& d : result.diagnostics)
             qWarning() << d.code << d.message;
         QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void analysisIndexIsOptIn()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = 1;
+                return x;
+            }
+        )");
+
+        auto normal = checkSource(src);
+        QVERIFY(normal.diagnostics.isEmpty());
+        QVERIFY(!normal.analysis);
+
+        abel::TypeCheckOptions options;
+        options.collectAnalysis = true;
+        auto analyzed = checkSource(src, options);
+        QVERIFY(analyzed.diagnostics.isEmpty());
+        QVERIFY(analyzed.analysis);
+        QVERIFY(!analyzed.analysis->symbols().isEmpty());
+        QVERIFY(!analyzed.analysis->bindings().isEmpty());
+        QVERIFY(!analyzed.analysis->exprInfos().isEmpty());
+
+        bool sawXSymbol = false;
+        bool sawXBinding = false;
+        for (const auto& symbol : analyzed.analysis->symbols()) {
+            if (symbol.name == QStringLiteral("x")
+                && symbol.kind == abel::AnalysisSymbolKind::Variable
+                && symbol.type.displayName() == QStringLiteral("int")) {
+                sawXSymbol = true;
+                for (const auto& binding : analyzed.analysis->bindings()) {
+                    if (binding.symbol == symbol.id
+                        && binding.kind == abel::AnalysisBindingKind::Variable) {
+                        sawXBinding = true;
+                    }
+                }
+            }
+        }
+        QVERIFY(sawXSymbol);
+        QVERIFY(sawXBinding);
     }
 
     void acceptsFixedWidthIntegerTypes()

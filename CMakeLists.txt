@@ -24,6 +24,8 @@ get_filename_component(ABEL_QT_LIBRARY_DIR "${Qt6Core_DIR}/../.." ABSOLUTE)
 add_library(abelcore SHARED
     src/abelcore/source_span.h
     src/abelcore/diagnostic.h
+    src/abelcore/analysis_index.h
+    src/abelcore/analysis_index.cpp
     src/abelcore/abel_version.h
     src/abelcore/abel_version.cpp
     src/abelcore/token.h

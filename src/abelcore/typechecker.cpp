@@ -708,6 +708,13 @@ AbelType applyTypeDecorations(AbelType base, const TypeNode& node)
 
 TypeCheckResult TypeChecker::check(const ProgramNode& program)
 {
+    return check(program, TypeCheckOptions{});
+}
+
+TypeCheckResult TypeChecker::check(const ProgramNode& program, const TypeCheckOptions& options)
+{
+    m_options = options;
+    m_analysis = m_options.collectAnalysis ? std::make_shared<AnalysisIndex>() : nullptr;
     m_functions.clear();
     m_functionDecls.clear();
     m_enums.clear();
@@ -729,6 +736,7 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
     collectStructs(program);
     collectFunctions(program);
     collectBackends(program);
+    collectAnalysisDeclarationSymbols(program);
 
     const FunctionDeclNode* main = findRootFunction(QStringLiteral("main"));
     if (!main) {
@@ -758,7 +766,111 @@ TypeCheckResult TypeChecker::check(const ProgramNode& program)
             checkBackend(*info.decl);
     }
 
-    return {m_diagnostics};
+    TypeCheckResult result;
+    result.diagnostics = m_diagnostics;
+    result.analysis = m_analysis;
+    m_analysis.reset();
+    return result;
+}
+
+void TypeChecker::collectAnalysisDeclarationSymbols(const ProgramNode& program)
+{
+    if (!m_analysis)
+        return;
+
+    auto add = [&](AnalysisSymbolKind kind,
+                   const QString& name,
+                   const QString& detail,
+                   const SourceSpan& span,
+                   const QString& container = {},
+                   const AbelType& type = makeType(TypeKind::Unknown)) {
+        AnalysisSymbol symbol;
+        symbol.kind = kind;
+        symbol.name = name;
+        symbol.detail = detail;
+        symbol.container = container;
+        symbol.type = type;
+        symbol.declaration = span;
+        symbol.scope = span;
+        m_analysis->addSymbol(std::move(symbol));
+    };
+
+    for (const auto& decl : program.declarations) {
+        if (auto* module = dynamic_cast<ModuleDeclNode*>(decl.get())) {
+            add(AnalysisSymbolKind::Module, module->name, QStringLiteral("module %1").arg(module->name), module->span);
+        } else if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get())) {
+            const QString name = fn->isOperator ? QStringLiteral("operator %1").arg(fn->operatorSymbol) : fn->name;
+            std::vector<AbelType> params;
+            params.reserve(fn->params.size());
+            for (const auto& param : fn->params)
+                params.push_back(typeFromAstForDecl(*param->type, *fn));
+            const AbelType fnType = makeFunctionType(typeFromAstForDecl(*fn->returnType, *fn), std::move(params));
+            add(AnalysisSymbolKind::Function, name, fnType.displayName(), fn->span, fn->moduleName, fnType);
+        } else if (auto* s = dynamic_cast<StructDeclNode*>(decl.get())) {
+            add(AnalysisSymbolKind::Struct, s->name, QStringLiteral("struct %1").arg(s->name), s->span, s->moduleName, makeStructType(s->name));
+            for (const auto& field : s->fields)
+                add(AnalysisSymbolKind::Field,
+                    field->name,
+                    field->type ? field->type->displayName() : QStringLiteral("<unknown>"),
+                    field->span,
+                    s->name,
+                    field->type ? typeFromAstForDecl(*field->type, *s) : makeType(TypeKind::Unknown));
+            for (const auto& ctor : s->constructors)
+                add(AnalysisSymbolKind::Constructor, QStringLiteral("init"), QStringLiteral("init"), ctor->span, s->name, makeStructType(s->name));
+            for (const auto& method : s->methods) {
+                std::vector<AbelType> params;
+                params.reserve(method->params.size());
+                for (const auto& param : method->params)
+                    params.push_back(typeFromAstForDecl(*param->type, *method));
+                const AbelType methodType = makeFunctionType(typeFromAstForDecl(*method->returnType, *method), std::move(params));
+                add(AnalysisSymbolKind::Method, method->name, methodType.displayName(), method->span, s->name, methodType);
+            }
+        } else if (auto* e = dynamic_cast<EnumDeclNode*>(decl.get())) {
+            add(AnalysisSymbolKind::Enum, e->name, QStringLiteral("enum %1").arg(e->name), e->span, e->moduleName, makeType(TypeKind::I32, e->name));
+        } else if (auto* alias = dynamic_cast<TypeAliasDeclNode*>(decl.get())) {
+            add(AnalysisSymbolKind::TypeAlias,
+                alias->name,
+                alias->targetType ? alias->targetType->displayName() : QStringLiteral("<unknown>"),
+                alias->span,
+                alias->moduleName,
+                alias->targetType ? typeFromAstForDecl(*alias->targetType, *alias) : makeType(TypeKind::Unknown));
+        } else if (auto* backend = dynamic_cast<BackendBlockNode*>(decl.get())) {
+            add(AnalysisSymbolKind::Backend, backend->name, QStringLiteral("backend %1").arg(backend->name), backend->span, backend->moduleName);
+            for (const auto& fn : backend->functions) {
+                std::vector<AbelType> params;
+                params.reserve(fn->params.size());
+                for (const auto& param : fn->params)
+                    params.push_back(typeFromAstForDecl(*param->type, *fn));
+                const AbelType fnType = makeFunctionType(typeFromAstForDecl(*fn->returnType, *fn), std::move(params));
+                add(AnalysisSymbolKind::BackendFunction, fn->name, fnType.displayName(), fn->span, backend->name, fnType);
+            }
+        }
+    }
+}
+
+void TypeChecker::recordAnalysisExpr(const ExprNode& expr, const ExprType& type)
+{
+    if (!m_analysis)
+        return;
+    AnalysisExprInfo info;
+    info.span = expr.span;
+    info.type = type.type;
+    info.category = type.category == ValueCategory::LValue
+        ? AnalysisValueCategory::LValue
+        : AnalysisValueCategory::PRValue;
+    info.isMutable = type.isMutable;
+    m_analysis->addExprInfo(std::move(info));
+}
+
+void TypeChecker::recordAnalysisBinding(const SourceSpan& use, AnalysisSymbolId symbol, AnalysisBindingKind kind)
+{
+    if (!m_analysis || symbol <= 0)
+        return;
+    AnalysisBinding binding;
+    binding.use = use;
+    binding.symbol = symbol;
+    binding.kind = kind;
+    m_analysis->addBinding(std::move(binding));
 }
 
 void TypeChecker::collectEnums(const ProgramNode& program)
@@ -1943,6 +2055,13 @@ void TypeChecker::checkRangeFor(const RangeForStmtNode& stmt)
 
 ExprType TypeChecker::checkExpr(const ExprNode& expr)
 {
+    const ExprType out = checkExprImpl(expr);
+    recordAnalysisExpr(expr, out);
+    return out;
+}
+
+ExprType TypeChecker::checkExprImpl(const ExprNode& expr)
+{
     if (auto* e = dynamic_cast<const LiteralExprNode*>(&expr)) {
         switch (e->kind) {
         case LiteralExprNode::Kind::Int: return {makeType(TypeKind::I32), ValueCategory::PRValue, false};
@@ -2042,6 +2161,7 @@ ExprType TypeChecker::checkName(const NameExprNode& expr)
             return errorExpr(expr.span, QStringLiteral("function '%1' is overloaded; cannot infer function value type").arg(expr.name));
         return errorExpr(expr.span, QStringLiteral("unknown variable '%1'").arg(expr.name));
     }
+    recordAnalysisBinding(expr.span, var->symbol, AnalysisBindingKind::Variable);
     return {valueTypeOfVariable(var->type), ValueCategory::LValue, !var->isConst};
 }
 
@@ -4076,7 +4196,7 @@ ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
             return;
         }
         capturedNames.insert(name);
-        captures.insert(name, VariableInfo{valueTypeOfVariable(found.value().type), mode == CaptureMode::Value || found.value().isConst});
+        captures.insert(name, VariableInfo{valueTypeOfVariable(found.value().type), mode == CaptureMode::Value || found.value().isConst, found.value().symbol});
     };
 
     if (defaultMode.has_value()) {
@@ -4140,7 +4260,19 @@ void TypeChecker::defineVariable(const QString& name, const AbelType& type, bool
         error(span, QStringLiteral("duplicate variable '%1'").arg(name));
         return;
     }
-    scope.insert(name, VariableInfo{type, isConst});
+    AnalysisSymbolId symbolId = 0;
+    if (m_analysis) {
+        AnalysisSymbol symbol;
+        symbol.kind = AnalysisSymbolKind::Variable;
+        symbol.name = name;
+        symbol.detail = type.displayName();
+        symbol.container = m_currentStruct.isEmpty() ? m_currentModule : m_currentStruct;
+        symbol.type = type;
+        symbol.declaration = span;
+        symbol.scope = span;
+        symbolId = m_analysis->addSymbol(std::move(symbol));
+    }
+    scope.insert(name, VariableInfo{type, isConst, symbolId});
 }
 
 const TypeChecker::VariableInfo* TypeChecker::lookupVariable(const QString& name) const
