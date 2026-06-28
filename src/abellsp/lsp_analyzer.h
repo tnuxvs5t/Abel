@@ -96,6 +96,12 @@ public:
     QJsonObject semanticTokens(const QString& filePath,
                                const QHash<QString, QString>& openDocuments,
                                const QString& workspaceRoot = {}) const;
+    QJsonObject rename(const QString& filePath,
+                       int zeroBasedLine,
+                       int zeroBasedCharacter,
+                       const QString& newName,
+                       const QHash<QString, QString>& openDocuments,
+                       const QString& workspaceRoot = {}) const;
 
 private:
     struct ParsedProgram {

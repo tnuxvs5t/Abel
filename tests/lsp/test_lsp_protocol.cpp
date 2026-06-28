@@ -149,6 +149,38 @@ private slots:
         }));
     }
 
+    void renameUsesAnalysisBindingsOnly()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString filePath = QDir(dir.path()).absoluteFilePath(QStringLiteral("main.abel"));
+
+        abel::lsp::Analyzer analyzer;
+        QHash<QString, QString> openDocs;
+        openDocs.insert(filePath,
+                        QStringLiteral("fn int other() {\n"
+                                       "    int local = 2;\n"
+                                       "    return local;\n"
+                                       "}\n"
+                                       "fn int main() {\n"
+                                       "    int local = 1;\n"
+                                       "    return local;\n"
+                                       "}\n"));
+
+        const QJsonObject edit = analyzer.rename(filePath, 6, 12, QStringLiteral("renamed"), openDocs);
+        const QJsonObject changes = edit.value(QStringLiteral("changes")).toObject();
+        const QJsonArray edits = changes.value(abel::lsp::uriFromPath(filePath)).toArray();
+        QCOMPARE(edits.size(), 2);
+        for (const QJsonValue& value : edits) {
+            const QJsonObject item = value.toObject();
+            QCOMPARE(item.value(QStringLiteral("newText")).toString(), QStringLiteral("renamed"));
+            const int line = item.value(QStringLiteral("range")).toObject()
+                                 .value(QStringLiteral("start")).toObject()
+                                 .value(QStringLiteral("line")).toInt();
+            QVERIFY(line == 5 || line == 6);
+        }
+    }
+
     void analyzesPackageWithOpenOverlay()
     {
         QTemporaryDir dir;
@@ -214,6 +246,7 @@ private slots:
         QCOMPARE(capabilities.value(QStringLiteral("definitionProvider")).toBool(), true);
         QCOMPARE(capabilities.value(QStringLiteral("workspaceSymbolProvider")).toBool(), true);
         QCOMPARE(capabilities.value(QStringLiteral("referencesProvider")).toBool(), true);
+        QCOMPARE(capabilities.value(QStringLiteral("renameProvider")).toBool(), true);
         QCOMPARE(capabilities.value(QStringLiteral("documentHighlightProvider")).toBool(), true);
         QCOMPARE(capabilities.value(QStringLiteral("foldingRangeProvider")).toBool(), true);
         QVERIFY(capabilities.value(QStringLiteral("signatureHelpProvider")).toObject()

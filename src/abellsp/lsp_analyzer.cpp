@@ -456,6 +456,33 @@ QJsonObject locationFromAnalysisBinding(const AnalysisBinding& binding)
     return location;
 }
 
+QString editKey(const SourceSpan& span)
+{
+    return QFileInfo(span.file).absoluteFilePath()
+        + QStringLiteral(":")
+        + QString::number(span.startLine)
+        + QStringLiteral(":")
+        + QString::number(span.startColumn)
+        + QStringLiteral(":")
+        + QString::number(span.endLine)
+        + QStringLiteral(":")
+        + QString::number(span.endColumn);
+}
+
+bool isValidRenameIdentifier(const QString& name)
+{
+    if (name.isEmpty())
+        return false;
+    const QChar first = name.at(0);
+    if (!(first.isLetter() || first == QLatin1Char('_')))
+        return false;
+    for (const QChar ch : name) {
+        if (!(ch.isLetterOrNumber() || ch == QLatin1Char('_')))
+            return false;
+    }
+    return true;
+}
+
 QString valueCategoryName(AnalysisValueCategory category)
 {
     return category == AnalysisValueCategory::LValue
@@ -1422,6 +1449,82 @@ QJsonObject Analyzer::semanticTokens(const QString& filePath,
     }
     result.insert(QStringLiteral("data"), data);
     return result;
+}
+
+QJsonObject Analyzer::rename(const QString& filePath,
+                             int zeroBasedLine,
+                             int zeroBasedCharacter,
+                             const QString& newName,
+                             const QHash<QString, QString>& openDocuments,
+                             const QString& workspaceRoot) const
+{
+    if (!isValidRenameIdentifier(newName))
+        return {};
+
+    const QString abs = QFileInfo(filePath).absoluteFilePath();
+    const AnalyzerResult analyzed = analyzeFile(abs, openDocuments, workspaceRoot);
+    if (!analyzed.analysis)
+        return {};
+
+    const int oneBasedLine = zeroBasedLine + 1;
+    const int oneBasedColumn = zeroBasedCharacter + 1;
+    AnalysisSymbolId symbolId = 0;
+    if (const AnalysisBinding* binding = analyzed.analysis->bindingAt(abs, oneBasedLine, oneBasedColumn)) {
+        symbolId = binding->symbol;
+    } else {
+        for (const AnalysisSymbol& symbol : analyzed.analysis->symbols()) {
+            if (containsPosition(symbol.declaration, abs, zeroBasedLine, zeroBasedCharacter)) {
+                symbolId = symbol.id;
+                break;
+            }
+        }
+    }
+
+    const AnalysisSymbol* symbol = analyzed.analysis->symbolById(symbolId);
+    if (!symbol)
+        return {};
+
+    QHash<QString, QJsonArray> editsByUri;
+    QSet<QString> seen;
+    auto addEdit = [&](const SourceSpan& span) {
+        if (span.file.isEmpty())
+            return;
+        const QString key = editKey(span);
+        if (seen.contains(key))
+            return;
+        seen.insert(key);
+        QJsonObject edit;
+        edit.insert(QStringLiteral("range"), rangeFromSpan(span));
+        edit.insert(QStringLiteral("newText"), newName);
+        const QString uri = uriFromPath(span.file);
+        QJsonArray edits = editsByUri.value(uri);
+        edits.push_back(edit);
+        editsByUri.insert(uri, edits);
+    };
+
+    QList<Diagnostic> declarationLexDiagnostics;
+    const QList<SourceSpan> declarationNameSpans = tokenSpansInFile(symbol->declaration.file,
+                                                                    symbol->name,
+                                                                    openDocuments,
+                                                                    declarationLexDiagnostics);
+    for (const SourceSpan& span : declarationNameSpans) {
+        if (containsPosition(symbol->declaration, span.file, span.startLine - 1, span.startColumn - 1)) {
+            addEdit(span);
+            break;
+        }
+    }
+    for (const AnalysisBinding& binding : analyzed.analysis->bindingsForSymbol(symbolId))
+        addEdit(binding.use);
+
+    if (editsByUri.isEmpty())
+        return {};
+
+    QJsonObject changes;
+    for (auto it = editsByUri.constBegin(); it != editsByUri.constEnd(); ++it)
+        changes.insert(it.key(), it.value());
+    QJsonObject workspaceEdit;
+    workspaceEdit.insert(QStringLiteral("changes"), changes);
+    return workspaceEdit;
 }
 
 } // namespace abel::lsp
