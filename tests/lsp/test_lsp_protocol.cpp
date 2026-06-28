@@ -118,6 +118,37 @@ private slots:
         QVERIFY(tokenTypes.contains(3)); // variable
     }
 
+    void completesStructMembersAfterDot()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString filePath = QDir(dir.path()).absoluteFilePath(QStringLiteral("main.abel"));
+
+        abel::lsp::Analyzer analyzer;
+        QHash<QString, QString> openDocs;
+        openDocs.insert(filePath,
+                        QStringLiteral("struct Box {\n"
+                                       "    int value;\n"
+                                       "    fn int get() {\n"
+                                       "        return value;\n"
+                                       "    }\n"
+                                       "}\n"
+                                       "fn int main() {\n"
+                                       "    Box b = Box(1);\n"
+                                       "    return b.\n"
+                                       "}\n"));
+
+        const QJsonArray completions = analyzer.completionItems(filePath, 8, 13, openDocs);
+        QVERIFY(std::any_of(completions.begin(), completions.end(), [](const QJsonValue& value) {
+            return value.toObject().value(QStringLiteral("label")).toString() == QStringLiteral("value")
+                && value.toObject().value(QStringLiteral("kind")).toInt() == 5;
+        }));
+        QVERIFY(std::any_of(completions.begin(), completions.end(), [](const QJsonValue& value) {
+            return value.toObject().value(QStringLiteral("label")).toString() == QStringLiteral("get")
+                && value.toObject().value(QStringLiteral("kind")).toInt() == 2;
+        }));
+    }
+
     void analyzesPackageWithOpenOverlay()
     {
         QTemporaryDir dir;

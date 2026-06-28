@@ -29,7 +29,7 @@ private:
     void handleNotification(const QJsonObject& message, const QString& method);
 
     void analyzeAndPublish(const QString& filePath);
-    QJsonArray completionItems(const QString& filePath = {}) const;
+    QJsonArray completionItems(const QString& filePath = {}, int zeroBasedLine = -1, int zeroBasedCharacter = -1) const;
 };
 
 } // namespace abel::lsp

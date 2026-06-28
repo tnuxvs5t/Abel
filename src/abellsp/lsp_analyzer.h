@@ -80,6 +80,11 @@ public:
     QJsonArray completionItems(const QString& filePath,
                                const QHash<QString, QString>& openDocuments,
                                const QString& workspaceRoot = {}) const;
+    QJsonArray completionItems(const QString& filePath,
+                               int zeroBasedLine,
+                               int zeroBasedCharacter,
+                               const QHash<QString, QString>& openDocuments,
+                               const QString& workspaceRoot = {}) const;
     QJsonObject signatureHelp(const QString& filePath,
                               int zeroBasedLine,
                               int zeroBasedCharacter,

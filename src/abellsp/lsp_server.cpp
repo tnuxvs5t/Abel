@@ -220,7 +220,10 @@ QJsonObject Server::handleRequest(const QJsonObject& message, const QString& met
                                              m_openDocuments);
     } else if (method == QStringLiteral("textDocument/completion")) {
         const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
-        result = completionItems(path);
+        const QJsonObject position = params.value(QStringLiteral("position")).toObject();
+        result = completionItems(path,
+                                 position.value(QStringLiteral("line")).toInt(-1),
+                                 position.value(QStringLiteral("character")).toInt(-1));
     } else if (method == QStringLiteral("textDocument/signatureHelp")) {
         const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
         const QJsonObject position = params.value(QStringLiteral("position")).toObject();
@@ -313,7 +316,7 @@ void Server::analyzeAndPublish(const QString& filePath)
     m_lastPublishedFiles = analyzed.analyzedFiles;
 }
 
-QJsonArray Server::completionItems(const QString& filePath) const
+QJsonArray Server::completionItems(const QString& filePath, int zeroBasedLine, int zeroBasedCharacter) const
 {
     QJsonArray items;
     const QStringList keywords = {
@@ -336,7 +339,9 @@ QJsonArray Server::completionItems(const QString& filePath) const
                                        15,
                                        QStringLiteral("fn int main() {\n    return 0;\n}")));
     if (!filePath.isEmpty()) {
-        const QJsonArray symbolItems = m_analyzer.completionItems(filePath, m_openDocuments, m_workspaceRoot);
+        const QJsonArray symbolItems = zeroBasedLine >= 0 && zeroBasedCharacter >= 0
+            ? m_analyzer.completionItems(filePath, zeroBasedLine, zeroBasedCharacter, m_openDocuments, m_workspaceRoot)
+            : m_analyzer.completionItems(filePath, m_openDocuments, m_workspaceRoot);
         for (const QJsonValue& item : symbolItems)
             items.push_back(item);
     }

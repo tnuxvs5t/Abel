@@ -26,6 +26,71 @@ struct PendingSource {
     QHash<QString, QString> importedModuleAliases;
 };
 
+struct MemberCompletionContext {
+    bool active = false;
+    bool needsPatch = false;
+    int receiverLine = 0;
+    int receiverColumn = 0;
+    QString patchedText;
+};
+
+bool isIdentChar(QChar ch)
+{
+    return ch.isLetterOrNumber() || ch == QLatin1Char('_');
+}
+
+MemberCompletionContext memberCompletionContext(const QString& text, int zeroBasedLine, int zeroBasedCharacter)
+{
+    MemberCompletionContext out;
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    if (zeroBasedLine < 0 || zeroBasedLine >= lines.size())
+        return out;
+
+    const QString line = lines.at(zeroBasedLine);
+    const int pos = qBound(0, zeroBasedCharacter, line.size());
+    int memberStart = pos;
+    while (memberStart > 0 && isIdentChar(line.at(memberStart - 1)))
+        --memberStart;
+
+    int accessEnd = memberStart;
+    while (accessEnd > 0 && line.at(accessEnd - 1).isSpace())
+        --accessEnd;
+    int accessStart = -1;
+    if (accessEnd > 0 && line.at(accessEnd - 1) == QLatin1Char('.')) {
+        accessStart = accessEnd - 1;
+    } else if (accessEnd > 1 && line.at(accessEnd - 1) == QLatin1Char('>') && line.at(accessEnd - 2) == QLatin1Char('-')) {
+        accessStart = accessEnd - 2;
+    }
+    if (accessStart < 0)
+        return out;
+
+    int receiverEnd = accessStart;
+    while (receiverEnd > 0 && line.at(receiverEnd - 1).isSpace())
+        --receiverEnd;
+    int receiverStart = receiverEnd;
+    while (receiverStart > 0 && isIdentChar(line.at(receiverStart - 1)))
+        --receiverStart;
+    if (receiverStart == receiverEnd)
+        return out;
+
+    out.active = true;
+    out.receiverLine = zeroBasedLine;
+    out.receiverColumn = receiverStart;
+    out.needsPatch = memberStart == pos;
+    if (out.needsPatch) {
+        out.patchedText = text;
+        qsizetype offset = 0;
+        for (int i = 0; i < zeroBasedLine; ++i)
+            offset += lines.at(i).size() + 1;
+        offset += pos;
+        QString insertion = QStringLiteral("__abel_completion__");
+        if (line.mid(pos).trimmed().isEmpty())
+            insertion += QLatin1Char(';');
+        out.patchedText.insert(offset, insertion);
+    }
+    return out;
+}
+
 void appendProgram(ProgramNode& target, std::unique_ptr<ProgramNode> source)
 {
     if (!source)
@@ -1137,6 +1202,58 @@ QJsonArray Analyzer::completionItems(const QString& filePath,
         out.push_back(completionItemFromSymbol(symbol));
     }
     return out;
+}
+
+QJsonArray Analyzer::completionItems(const QString& filePath,
+                                     int zeroBasedLine,
+                                     int zeroBasedCharacter,
+                                     const QHash<QString, QString>& openDocuments,
+                                     const QString& workspaceRoot) const
+{
+    QList<Diagnostic> readDiagnostics;
+    const QString text = readSourceText(filePath, openDocuments, readDiagnostics);
+    if (!readDiagnostics.isEmpty())
+        return completionItems(filePath, openDocuments, workspaceRoot);
+
+    const MemberCompletionContext member = memberCompletionContext(text, zeroBasedLine, zeroBasedCharacter);
+    if (!member.active)
+        return completionItems(filePath, openDocuments, workspaceRoot);
+
+    QHash<QString, QString> patchedDocuments = openDocuments;
+    if (member.needsPatch) {
+        const QString abs = QFileInfo(filePath).absoluteFilePath();
+        patchedDocuments.insert(abs, member.patchedText);
+        patchedDocuments.insert(filePath, member.patchedText);
+    }
+
+    const AnalyzerResult analyzed = analyzeFile(filePath, patchedDocuments, workspaceRoot);
+    const QString abs = QFileInfo(filePath).absoluteFilePath();
+    const AnalysisExprInfo* receiver = analyzed.analysis
+        ? analyzed.analysis->exprInfoAt(abs, member.receiverLine + 1, member.receiverColumn + 1)
+        : nullptr;
+    if (!receiver || receiver->type.kind != TypeKind::Struct)
+        return completionItems(filePath, openDocuments, workspaceRoot);
+
+    const QString structName = receiver->type.spelling.isEmpty()
+        ? receiver->type.displayName()
+        : receiver->type.spelling;
+
+    QJsonArray out;
+    QSet<QString> seen;
+    for (const IndexedSymbol& symbol : analyzed.symbols) {
+        if (symbol.containerName != structName)
+            continue;
+        if (symbol.kind != 6 && symbol.kind != 8)
+            continue;
+        const QString key = symbol.name + QStringLiteral("\n") + symbol.detail;
+        if (seen.contains(key))
+            continue;
+        seen.insert(key);
+        out.push_back(completionItemFromSymbol(symbol));
+    }
+    if (!out.isEmpty())
+        return out;
+    return completionItems(filePath, openDocuments, workspaceRoot);
 }
 
 QJsonObject Analyzer::signatureHelp(const QString& filePath,
