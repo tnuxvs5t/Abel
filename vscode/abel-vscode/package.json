@@ -71,6 +71,18 @@
     "configurationDefaults": {
       "[abel]": {
         "editor.semanticHighlighting.enabled": true
+      },
+      "editor.semanticTokenColorCustomizations": {
+        "rules": {
+          "variable:abel": "#9CDCFE",
+          "property:abel": "#9CDCFE",
+          "function:abel": "#DCDCAA",
+          "type:abel": "#4EC9B0",
+          "keyword:abel": "#C586C0",
+          "operator:abel": "#D4D4D4",
+          "number:abel": "#B5CEA8",
+          "string:abel": "#CE9178"
+        }
       }
     },
     "configuration": {
