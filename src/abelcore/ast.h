@@ -77,12 +77,14 @@ struct IndexExprNode final : ExprNode {
 struct FieldAccessExprNode final : ExprNode {
     std::unique_ptr<ExprNode> base;
     QString field;
+    SourceSpan fieldSpan;
     bool pointer = false;
 };
 
 struct StaticAccessExprNode final : ExprNode {
     std::unique_ptr<ExprNode> base;
     QString member;
+    SourceSpan memberSpan;
 };
 
 struct ThisExprNode final : ExprNode {};

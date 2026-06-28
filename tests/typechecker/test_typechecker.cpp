@@ -176,6 +176,54 @@ private slots:
         QVERIFY(hasBinding(abel::AnalysisSymbolKind::Constructor, abel::AnalysisBindingKind::Constructor, QStringLiteral("init")));
     }
 
+    void analysisIndexUsesPreciseMemberUseSpans()
+    {
+        const QString src = QStringLiteral(R"(
+struct Box {
+    int value;
+    init(int value) { this.value = value; }
+    fn int get() { return value; }
+}
+fn int main() {
+    Box b = Box(1);
+    return b.get() + b.value;
+}
+)");
+
+        abel::TypeCheckOptions options;
+        options.collectAnalysis = true;
+        auto result = checkSource(src, options);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QVERIFY(result.analysis);
+
+        bool sawMethodUse = false;
+        bool sawFieldUse = false;
+        for (const auto& symbol : result.analysis->symbols()) {
+            for (const auto& binding : result.analysis->bindings()) {
+                if (binding.symbol != symbol.id)
+                    continue;
+                if (symbol.kind == abel::AnalysisSymbolKind::Method
+                    && symbol.name == QStringLiteral("get")
+                    && binding.kind == abel::AnalysisBindingKind::Method
+                    && binding.use.startLine == 9
+                    && binding.use.startColumn == 14) {
+                    sawMethodUse = true;
+                }
+                if (symbol.kind == abel::AnalysisSymbolKind::Field
+                    && symbol.name == QStringLiteral("value")
+                    && binding.kind == abel::AnalysisBindingKind::Field
+                    && binding.use.startLine == 9
+                    && binding.use.startColumn == 24) {
+                    sawFieldUse = true;
+                }
+            }
+        }
+        QVERIFY(sawMethodUse);
+        QVERIFY(sawFieldUse);
+    }
+
     void acceptsFixedWidthIntegerTypes()
     {
         const QString src = QStringLiteral(R"(

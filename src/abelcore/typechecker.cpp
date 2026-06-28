@@ -120,6 +120,19 @@ bool isPipeHoleReceiverExpr(const ExprNode& expr)
     return false;
 }
 
+SourceSpan callableUseSpan(const ExprNode* expr)
+{
+    if (!expr)
+        return {};
+    if (auto* name = dynamic_cast<const NameExprNode*>(expr))
+        return name->span;
+    if (auto* field = dynamic_cast<const FieldAccessExprNode*>(expr))
+        return field->fieldSpan.file.isEmpty() ? field->span : field->fieldSpan;
+    if (auto* access = dynamic_cast<const StaticAccessExprNode*>(expr))
+        return access->memberSpan.file.isEmpty() ? access->span : access->memberSpan;
+    return expr->span;
+}
+
 QString callArgName(const CallExprNode& call, size_t index)
 {
     return index < call.argNames.size() ? call.argNames[index] : QString();
@@ -158,6 +171,7 @@ std::unique_ptr<ExprNode> cloneCallableExprNode(const ExprNode& node)
         auto out = std::make_unique<StaticAccessExprNode>();
         out->span = access->span;
         out->member = access->member;
+        out->memberSpan = access->memberSpan;
         out->base = cloneCallableExprNode(*access->base);
         return out;
     }
@@ -2211,7 +2225,7 @@ ExprType TypeChecker::checkExprImpl(const ExprNode& expr)
                 params.reserve(fn->params.size());
                 for (const auto& param : fn->params)
                     params.push_back(typeFromAstForDecl(*param->type, *fn));
-                recordAnalysisFunctionBinding(e->span, fn, AnalysisBindingKind::FunctionValue);
+                recordAnalysisFunctionBinding(callableUseSpan(e), fn, AnalysisBindingKind::FunctionValue);
                 return {makeFunctionType(typeFromAstForDecl(*fn->returnType, *fn), std::move(params)), ValueCategory::PRValue, false};
             }
             if (valueCandidates.size() > 1)
@@ -3275,7 +3289,7 @@ ExprType TypeChecker::checkStructuredFunctionOverloadCallWithArgs(const QString&
 
     Match match = std::move(matches.front());
     const FunctionDeclNode* fn = match.fn;
-    recordAnalysisFunctionBinding(call.callee ? call.callee->span : call.span, fn, AnalysisBindingKind::Function);
+    recordAnalysisFunctionBinding(callableUseSpan(call.callee.get()), fn, AnalysisBindingKind::Function);
 
     NormalizedCallArgs normalized = normalizeCallArgsForParams(*fn, displayName, fn->params, call, rawArgs, true, rawPipeHoles);
     if (!normalized.ok)
@@ -3373,7 +3387,7 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
                                        ? QStringLiteral("default value for method parameter '%1'").arg(param.name)
                                        : QStringLiteral("method parameter '%1'").arg(param.name));
         }
-        recordAnalysisFunctionBinding(call.callee ? call.callee->span : span, method, AnalysisBindingKind::Method);
+        recordAnalysisFunctionBinding(callableUseSpan(call.callee.get()), method, AnalysisBindingKind::Method);
         return callReturnExprType(typeFromAstForDecl(*method->returnType, *method));
     }
 
@@ -3485,7 +3499,7 @@ ExprType TypeChecker::checkMethodOverloadCall(const QString& displayName,
                                    ? QStringLiteral("default value for method parameter '%1'").arg(param.name)
                                    : QStringLiteral("method parameter '%1'").arg(param.name));
     }
-    recordAnalysisFunctionBinding(call.callee ? call.callee->span : span, method, AnalysisBindingKind::Method);
+    recordAnalysisFunctionBinding(callableUseSpan(call.callee.get()), method, AnalysisBindingKind::Method);
     return callReturnExprType(typeFromAstForDecl(*method->returnType, *method));
 }
 
@@ -3943,7 +3957,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
         if (argc == 0) {
             if (!isDefaultConstructible(resultType))
                 return errorExpr(call.span, QStringLiteral("constructor '%1' is not default-constructible").arg(displayName));
-            recordAnalysisStructBinding(call.callee ? call.callee->span : call.span, info.decl, AnalysisBindingKind::Constructor);
+            recordAnalysisStructBinding(callableUseSpan(call.callee.get()), info.decl, AnalysisBindingKind::Constructor);
         } else {
             if (argc != info.fields.size())
                 return errorExpr(call.span, QStringLiteral("constructor '%1' expects 0 or %2 argument(s)").arg(displayName).arg(info.fields.size()));
@@ -3958,7 +3972,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
                 if (!isUnknownType(arg.type) && !isAssignable(field.type, arg.type))
                     error(call.args[i]->span, QStringLiteral("cannot initialize field '%1'").arg(fieldName));
             }
-            recordAnalysisStructBinding(call.callee ? call.callee->span : call.span, info.decl, AnalysisBindingKind::Constructor);
+            recordAnalysisStructBinding(callableUseSpan(call.callee.get()), info.decl, AnalysisBindingKind::Constructor);
         }
         return {resultType, ValueCategory::PRValue, false};
     }
@@ -4006,7 +4020,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
         }
         if (mutableRefHoleCount > 1)
             return errorExpr(call.span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
-        recordAnalysisConstructorBinding(call.callee ? call.callee->span : call.span, ctor);
+        recordAnalysisConstructorBinding(callableUseSpan(call.callee.get()), ctor);
         return {resultType, ValueCategory::PRValue, false};
     }
 
@@ -4114,7 +4128,7 @@ ExprType TypeChecker::checkStructConstructorCall(const QString& displayName,
     }
     if (mutableRefHoleCount > 1)
         return errorExpr(call.span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
-    recordAnalysisConstructorBinding(call.callee ? call.callee->span : call.span, ctor);
+    recordAnalysisConstructorBinding(callableUseSpan(call.callee.get()), ctor);
     return {resultType, ValueCategory::PRValue, false};
 }
 
@@ -4212,7 +4226,7 @@ ExprType TypeChecker::checkBackendCallByName(const QString& backendName,
     if (mutableRefHoleCount > 1)
         return errorExpr(call.span, QStringLiteral("pipe RHS cannot bind the same hole to multiple mutable reference parameters"));
 
-    recordAnalysisFunctionBinding(call.callee ? call.callee->span : call.span, fn, AnalysisBindingKind::BackendFunction);
+    recordAnalysisFunctionBinding(callableUseSpan(call.callee.get()), fn, AnalysisBindingKind::BackendFunction);
     const AbelType returnType = typeFromAstForDecl(*fn->returnType, *fn);
     return callReturnExprType(returnType);
 }
@@ -4833,7 +4847,7 @@ normalFieldAccess:
     const FieldInfo field = fieldInfoForStructField(*info, objectType, *fieldDecl);
     if (field.isPrivate && m_currentStruct != structTypeName(*info->decl) && m_currentStruct != objectType.spelling)
         return errorExpr(expr.span, QStringLiteral("field '%1' is private").arg(expr.field));
-    recordAnalysisFieldBinding(expr.span, fieldDecl);
+    recordAnalysisFieldBinding(expr.fieldSpan.file.isEmpty() ? expr.span : expr.fieldSpan, fieldDecl);
     return {field.type, ValueCategory::LValue, mutableBase && !field.isConst};
 }
 

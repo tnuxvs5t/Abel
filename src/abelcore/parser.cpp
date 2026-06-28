@@ -873,6 +873,7 @@ std::unique_ptr<ExprNode> Parser::parsePostfix()
             field->base = std::move(expr);
             const Token name = consume(TokenKind::Identifier, QStringLiteral("expected field or method name"));
             field->field = name.text;
+            field->fieldSpan = name.span;
             field->span = mergeSpans(startSpan, name.span);
             expr = std::move(field);
         } else if (match(TokenKind::Scope)) {
@@ -881,6 +882,7 @@ std::unique_ptr<ExprNode> Parser::parsePostfix()
             access->base = std::move(expr);
             const Token name = consume(TokenKind::Identifier, QStringLiteral("expected static member name"));
             access->member = name.text;
+            access->memberSpan = name.span;
             access->span = mergeSpans(startSpan, name.span);
             expr = std::move(access);
         } else {

@@ -147,6 +147,7 @@ std::unique_ptr<ExprNode> cloneCallableExprNode(const ExprNode& node)
         auto out = std::make_unique<StaticAccessExprNode>();
         out->span = access->span;
         out->member = access->member;
+        out->memberSpan = access->memberSpan;
         out->base = cloneCallableExprNode(*access->base);
         return out;
     }
