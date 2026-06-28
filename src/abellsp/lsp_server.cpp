@@ -48,10 +48,20 @@ QJsonObject nullResultCapabilities()
     capabilities.insert(QStringLiteral("hoverProvider"), true);
     capabilities.insert(QStringLiteral("definitionProvider"), true);
     capabilities.insert(QStringLiteral("workspaceSymbolProvider"), true);
+    capabilities.insert(QStringLiteral("referencesProvider"), true);
+    capabilities.insert(QStringLiteral("documentHighlightProvider"), true);
+    capabilities.insert(QStringLiteral("foldingRangeProvider"), true);
 
     QJsonObject completionProvider;
     completionProvider.insert(QStringLiteral("resolveProvider"), false);
     capabilities.insert(QStringLiteral("completionProvider"), completionProvider);
+
+    QJsonObject signatureHelpProvider;
+    QJsonArray triggerCharacters;
+    triggerCharacters.push_back(QStringLiteral("("));
+    triggerCharacters.push_back(QStringLiteral(","));
+    signatureHelpProvider.insert(QStringLiteral("triggerCharacters"), triggerCharacters);
+    capabilities.insert(QStringLiteral("signatureHelpProvider"), signatureHelpProvider);
     return capabilities;
 }
 
@@ -169,12 +179,41 @@ QJsonObject Server::handleRequest(const QJsonObject& message, const QString& met
                                         position.value(QStringLiteral("character")).toInt(),
                                         m_openDocuments,
                                         m_workspaceRoot);
+    } else if (method == QStringLiteral("textDocument/references")) {
+        const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
+        const QJsonObject position = params.value(QStringLiteral("position")).toObject();
+        result = m_analyzer.references(path,
+                                       position.value(QStringLiteral("line")).toInt(),
+                                       position.value(QStringLiteral("character")).toInt(),
+                                       m_openDocuments,
+                                       m_workspaceRoot);
+    } else if (method == QStringLiteral("textDocument/documentHighlight")) {
+        const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
+        const QJsonObject position = params.value(QStringLiteral("position")).toObject();
+        result = m_analyzer.documentHighlights(path,
+                                               position.value(QStringLiteral("line")).toInt(),
+                                               position.value(QStringLiteral("character")).toInt(),
+                                               m_openDocuments,
+                                               m_workspaceRoot);
     } else if (method == QStringLiteral("workspace/symbol")) {
         result = m_analyzer.workspaceSymbols(params.value(QStringLiteral("query")).toString(),
                                              m_workspaceRoot,
                                              m_openDocuments);
     } else if (method == QStringLiteral("textDocument/completion")) {
-        result = completionItems();
+        const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
+        result = completionItems(path);
+    } else if (method == QStringLiteral("textDocument/signatureHelp")) {
+        const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
+        const QJsonObject position = params.value(QStringLiteral("position")).toObject();
+        const QJsonObject help = m_analyzer.signatureHelp(path,
+                                                          position.value(QStringLiteral("line")).toInt(),
+                                                          position.value(QStringLiteral("character")).toInt(),
+                                                          m_openDocuments,
+                                                          m_workspaceRoot);
+        result = help.isEmpty() ? QJsonValue() : QJsonValue(help);
+    } else if (method == QStringLiteral("textDocument/foldingRange")) {
+        const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
+        result = m_analyzer.foldingRanges(path, m_openDocuments, m_workspaceRoot);
     } else {
         result = QJsonValue();
     }
@@ -252,7 +291,7 @@ void Server::analyzeAndPublish(const QString& filePath)
     m_lastPublishedFiles = analyzed.analyzedFiles;
 }
 
-QJsonArray Server::completionItems() const
+QJsonArray Server::completionItems(const QString& filePath) const
 {
     QJsonArray items;
     const QStringList keywords = {
@@ -274,6 +313,11 @@ QJsonArray Server::completionItems() const
     items.push_back(makeCompletionItem(QStringLiteral("main function"),
                                        15,
                                        QStringLiteral("fn int main() {\n    return 0;\n}")));
+    if (!filePath.isEmpty()) {
+        const QJsonArray symbolItems = m_analyzer.completionItems(filePath, m_openDocuments, m_workspaceRoot);
+        for (const QJsonValue& item : symbolItems)
+            items.push_back(item);
+    }
     return items;
 }
 

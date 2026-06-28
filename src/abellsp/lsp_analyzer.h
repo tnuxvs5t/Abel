@@ -31,8 +31,10 @@ struct IndexedSymbol {
     QString containerName;
     QString file;
     int kind = 13;
+    bool local = false;
     SourceSpan range;
     SourceSpan selectionRange;
+    SourceSpan scopeRange;
 };
 
 struct AnalyzerResult {
@@ -63,6 +65,27 @@ public:
     QJsonArray workspaceSymbols(const QString& query,
                                 const QString& workspaceRoot,
                                 const QHash<QString, QString>& openDocuments) const;
+    QJsonArray references(const QString& filePath,
+                          int zeroBasedLine,
+                          int zeroBasedCharacter,
+                          const QHash<QString, QString>& openDocuments,
+                          const QString& workspaceRoot = {}) const;
+    QJsonArray documentHighlights(const QString& filePath,
+                                  int zeroBasedLine,
+                                  int zeroBasedCharacter,
+                                  const QHash<QString, QString>& openDocuments,
+                                  const QString& workspaceRoot = {}) const;
+    QJsonArray completionItems(const QString& filePath,
+                               const QHash<QString, QString>& openDocuments,
+                               const QString& workspaceRoot = {}) const;
+    QJsonObject signatureHelp(const QString& filePath,
+                              int zeroBasedLine,
+                              int zeroBasedCharacter,
+                              const QHash<QString, QString>& openDocuments,
+                              const QString& workspaceRoot = {}) const;
+    QJsonArray foldingRanges(const QString& filePath,
+                             const QHash<QString, QString>& openDocuments,
+                             const QString& workspaceRoot = {}) const;
 
 private:
     struct ParsedProgram {

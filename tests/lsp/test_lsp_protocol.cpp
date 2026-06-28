@@ -60,6 +60,52 @@ private slots:
         QVERIFY(hover.value(QStringLiteral("contents")).toObject().value(QStringLiteral("value")).toString().contains(QStringLiteral("struct Box")));
     }
 
+    void indexesLocalVariablesAndReferences()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString filePath = QDir(dir.path()).absoluteFilePath(QStringLiteral("main.abel"));
+
+        abel::lsp::Analyzer analyzer;
+        QHash<QString, QString> openDocs;
+        openDocs.insert(filePath,
+                        QStringLiteral("fn int main() {\n"
+                                       "    int local = 1;\n"
+                                       "    return local;\n"
+                                       "}\n"));
+
+        const auto result = analyzer.analyzeFile(filePath, openDocs);
+        QVERIFY(result.diagnostics.isEmpty());
+        QVERIFY(std::any_of(result.symbols.begin(), result.symbols.end(), [](const abel::lsp::IndexedSymbol& symbol) {
+            return symbol.local && symbol.name == QStringLiteral("local") && symbol.detail == QStringLiteral("int local");
+        }));
+
+        const QJsonObject hover = analyzer.hover(filePath, 2, 13, openDocs);
+        QVERIFY(hover.value(QStringLiteral("contents")).toObject().value(QStringLiteral("value")).toString().contains(QStringLiteral("int local")));
+
+        const QJsonArray definitions = analyzer.definitions(filePath, 2, 13, openDocs);
+        QCOMPARE(definitions.size(), 1);
+        QCOMPARE(abel::lsp::pathFromUri(definitions.first().toObject().value(QStringLiteral("uri")).toString()), filePath);
+        QCOMPARE(definitions.first().toObject().value(QStringLiteral("range")).toObject()
+                     .value(QStringLiteral("start")).toObject().value(QStringLiteral("line")).toInt(),
+                 1);
+
+        const QJsonArray refs = analyzer.references(filePath, 2, 13, openDocs);
+        QCOMPARE(refs.size(), 2);
+
+        const QJsonArray highlights = analyzer.documentHighlights(filePath, 2, 13, openDocs);
+        QCOMPARE(highlights.size(), 2);
+
+        const QJsonArray completions = analyzer.completionItems(filePath, openDocs);
+        QVERIFY(std::any_of(completions.begin(), completions.end(), [](const QJsonValue& value) {
+            return value.toObject().value(QStringLiteral("label")).toString() == QStringLiteral("local");
+        }));
+
+        const QJsonArray folds = analyzer.foldingRanges(filePath, openDocs);
+        QVERIFY(!folds.isEmpty());
+        QCOMPARE(folds.first().toObject().value(QStringLiteral("startLine")).toInt(), 0);
+    }
+
     void analyzesPackageWithOpenOverlay()
     {
         QTemporaryDir dir;
@@ -95,6 +141,11 @@ private slots:
         const QJsonObject hover = analyzer.hover(mainFile.fileName(), 2, 24, {}, root.absolutePath());
         QVERIFY(hover.value(QStringLiteral("contents")).toObject().value(QStringLiteral("value")).toString().contains(QStringLiteral("fn int inc(int x)")));
 
+        const QJsonObject sig = analyzer.signatureHelp(mainFile.fileName(), 2, 28, {}, root.absolutePath());
+        QVERIFY(!sig.isEmpty());
+        QVERIFY(sig.value(QStringLiteral("signatures")).toArray().first().toObject()
+                    .value(QStringLiteral("label")).toString().contains(QStringLiteral("fn int inc(int x)")));
+
         const QJsonArray symbols = analyzer.workspaceSymbols(QStringLiteral("inc"), root.absolutePath(), {});
         QVERIFY(std::any_of(symbols.begin(), symbols.end(), [](const QJsonValue& value) {
             return value.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("inc");
@@ -116,6 +167,11 @@ private slots:
         QCOMPARE(capabilities.value(QStringLiteral("hoverProvider")).toBool(), true);
         QCOMPARE(capabilities.value(QStringLiteral("definitionProvider")).toBool(), true);
         QCOMPARE(capabilities.value(QStringLiteral("workspaceSymbolProvider")).toBool(), true);
+        QCOMPARE(capabilities.value(QStringLiteral("referencesProvider")).toBool(), true);
+        QCOMPARE(capabilities.value(QStringLiteral("documentHighlightProvider")).toBool(), true);
+        QCOMPARE(capabilities.value(QStringLiteral("foldingRangeProvider")).toBool(), true);
+        QVERIFY(capabilities.value(QStringLiteral("signatureHelpProvider")).toObject()
+                    .value(QStringLiteral("triggerCharacters")).toArray().contains(QStringLiteral("(")));
     }
 };
 
