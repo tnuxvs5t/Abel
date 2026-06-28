@@ -76,6 +76,10 @@ QJsonObject nullResultCapabilities()
 
     QJsonObject completionProvider;
     completionProvider.insert(QStringLiteral("resolveProvider"), false);
+    QJsonArray completionTriggerCharacters;
+    completionTriggerCharacters.push_back(QStringLiteral("."));
+    completionTriggerCharacters.push_back(QStringLiteral(">"));
+    completionProvider.insert(QStringLiteral("triggerCharacters"), completionTriggerCharacters);
     capabilities.insert(QStringLiteral("completionProvider"), completionProvider);
 
     QJsonObject signatureHelpProvider;
