@@ -52,6 +52,25 @@ QJsonObject nullResultCapabilities()
     capabilities.insert(QStringLiteral("documentHighlightProvider"), true);
     capabilities.insert(QStringLiteral("foldingRangeProvider"), true);
 
+    QJsonObject semanticTokensProvider;
+    QJsonObject legend;
+    QJsonArray tokenTypes;
+    for (const QString& type : {QStringLiteral("keyword"),
+                                QStringLiteral("type"),
+                                QStringLiteral("function"),
+                                QStringLiteral("variable"),
+                                QStringLiteral("property"),
+                                QStringLiteral("string"),
+                                QStringLiteral("number"),
+                                QStringLiteral("operator")}) {
+        tokenTypes.push_back(type);
+    }
+    legend.insert(QStringLiteral("tokenTypes"), tokenTypes);
+    legend.insert(QStringLiteral("tokenModifiers"), QJsonArray());
+    semanticTokensProvider.insert(QStringLiteral("legend"), legend);
+    semanticTokensProvider.insert(QStringLiteral("full"), true);
+    capabilities.insert(QStringLiteral("semanticTokensProvider"), semanticTokensProvider);
+
     QJsonObject completionProvider;
     completionProvider.insert(QStringLiteral("resolveProvider"), false);
     capabilities.insert(QStringLiteral("completionProvider"), completionProvider);
@@ -214,6 +233,9 @@ QJsonObject Server::handleRequest(const QJsonObject& message, const QString& met
     } else if (method == QStringLiteral("textDocument/foldingRange")) {
         const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
         result = m_analyzer.foldingRanges(path, m_openDocuments, m_workspaceRoot);
+    } else if (method == QStringLiteral("textDocument/semanticTokens/full")) {
+        const QString path = pathFromUri(params.value(QStringLiteral("textDocument")).toObject().value(QStringLiteral("uri")).toString());
+        result = m_analyzer.semanticTokens(path, m_openDocuments, m_workspaceRoot);
     } else {
         result = QJsonValue();
     }

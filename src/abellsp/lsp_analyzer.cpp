@@ -424,6 +424,62 @@ QJsonObject completionItemFromSymbol(const IndexedSymbol& symbol)
     return item;
 }
 
+int semanticKindForToken(const Token& token, const QList<IndexedSymbol>& symbols)
+{
+    switch (token.kind) {
+    case TokenKind::String:
+    case TokenKind::Char:
+        return 5; // string
+    case TokenKind::Integer:
+    case TokenKind::Float:
+        return 6; // number
+    case TokenKind::Identifier:
+        for (const IndexedSymbol& symbol : symbols) {
+            if (symbol.name != token.text)
+                continue;
+            if (symbol.local)
+                return 3; // variable
+            if (symbol.kind == 5 || symbol.kind == 10 || symbol.kind == 13)
+                return 1; // type
+            if (symbol.kind == 12 || symbol.kind == 6 || symbol.kind == 9)
+                return 2; // function
+            if (symbol.kind == 8)
+                return 4; // property
+        }
+        return 3; // variable
+    case TokenKind::Plus:
+    case TokenKind::Minus:
+    case TokenKind::Star:
+    case TokenKind::Slash:
+    case TokenKind::Percent:
+    case TokenKind::Amp:
+    case TokenKind::Pipe:
+    case TokenKind::Bang:
+    case TokenKind::Equal:
+    case TokenKind::EqualEqual:
+    case TokenKind::BangEqual:
+    case TokenKind::Less:
+    case TokenKind::LessEqual:
+    case TokenKind::Greater:
+    case TokenKind::GreaterEqual:
+    case TokenKind::AndAnd:
+    case TokenKind::OrOr:
+    case TokenKind::Power:
+    case TokenKind::ModMod:
+    case TokenKind::MinOp:
+    case TokenKind::MaxOp:
+    case TokenKind::PipeForward:
+    case TokenKind::Ellipsis:
+        return 7; // operator
+    default:
+        break;
+    }
+
+    if (token.kind >= TokenKind::KwFn)
+        return 0; // keyword
+    return -1;
+}
+
 const IndexedSymbol* bestSymbolForToken(const QList<IndexedSymbol>& symbols,
                                         const QString& token,
                                         const QString& filePath,
@@ -1059,6 +1115,56 @@ QJsonArray Analyzer::foldingRanges(const QString& filePath,
         out.push_back(range);
     }
     return out;
+}
+
+QJsonObject Analyzer::semanticTokens(const QString& filePath,
+                                     const QHash<QString, QString>& openDocuments,
+                                     const QString& workspaceRoot) const
+{
+    QJsonObject result;
+    QJsonArray data;
+    QList<Diagnostic> diagnostics;
+    const QString abs = QFileInfo(filePath).absoluteFilePath();
+    const QString text = readSourceText(abs, openDocuments, diagnostics);
+    if (!diagnostics.isEmpty()) {
+        result.insert(QStringLiteral("data"), data);
+        return result;
+    }
+
+    const AnalyzerResult analyzed = analyzeFile(abs, openDocuments, workspaceRoot);
+    Lexer lexer;
+    const auto lexed = lexer.lex(abs, text);
+    if (!lexed.diagnostics.isEmpty()) {
+        result.insert(QStringLiteral("data"), data);
+        return result;
+    }
+
+    int lastLine = 0;
+    int lastStart = 0;
+    bool first = true;
+    for (const Token& token : lexed.tokens) {
+        if (token.kind == TokenKind::End)
+            continue;
+        const int tokenType = semanticKindForToken(token, analyzed.symbols);
+        if (tokenType < 0)
+            continue;
+
+        const int line = qMax(0, token.span.startLine - 1);
+        const int start = qMax(0, token.span.startColumn - 1);
+        const int length = qMax(1, token.span.endColumn - token.span.startColumn);
+        const int deltaLine = first ? line : line - lastLine;
+        const int deltaStart = first || deltaLine != 0 ? start : start - lastStart;
+        data.push_back(deltaLine);
+        data.push_back(deltaStart);
+        data.push_back(length);
+        data.push_back(tokenType);
+        data.push_back(0);
+        lastLine = line;
+        lastStart = start;
+        first = false;
+    }
+    result.insert(QStringLiteral("data"), data);
+    return result;
 }
 
 } // namespace abel::lsp

@@ -104,6 +104,9 @@ private slots:
         const QJsonArray folds = analyzer.foldingRanges(filePath, openDocs);
         QVERIFY(!folds.isEmpty());
         QCOMPARE(folds.first().toObject().value(QStringLiteral("startLine")).toInt(), 0);
+
+        const QJsonObject tokens = analyzer.semanticTokens(filePath, openDocs);
+        QVERIFY(tokens.value(QStringLiteral("data")).toArray().size() >= 5);
     }
 
     void analyzesPackageWithOpenOverlay()
@@ -172,6 +175,9 @@ private slots:
         QCOMPARE(capabilities.value(QStringLiteral("foldingRangeProvider")).toBool(), true);
         QVERIFY(capabilities.value(QStringLiteral("signatureHelpProvider")).toObject()
                     .value(QStringLiteral("triggerCharacters")).toArray().contains(QStringLiteral("(")));
+        QVERIFY(capabilities.value(QStringLiteral("semanticTokensProvider")).toObject()
+                    .value(QStringLiteral("legend")).toObject()
+                    .value(QStringLiteral("tokenTypes")).toArray().contains(QStringLiteral("function")));
     }
 };
 

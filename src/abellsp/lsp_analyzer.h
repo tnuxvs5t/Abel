@@ -86,6 +86,9 @@ public:
     QJsonArray foldingRanges(const QString& filePath,
                              const QHash<QString, QString>& openDocuments,
                              const QString& workspaceRoot = {}) const;
+    QJsonObject semanticTokens(const QString& filePath,
+                               const QHash<QString, QString>& openDocuments,
+                               const QString& workspaceRoot = {}) const;
 
 private:
     struct ParsedProgram {
