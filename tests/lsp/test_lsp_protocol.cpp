@@ -149,6 +149,44 @@ private slots:
         }));
     }
 
+    void completesBuiltinMembersAfterDot()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString filePath = QDir(dir.path()).absoluteFilePath(QStringLiteral("main.abel"));
+
+        abel::lsp::Analyzer analyzer;
+        QHash<QString, QString> openDocs;
+        openDocs.insert(filePath,
+                        QStringLiteral("fn int main() {\n"
+                                       "    str s = \"abel\";\n"
+                                       "    s.\n"
+                                       "    return 0;\n"
+                                       "}\n"));
+
+        const QJsonArray strCompletions = analyzer.completionItems(filePath, 2, 6, openDocs);
+        QVERIFY(std::any_of(strCompletions.begin(), strCompletions.end(), [](const QJsonValue& value) {
+            return value.toObject().value(QStringLiteral("label")).toString() == QStringLiteral("trim");
+        }));
+        QVERIFY(std::any_of(strCompletions.begin(), strCompletions.end(), [](const QJsonValue& value) {
+            return value.toObject().value(QStringLiteral("label")).toString() == QStringLiteral("parse_int");
+        }));
+
+        openDocs.insert(filePath,
+                        QStringLiteral("fn int main() {\n"
+                                       "    vector<int> xs = {1, 2};\n"
+                                       "    xs.\n"
+                                       "    return 0;\n"
+                                       "}\n"));
+        const QJsonArray vectorCompletions = analyzer.completionItems(filePath, 2, 7, openDocs);
+        QVERIFY(std::any_of(vectorCompletions.begin(), vectorCompletions.end(), [](const QJsonValue& value) {
+            return value.toObject().value(QStringLiteral("label")).toString() == QStringLiteral("push");
+        }));
+        QVERIFY(std::any_of(vectorCompletions.begin(), vectorCompletions.end(), [](const QJsonValue& value) {
+            return value.toObject().value(QStringLiteral("label")).toString() == QStringLiteral("sort");
+        }));
+    }
+
     void renameUsesAnalysisBindingsOnly()
     {
         QTemporaryDir dir;

@@ -572,6 +572,47 @@ QJsonObject completionItemFromSymbol(const IndexedSymbol& symbol)
     return item;
 }
 
+QJsonObject builtinMemberCompletionItem(const QString& label, const QString& detail)
+{
+    QJsonObject item;
+    item.insert(QStringLiteral("label"), label);
+    item.insert(QStringLiteral("kind"), 2);
+    item.insert(QStringLiteral("detail"), detail);
+    return item;
+}
+
+QJsonArray builtinMemberCompletionItems(const AbelType& receiverType)
+{
+    QJsonArray out;
+    if (receiverType.kind == TypeKind::Str) {
+        const QStringList methods = {
+            QStringLiteral("len"), QStringLiteral("empty"), QStringLiteral("contains"),
+            QStringLiteral("find"), QStringLiteral("starts_with"), QStringLiteral("ends_with"),
+            QStringLiteral("substr"), QStringLiteral("slice"), QStringLiteral("replace"),
+            QStringLiteral("trim"), QStringLiteral("lower"), QStringLiteral("upper"),
+            QStringLiteral("split"), QStringLiteral("join"), QStringLiteral("parse_int"),
+            QStringLiteral("parse_long"), QStringLiteral("parse_double"), QStringLiteral("parse_bool"),
+        };
+        for (const QString& method : methods)
+            out.push_back(builtinMemberCompletionItem(method, QStringLiteral("str.%1").arg(method)));
+    } else if (receiverType.kind == TypeKind::Vector) {
+        const QString element = receiverType.pointee ? receiverType.pointee->displayName() : QStringLiteral("?");
+        const QStringList methods = {
+            QStringLiteral("len"), QStringLiteral("empty"), QStringLiteral("push"),
+            QStringLiteral("pop"), QStringLiteral("clear"), QStringLiteral("reserve"),
+            QStringLiteral("resize"), QStringLiteral("front"), QStringLiteral("back"),
+            QStringLiteral("insert"), QStringLiteral("erase"), QStringLiteral("find"),
+            QStringLiteral("contains"), QStringLiteral("count"), QStringLiteral("extend"),
+            QStringLiteral("slice"), QStringLiteral("sort"), QStringLiteral("reverse"),
+            QStringLiteral("unique"), QStringLiteral("binary_search"), QStringLiteral("lower_bound"),
+            QStringLiteral("upper_bound"),
+        };
+        for (const QString& method : methods)
+            out.push_back(builtinMemberCompletionItem(method, QStringLiteral("vector<%1>.%2").arg(element, method)));
+    }
+    return out;
+}
+
 int semanticKindForToken(const Token& token, const QList<IndexedSymbol>& symbols)
 {
     static const QSet<QString> builtinTypes = {
@@ -1258,7 +1299,14 @@ QJsonArray Analyzer::completionItems(const QString& filePath,
     const AnalysisExprInfo* receiver = analyzed.analysis
         ? analyzed.analysis->exprInfoAt(abs, member.receiverLine + 1, member.receiverColumn + 1)
         : nullptr;
-    if (!receiver || receiver->type.kind != TypeKind::Struct)
+    if (!receiver)
+        return completionItems(filePath, openDocuments, workspaceRoot);
+    if (receiver->type.kind == TypeKind::Str || receiver->type.kind == TypeKind::Vector) {
+        const QJsonArray builtinItems = builtinMemberCompletionItems(receiver->type);
+        if (!builtinItems.isEmpty())
+            return builtinItems;
+    }
+    if (receiver->type.kind != TypeKind::Struct)
         return completionItems(filePath, openDocuments, workspaceRoot);
 
     const QString structName = receiver->type.spelling.isEmpty()
