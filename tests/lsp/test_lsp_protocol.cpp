@@ -70,6 +70,7 @@ private slots:
         QHash<QString, QString> openDocs;
         openDocs.insert(filePath,
                         QStringLiteral("fn int main() {\n"
+                                       "    str name = \"nitori\";\n"
                                        "    int local = 1;\n"
                                        "    return local;\n"
                                        "}\n"));
@@ -80,20 +81,20 @@ private slots:
             return symbol.local && symbol.name == QStringLiteral("local") && symbol.detail == QStringLiteral("int local");
         }));
 
-        const QJsonObject hover = analyzer.hover(filePath, 2, 13, openDocs);
+        const QJsonObject hover = analyzer.hover(filePath, 3, 13, openDocs);
         QVERIFY(hover.value(QStringLiteral("contents")).toObject().value(QStringLiteral("value")).toString().contains(QStringLiteral("int local")));
 
-        const QJsonArray definitions = analyzer.definitions(filePath, 2, 13, openDocs);
+        const QJsonArray definitions = analyzer.definitions(filePath, 3, 13, openDocs);
         QCOMPARE(definitions.size(), 1);
         QCOMPARE(abel::lsp::pathFromUri(definitions.first().toObject().value(QStringLiteral("uri")).toString()), filePath);
         QCOMPARE(definitions.first().toObject().value(QStringLiteral("range")).toObject()
                      .value(QStringLiteral("start")).toObject().value(QStringLiteral("line")).toInt(),
-                 1);
+                 2);
 
-        const QJsonArray refs = analyzer.references(filePath, 2, 13, openDocs);
+        const QJsonArray refs = analyzer.references(filePath, 3, 13, openDocs);
         QCOMPARE(refs.size(), 2);
 
-        const QJsonArray highlights = analyzer.documentHighlights(filePath, 2, 13, openDocs);
+        const QJsonArray highlights = analyzer.documentHighlights(filePath, 3, 13, openDocs);
         QCOMPARE(highlights.size(), 2);
 
         const QJsonArray completions = analyzer.completionItems(filePath, openDocs);
@@ -106,7 +107,13 @@ private slots:
         QCOMPARE(folds.first().toObject().value(QStringLiteral("startLine")).toInt(), 0);
 
         const QJsonObject tokens = analyzer.semanticTokens(filePath, openDocs);
-        QVERIFY(tokens.value(QStringLiteral("data")).toArray().size() >= 5);
+        const QJsonArray tokenData = tokens.value(QStringLiteral("data")).toArray();
+        QVERIFY(tokenData.size() >= 5);
+        QSet<int> tokenTypes;
+        for (qsizetype i = 0; i + 3 < tokenData.size(); i += 5)
+            tokenTypes.insert(tokenData.at(i + 3).toInt());
+        QVERIFY(tokenTypes.contains(1)); // type
+        QVERIFY(tokenTypes.contains(3)); // variable
     }
 
     void analyzesPackageWithOpenOverlay()

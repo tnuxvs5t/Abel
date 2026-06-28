@@ -426,6 +426,23 @@ QJsonObject completionItemFromSymbol(const IndexedSymbol& symbol)
 
 int semanticKindForToken(const Token& token, const QList<IndexedSymbol>& symbols)
 {
+    static const QSet<QString> builtinTypes = {
+        QStringLiteral("void"),
+        QStringLiteral("bool"),
+        QStringLiteral("int"),
+        QStringLiteral("i32"),
+        QStringLiteral("long"),
+        QStringLiteral("ll"),
+        QStringLiteral("i64"),
+        QStringLiteral("double"),
+        QStringLiteral("f64"),
+        QStringLiteral("char"),
+        QStringLiteral("str"),
+        QStringLiteral("any"),
+        QStringLiteral("vector"),
+        QStringLiteral("func"),
+    };
+
     switch (token.kind) {
     case TokenKind::String:
     case TokenKind::Char:
@@ -433,7 +450,13 @@ int semanticKindForToken(const Token& token, const QList<IndexedSymbol>& symbols
     case TokenKind::Integer:
     case TokenKind::Float:
         return 6; // number
+    case TokenKind::KwAny:
+    case TokenKind::KwVector:
+    case TokenKind::KwFunc:
+        return 1; // type
     case TokenKind::Identifier:
+        if (builtinTypes.contains(token.text))
+            return 1; // type
         for (const IndexedSymbol& symbol : symbols) {
             if (symbol.name != token.text)
                 continue;
