@@ -77,6 +77,12 @@ private:
         std::vector<bool> pipeHoles;
     };
 
+    struct DoReturnContext {
+        std::optional<ExprType> result;
+        int outerLoopDepth = 0;
+        bool sawMismatch = false;
+    };
+
     QHash<QString, QList<const FunctionDeclNode*>> m_functions;
     QList<const FunctionDeclNode*> m_functionDecls;
     QHash<QString, QList<StructInfo>> m_structs;
@@ -88,6 +94,7 @@ private:
     QList<Diagnostic> m_diagnostics;
     BuiltinRegistry m_builtins = BuiltinRegistry::makeDefault();
     AbelType m_currentReturnType = makeType(TypeKind::Void);
+    DoReturnContext* m_currentDoReturn = nullptr;
     std::optional<ExprType> m_pipeHoleExpr;
     QString m_currentStruct;
     QString m_currentPackage;
@@ -265,6 +272,7 @@ private:
                                         const std::vector<bool>* rawPipeHoles = nullptr);
     ExprType checkFunctionValueCall(const AbelType& functionType, const std::vector<std::unique_ptr<ExprNode>>& args, const SourceSpan& span);
     ExprType checkLambda(const LambdaExprNode& expr);
+    ExprType checkDoExpression(const DoExprNode& expr);
     ExprType checkFieldAccess(const FieldAccessExprNode& expr);
     ExprType checkBuiltinMethodCall(const FieldAccessExprNode& callee,
                                     const std::vector<std::unique_ptr<ExprNode>>& args,

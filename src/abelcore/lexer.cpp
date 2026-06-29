@@ -13,6 +13,7 @@ QString tokenKindName(TokenKind kind)
     case TokenKind::Float: return QStringLiteral("float");
     case TokenKind::String: return QStringLiteral("string");
     case TokenKind::Char: return QStringLiteral("char");
+    case TokenKind::KwDo: return QStringLiteral("do");
     default: return QString::number(static_cast<int>(kind));
     }
 }
@@ -250,6 +251,7 @@ void Lexer::lexIdentifierOrKeyword(qsizetype startPos, int startLine, int startC
         {QStringLiteral("for"), TokenKind::KwFor},
         {QStringLiteral("in"), TokenKind::KwIn},
         {QStringLiteral("repeat"), TokenKind::KwRepeat},
+        {QStringLiteral("do"), TokenKind::KwDo},
         {QStringLiteral("break"), TokenKind::KwBreak},
         {QStringLiteral("continue"), TokenKind::KwContinue},
         {QStringLiteral("true"), TokenKind::KwTrue},

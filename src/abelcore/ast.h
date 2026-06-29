@@ -114,6 +114,10 @@ struct LambdaExprNode final : ExprNode {
     std::unique_ptr<struct BlockStmtNode> ownedBody;
 };
 
+struct DoExprNode final : ExprNode {
+    std::unique_ptr<struct BlockStmtNode> ownedBody;
+};
+
 struct StmtNode : AstNode {
     virtual ~StmtNode() = default;
 };

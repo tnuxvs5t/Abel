@@ -196,6 +196,7 @@ private:
     AbelValue evalAnyTupleLiteral(const AnyTupleLiteralExprNode& expr);
     AbelValue evalStrMapLiteral(const StrMapLiteralExprNode& expr);
     AbelValue evalCall(const CallExprNode& expr);
+    AbelValue evalDoExpression(const DoExprNode& expr);
     AbelValue evalStaticCall(const StaticAccessExprNode& callee,
                              const CallExprNode& call,
                              const std::vector<PreparedCallArg>* preparedArgs = nullptr,

@@ -331,6 +331,39 @@ private slots:
         QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
     }
 
+    void parsesDoExpression()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int x = do {
+                    int y = 2;
+                    return y + 1;
+                };
+                int z = x |> do {
+                    return _ * 2;
+                };
+                do {
+                    int ignored = z;
+                };
+                return z;
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
+        auto* fn = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[0].get());
+        QVERIFY(fn != nullptr);
+        QVERIFY(fn->body != nullptr);
+        QCOMPARE(fn->body->statements.size(), static_cast<size_t>(4));
+    }
+
     void parsesCastPipeAndExtendedOperators()
     {
         const QString src = QStringLiteral(R"(

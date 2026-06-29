@@ -171,6 +171,7 @@ bool Parser::isStatementStart(TokenKind kind) const
         || kind == TokenKind::KwFunc
         || kind == TokenKind::KwCast
         || kind == TokenKind::KwLambda
+        || kind == TokenKind::KwDo
         || kind == TokenKind::KwThis
         || kind == TokenKind::KwTrue
         || kind == TokenKind::KwFalse
@@ -946,6 +947,8 @@ std::unique_ptr<ExprNode> Parser::parsePrimary()
     }
     if (check(TokenKind::KwLambda))
         return parseLambda();
+    if (check(TokenKind::KwDo))
+        return parseDoExpression();
     if (match(TokenKind::Identifier)) {
         auto name = std::make_unique<NameExprNode>();
         name->name = previous().text;
@@ -1060,6 +1063,15 @@ std::unique_ptr<ExprNode> Parser::parseLambda()
     lambda->ownedBody = parseBlock();
     lambda->span = mergeSpans(start.span, lambda->ownedBody->span);
     return lambda;
+}
+
+std::unique_ptr<ExprNode> Parser::parseDoExpression()
+{
+    const Token start = consume(TokenKind::KwDo, QStringLiteral("expected do"));
+    auto expr = std::make_unique<DoExprNode>();
+    expr->ownedBody = parseBlock();
+    expr->span = mergeSpans(start.span, expr->ownedBody->span);
+    return expr;
 }
 
 } // namespace abel

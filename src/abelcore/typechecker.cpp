@@ -62,6 +62,9 @@ bool hasPipeHole(const std::vector<std::unique_ptr<ExprNode>>& args)
     return false;
 }
 
+int countPipeHolesInBlock(const BlockStmtNode& block);
+int countPipeHolesInStmt(const StmtNode& stmt);
+
 int countPipeHoles(const ExprNode& expr)
 {
     if (isPipeHoleExpr(expr))
@@ -104,7 +107,63 @@ int countPipeHoles(const ExprNode& expr)
             count += countPipeHoles(*entry.value);
         return count;
     }
+    if (auto* doExpr = dynamic_cast<const DoExprNode*>(&expr))
+        return doExpr->ownedBody ? countPipeHolesInBlock(*doExpr->ownedBody) : 0;
     return 0;
+}
+
+int countPipeHolesInStmt(const StmtNode& stmt)
+{
+    if (auto* block = dynamic_cast<const BlockStmtNode*>(&stmt))
+        return countPipeHolesInBlock(*block);
+    if (auto* expr = dynamic_cast<const ExprStmtNode*>(&stmt))
+        return expr->expr ? countPipeHoles(*expr->expr) : 0;
+    if (auto* ret = dynamic_cast<const ReturnStmtNode*>(&stmt))
+        return ret->expr ? countPipeHoles(*ret->expr) : 0;
+    if (auto* var = dynamic_cast<const VarDeclStmtNode*>(&stmt))
+        return var->init ? countPipeHoles(*var->init) : 0;
+    if (auto* ifStmt = dynamic_cast<const IfStmtNode*>(&stmt)) {
+        int count = 0;
+        for (const auto& branch : ifStmt->branches) {
+            if (branch.condition)
+                count += countPipeHoles(*branch.condition);
+            if (branch.body)
+                count += countPipeHolesInBlock(*branch.body);
+        }
+        return count;
+    }
+    if (auto* whileStmt = dynamic_cast<const WhileStmtNode*>(&stmt))
+        return (whileStmt->condition ? countPipeHoles(*whileStmt->condition) : 0)
+            + (whileStmt->body ? countPipeHolesInBlock(*whileStmt->body) : 0);
+    if (auto* repeat = dynamic_cast<const RepeatStmtNode*>(&stmt))
+        return (repeat->count ? countPipeHoles(*repeat->count) : 0)
+            + (repeat->body ? countPipeHolesInBlock(*repeat->body) : 0);
+    if (auto* forStmt = dynamic_cast<const ForStmtNode*>(&stmt)) {
+        int count = 0;
+        if (forStmt->init)
+            count += countPipeHolesInStmt(*forStmt->init);
+        if (forStmt->condition)
+            count += countPipeHoles(*forStmt->condition);
+        if (forStmt->step)
+            count += countPipeHoles(*forStmt->step);
+        if (forStmt->body)
+            count += countPipeHolesInBlock(*forStmt->body);
+        return count;
+    }
+    if (auto* rangeFor = dynamic_cast<const RangeForStmtNode*>(&stmt))
+        return (rangeFor->range ? countPipeHoles(*rangeFor->range) : 0)
+            + (rangeFor->body ? countPipeHolesInBlock(*rangeFor->body) : 0);
+    return 0;
+}
+
+int countPipeHolesInBlock(const BlockStmtNode& block)
+{
+    int count = 0;
+    for (const auto& stmt : block.statements) {
+        if (stmt)
+            count += countPipeHolesInStmt(*stmt);
+    }
+    return count;
 }
 
 bool isPipeHoleReceiverExpr(const ExprNode& expr)
@@ -2017,6 +2076,19 @@ void TypeChecker::checkStmt(const StmtNode& stmt)
 {
     if (auto* s = dynamic_cast<const ReturnStmtNode*>(&stmt)) {
         ExprType value = s->expr ? checkExpr(*s->expr) : ExprType{makeType(TypeKind::Void), ValueCategory::PRValue, false};
+        if (m_currentDoReturn) {
+            if (!isUnknownType(value.type)) {
+                if (!m_currentDoReturn->result.has_value()) {
+                    m_currentDoReturn->result = value;
+                } else if (!isAssignable(m_currentDoReturn->result->type, value.type)) {
+                    error(stmt.span,
+                          QStringLiteral("cannot return %1 from do expression returning %2")
+                              .arg(value.type.displayName(), m_currentDoReturn->result->type.displayName()));
+                    m_currentDoReturn->sawMismatch = true;
+                }
+            }
+            return;
+        }
         if (!isUnknownType(value.type) && !isAssignable(m_currentReturnType, value.type))
             error(stmt.span,
                   QStringLiteral("cannot return %1 from function returning %2")
@@ -2073,6 +2145,10 @@ void TypeChecker::checkStmt(const StmtNode& stmt)
         return;
     }
     if (dynamic_cast<const BreakStmtNode*>(&stmt) || dynamic_cast<const ContinueStmtNode*>(&stmt)) {
+        if (m_currentDoReturn && m_loopDepth <= m_currentDoReturn->outerLoopDepth) {
+            error(stmt.span, QStringLiteral("break/continue cannot leave do expression"));
+            return;
+        }
         if (m_loopDepth == 0)
             error(stmt.span, QStringLiteral("break/continue must be inside a loop"));
         return;
@@ -2196,6 +2272,7 @@ ExprType TypeChecker::checkExprImpl(const ExprNode& expr)
     if (auto* e = dynamic_cast<const AssignExprNode*>(&expr)) return checkAssignment(*e);
     if (auto* e = dynamic_cast<const CallExprNode*>(&expr)) return checkCall(*e);
     if (auto* e = dynamic_cast<const LambdaExprNode*>(&expr)) return checkLambda(*e);
+    if (auto* e = dynamic_cast<const DoExprNode*>(&expr)) return checkDoExpression(*e);
     if (auto* e = dynamic_cast<const FieldAccessExprNode*>(&expr)) return checkFieldAccess(*e);
     if (auto* e = dynamic_cast<const IndexExprNode*>(&expr)) return checkIndex(*e);
     if (auto* e = dynamic_cast<const AnyTupleLiteralExprNode*>(&expr)) return checkAnyTupleLiteral(*e);
@@ -2478,6 +2555,13 @@ ExprType TypeChecker::checkCast(const CastExprNode& expr)
 ExprType TypeChecker::checkPipe(const BinaryExprNode& expr)
 {
     ExprType lhs = checkExpr(*expr.lhs);
+    if (dynamic_cast<DoExprNode*>(expr.rhs.get())) {
+        const std::optional<ExprType> previous = m_pipeHoleExpr;
+        m_pipeHoleExpr = lhs;
+        ExprType out = checkExpr(*expr.rhs);
+        m_pipeHoleExpr = previous;
+        return out;
+    }
     if (isPipeHoleReceiverExpr(*expr.rhs)) {
         if (isPipeHoleExpr(*expr.rhs))
             return errorExpr(expr.rhs->span, QStringLiteral("pipe hole receiver must select a field or call a method"));
@@ -4273,6 +4357,35 @@ ExprType TypeChecker::checkFunctionValueCall(const AbelType& functionType,
     return callReturnExprType(*functionType.pointee);
 }
 
+ExprType TypeChecker::checkDoExpression(const DoExprNode& expr)
+{
+    const qsizetype diagnosticsBeforeDo = m_diagnostics.size();
+    DoReturnContext context;
+    context.outerLoopDepth = m_loopDepth;
+    DoReturnContext* const previousDoReturn = m_currentDoReturn;
+    m_currentDoReturn = &context;
+
+    checkBlock(*expr.ownedBody, true);
+
+    m_currentDoReturn = previousDoReturn;
+
+    if (!context.result.has_value()) {
+        if (m_diagnostics.size() > diagnosticsBeforeDo)
+            return unknownExprType();
+        return {makeType(TypeKind::Void), ValueCategory::PRValue, false};
+    }
+
+    if (!context.sawMismatch
+        && m_diagnostics.size() == diagnosticsBeforeDo
+        && !blockAlwaysReturns(*expr.ownedBody)) {
+        error(expr.span,
+              QStringLiteral("do expression may end without returning %1")
+                  .arg(context.result->type.displayName()));
+    }
+
+    return {context.result->type, ValueCategory::PRValue, false};
+}
+
 ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
 {
     const qsizetype diagnosticsBeforeLambda = m_diagnostics.size();
@@ -4338,9 +4451,11 @@ ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
         captureOne(it.key(), it.value());
 
     const AbelType previousReturn = m_currentReturnType;
+    DoReturnContext* const previousDoReturn = m_currentDoReturn;
     const auto previousScopes = m_scopes;
     const int previousLoopDepth = m_loopDepth;
     m_currentReturnType = returnType;
+    m_currentDoReturn = nullptr;
     m_loopDepth = 0;
     m_scopes.clear();
     pushScope();
@@ -4364,6 +4479,7 @@ ExprType TypeChecker::checkLambda(const LambdaExprNode& expr)
     popScope();
     m_scopes = previousScopes;
     m_loopDepth = previousLoopDepth;
+    m_currentDoReturn = previousDoReturn;
     m_currentReturnType = previousReturn;
 
     return {makeFunctionType(returnType, std::move(params)), ValueCategory::PRValue, false};

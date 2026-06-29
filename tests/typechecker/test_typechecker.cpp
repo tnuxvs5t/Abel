@@ -1998,6 +1998,60 @@ fn int main() {
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsDoExpressionAndPipeContext()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int base = 2;
+                int a = do {
+                    int local = base + 3;
+                    return local;
+                };
+                int b = a |> do {
+                    int doubled = _ * 2;
+                    return doubled;
+                };
+                do {
+                    int ignored = b;
+                };
+                return b;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsDoExpressionMissingReturnAndEscapingBreak()
+    {
+        auto missingReturn = checkSource(QStringLiteral(R"(
+            fn int main() {
+                int x = do {
+                    if (true) {
+                        return 1;
+                    }
+                };
+                return x;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(missingReturn, QStringLiteral("do expression may end without returning")) >= 1);
+
+        auto escapingBreak = checkSource(QStringLiteral(R"(
+            fn int main() {
+                while (true) {
+                    int x = do {
+                        break;
+                        return 1;
+                    };
+                    return x;
+                }
+                return 0;
+            }
+        )"));
+        QVERIFY(countMessagesContaining(escapingBreak, QStringLiteral("break/continue cannot leave do expression")) >= 1);
+    }
+
     void rejectsMissingReturnInMethodAndLambdaAtCheckTime()
     {
         const QString src = QStringLiteral(R"(

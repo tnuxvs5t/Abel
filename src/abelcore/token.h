@@ -28,7 +28,7 @@ enum class TokenKind {
     Power, ModMod, MinOp, MaxOp, PipeForward,
     Ellipsis,
 
-    KwFn, KwReturn, KwIf, KwElseif, KwElse, KwWhile, KwFor, KwIn, KwRepeat,
+    KwFn, KwReturn, KwIf, KwElseif, KwElse, KwWhile, KwFor, KwIn, KwRepeat, KwDo,
     KwBreak, KwContinue, KwTrue, KwFalse, KwNullptr,
     KwConst, KwStruct, KwInit, KwBackend, KwDebt, KwLambda,
     KwVector, KwFunc, KwAny, KwNew, KwDelete, KwCast, KwThis,

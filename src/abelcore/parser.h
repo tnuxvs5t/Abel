@@ -72,6 +72,7 @@ private:
     std::unique_ptr<ExprNode> parsePrimary();
     std::unique_ptr<ExprNode> parseBracketLiteral();
     std::unique_ptr<ExprNode> parseLambda();
+    std::unique_ptr<ExprNode> parseDoExpression();
 
     bool looksLikeType() const;
     bool looksLikeQualifiedTypeName() const;

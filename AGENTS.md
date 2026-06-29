@@ -854,6 +854,13 @@ README/Tutorial 写用户可见能力，不写未落地路线承诺。
   明确保留 v1.2 |> location/value-category 语义。
   明确不改 [[...]] / [{"k" = v}]，仅允许后续实现层 key pre-run/precomputed hash 性能优化。
 
+本轮工程状态：
+  已开始 v1.3 do expression 最小实现切片：
+    Parser 增加 DoExprNode。
+    TypeChecker 增加 do-local return 推导、缺失 return 诊断和 do 边界 break/continue 诊断。
+    Interpreter 增加 do block 立即执行和 do-local return 捕获。
+    pipe RHS 支持 do expression 使用当前 `_` pipe context，不改变 v1.2 pipe operator 语义。
+
 最新提交：
   不手工固化；使用 `git log --oneline -1` 查看。
 ```

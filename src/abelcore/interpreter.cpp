@@ -51,6 +51,9 @@ bool hasPipeHole(const std::vector<std::unique_ptr<ExprNode>>& args)
     return false;
 }
 
+int countPipeHolesInBlock(const BlockStmtNode& block);
+int countPipeHolesInStmt(const StmtNode& stmt);
+
 int countPipeHoles(const ExprNode& expr)
 {
     if (isPipeHoleExpr(expr))
@@ -93,7 +96,63 @@ int countPipeHoles(const ExprNode& expr)
             count += countPipeHoles(*entry.value);
         return count;
     }
+    if (auto* doExpr = dynamic_cast<const DoExprNode*>(&expr))
+        return doExpr->ownedBody ? countPipeHolesInBlock(*doExpr->ownedBody) : 0;
     return 0;
+}
+
+int countPipeHolesInStmt(const StmtNode& stmt)
+{
+    if (auto* block = dynamic_cast<const BlockStmtNode*>(&stmt))
+        return countPipeHolesInBlock(*block);
+    if (auto* expr = dynamic_cast<const ExprStmtNode*>(&stmt))
+        return expr->expr ? countPipeHoles(*expr->expr) : 0;
+    if (auto* ret = dynamic_cast<const ReturnStmtNode*>(&stmt))
+        return ret->expr ? countPipeHoles(*ret->expr) : 0;
+    if (auto* var = dynamic_cast<const VarDeclStmtNode*>(&stmt))
+        return var->init ? countPipeHoles(*var->init) : 0;
+    if (auto* ifStmt = dynamic_cast<const IfStmtNode*>(&stmt)) {
+        int count = 0;
+        for (const auto& branch : ifStmt->branches) {
+            if (branch.condition)
+                count += countPipeHoles(*branch.condition);
+            if (branch.body)
+                count += countPipeHolesInBlock(*branch.body);
+        }
+        return count;
+    }
+    if (auto* whileStmt = dynamic_cast<const WhileStmtNode*>(&stmt))
+        return (whileStmt->condition ? countPipeHoles(*whileStmt->condition) : 0)
+            + (whileStmt->body ? countPipeHolesInBlock(*whileStmt->body) : 0);
+    if (auto* repeat = dynamic_cast<const RepeatStmtNode*>(&stmt))
+        return (repeat->count ? countPipeHoles(*repeat->count) : 0)
+            + (repeat->body ? countPipeHolesInBlock(*repeat->body) : 0);
+    if (auto* forStmt = dynamic_cast<const ForStmtNode*>(&stmt)) {
+        int count = 0;
+        if (forStmt->init)
+            count += countPipeHolesInStmt(*forStmt->init);
+        if (forStmt->condition)
+            count += countPipeHoles(*forStmt->condition);
+        if (forStmt->step)
+            count += countPipeHoles(*forStmt->step);
+        if (forStmt->body)
+            count += countPipeHolesInBlock(*forStmt->body);
+        return count;
+    }
+    if (auto* rangeFor = dynamic_cast<const RangeForStmtNode*>(&stmt))
+        return (rangeFor->range ? countPipeHoles(*rangeFor->range) : 0)
+            + (rangeFor->body ? countPipeHolesInBlock(*rangeFor->body) : 0);
+    return 0;
+}
+
+int countPipeHolesInBlock(const BlockStmtNode& block)
+{
+    int count = 0;
+    for (const auto& stmt : block.statements) {
+        if (stmt)
+            count += countPipeHolesInStmt(*stmt);
+    }
+    return count;
 }
 
 bool isPipeHoleReceiverExpr(const ExprNode& expr)
@@ -3184,6 +3243,8 @@ AbelValue Interpreter::evalExpr(const ExprNode& expr)
         return evalCall(*e);
     if (auto* e = dynamic_cast<const LambdaExprNode*>(&expr))
         return evalLambda(*e);
+    if (auto* e = dynamic_cast<const DoExprNode*>(&expr))
+        return evalDoExpression(*e);
     if (auto* e = dynamic_cast<const AnyTupleLiteralExprNode*>(&expr))
         return evalAnyTupleLiteral(*e);
     if (auto* e = dynamic_cast<const StrMapLiteralExprNode*>(&expr))
@@ -3925,6 +3986,20 @@ AbelValue Interpreter::evalPipe(const BinaryExprNode& expr)
         }
         return out;
     };
+
+    if (dynamic_cast<DoExprNode*>(expr.rhs.get())) {
+        const bool previousHasPipeHoleArg = m_hasPipeHoleArg;
+        const PreparedCallArg previousPipeHoleArg = m_pipeHoleArg;
+        AbelLocation* const previousPipeHoleTempLocation = m_pipeHoleTempLocation;
+        m_hasPipeHoleArg = true;
+        m_pipeHoleArg = preparePipeHoleArg();
+        m_pipeHoleTempLocation = nullptr;
+        AbelValue out = evalExpr(*expr.rhs);
+        m_hasPipeHoleArg = previousHasPipeHoleArg;
+        m_pipeHoleArg = previousPipeHoleArg;
+        m_pipeHoleTempLocation = previousPipeHoleTempLocation;
+        return out;
+    }
 
     if (isPipeHoleReceiverExpr(*expr.rhs)) {
         if (isPipeHoleExpr(*expr.rhs)) {
@@ -4670,6 +4745,22 @@ AbelValue Interpreter::evalQualifiedStructConstructor(const QString& moduleName,
         return AbelValue::makeUnknown();
     }
     return evalStructConstructor(moduleName + QStringLiteral("::") + name, *info, call, nullptr, preparedArgs, rawPipeHoles);
+}
+
+AbelValue Interpreter::evalDoExpression(const DoExprNode& expr)
+{
+    m_ctx->pushFrame();
+    ExecResult flow = execBlock(*expr.ownedBody);
+    m_ctx->popFrame();
+    if (m_ctx->hasError())
+        return AbelValue::makeUnknown();
+    if (flow.kind == FlowKind::Return)
+        return flow.value;
+    if (flow.kind == FlowKind::Break || flow.kind == FlowKind::Continue) {
+        error(QStringLiteral("E0595"), QStringLiteral("break/continue cannot leave do expression"), expr.span);
+        return AbelValue::makeUnknown();
+    }
+    return AbelValue::makeVoid();
 }
 
 AbelValue Interpreter::evalLambda(const LambdaExprNode& expr)

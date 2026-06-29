@@ -988,6 +988,32 @@ private slots:
         QCOMPARE(result.exitCode, 25);
     }
 
+    void doExpressionsRunAndReturnLocally()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                int base = 1;
+                int a = do {
+                    int local = base + 2;
+                    return local;
+                };
+                int b = a |> do {
+                    int doubled = _ * 2;
+                    return doubled;
+                };
+                do {
+                    int ignored = b + 100;
+                };
+                return b * 10 + base;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 61);
+    }
+
     void pipeHolesWorkForFunctionsAndFunctionValues()
     {
         const QString src = QStringLiteral(R"(
