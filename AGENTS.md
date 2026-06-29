@@ -107,6 +107,26 @@ v1.2 不改变的核心边界：
 不引入 borrow checker；只做局部调用边界 alias 风险检查。
 ```
 
+v1.3 核心增量口径：
+
+```text
+v1.3 只引入 instant lambda / do expression。
+不改变 v1.2 pipe 语义。
+不新增 pipe operator。
+不改变 [[...]] / [{"k" = v}] 动态容器语法和语义。
+不扩张 dynamic key / patch merge / pipe manifold。
+```
+
+v1.3 的目标是让复杂 pipe RHS 可以局部展开，而不是重做水路系统：
+
+```abel
+req |> do {
+    str cmd = cast<str>(_["body"]["cmd"]);
+    int timeout = cast<int>(_["body"]["timeout"]);
+    return Bash::run_wire(cmd, timeout);
+}
+```
+
 ### 1.2 VSCode / LSP
 
 当前公开口径：
@@ -442,6 +462,71 @@ lhs 只求值一次。
 无 `_` 的 RHS 保持旧 callable insertion 兼容。
 ```
 
+v1.3 不改 pipe：
+
+```text
+不要把 |> 拆成按值 / 按引用 / sink 多套 operator。
+不要新增 |=> / |+> / |&> / |!> / |&!>。
+不要改变 lhs 是 lvalue 时 `_` 保留 location 的既有行为。
+需要局部复杂逻辑时，用 do expression 承接 pipe context。
+```
+
+### 5.7 instant lambda / do expression
+
+v1.3 计划新增 `do { ... }` 表达式，定位是“立即执行的局部表达式块”，不是函数值、不是普通 lambda 的语法糖。
+
+基本形态：
+
+```abel
+any out = req |> do {
+    str cmd = cast<str>(_["body"]["cmd"]);
+    int timeout = cast<int>(_["body"]["timeout"]);
+    return Bash::run_wire(cmd, timeout);
+};
+```
+
+规则：
+
+```text
+do 是 expression。
+do 立即执行，不生成 func value。
+do 有自己的局部 scope。
+do 可出现在普通表达式位置，也可出现在 pipe RHS。
+处于 pipe RHS 时，do 内天然可使用当前 pipe context 的 `_`。
+do 内 return 只返回 do 表达式结果，不返回外层函数。
+do 不改变外层 function/lambda 的 return 语义。
+```
+
+实现边界：
+
+```text
+Parser 增加 DoExprNode，而不是脱糖成 LambdaExprNode。
+TypeChecker 对 do 使用独立 return context，推导 do 表达式类型。
+Interpreter 执行 do block 时捕获 do-local return。
+非 void do 必须所有路径 return。
+多个 return 的类型必须按现有可赋值规则形成稳定结果类型。
+break/continue 不得跳出 do expression 边界。
+```
+
+禁止借 v1.3 do expression 扩张：
+
+```text
+不新增 pipe operator。
+不改变 |> 的 location / value-category 规则。
+不改变 dynamic literal key 规则。
+不新增 #expr dynamic key。
+不新增 patch merge。
+不把 dynamic container 重新定义为 pipe manifold。
+```
+
+后续性能优化允许但不得改变语义：
+
+```text
+[{"k" = v}] strmap 可在实现层做 literal key pre-run/precomputed hash。
+bare key、dynamic key、general hash-key map 不属于当前 v1.3 核心增量。
+性能优化必须保持现有 string-literal key 语义和诊断。
+```
+
 ---
 
 ## 6. 标准库当前面
@@ -689,7 +774,7 @@ dynamic object 错误必须带 key/index/operator/runtime type。
 6. backend 不能掩盖语言核心问题；非 dynamic boundary 的 check/run 分裂必须在 core 修。
 7. 不为了安全幻想牺牲 Abel 的 C/C++ 能力面；但明显静态错误必须诊断。
 8. 每次大块推进要有测试覆盖正例、负例、静态层 check/run 一致性和动态边界 runtime diagnostic。
-9. v1.2 之后只做 bugfix、诊断质量、SDK helper、库层包装和 LSP v0.1 增强；不要以“补 v1.2”为名扩张 core schema。
+9. v1.2 之后只做 bugfix、诊断质量、SDK helper、库层包装、LSP v0.1 增强和 v1.3 instant lambda；不要以“补 v1.2/v1.3”为名扩张 core schema。
 
 ---
 
@@ -700,17 +785,19 @@ dynamic object 错误必须带 key/index/operator/runtime type。
 ```text
 Abel core v1.2 released。
 VSCode/LSP v0.1 继续补语义体验。
-主线回到 v1/v1.2 released 后的稳定化、矩阵审计、诊断质量和文档一致性。
+v1.3 核心增量已收敛为 instant lambda / do expression。
+主线回到 v1/v1.2 released 后的稳定化、矩阵审计、诊断质量、文档一致性和 do expression 最小实现。
 ```
 
 优先级从高到低：
 
 ```text
 1. v1/v1.2 总矩阵审计：确认没有 parser-only 幻影和非 dynamic check/run 分裂。
-2. LSP v0.1：补 module/use/type/enum binding、链式/调用 receiver completion、缓存/增量/取消、code action、inlay hints。
-3. const/pointer/reference/value-category 的最小矩阵继续收口；不做 pointer arithmetic/lifetime proof。
-4. backend/SDK：继续强化 dynamic object helper、diagnostic、installed SDK fixture。
-5. package/diagnostic 文档 smoke 保持绿色，但不压过 core 稳定化。
+2. v1.3 instant lambda / do expression：只实现局部表达式块和 do-local return，不改 pipe。
+3. LSP v0.1：补 module/use/type/enum binding、链式/调用 receiver completion、缓存/增量/取消、code action、inlay hints。
+4. const/pointer/reference/value-category 的最小矩阵继续收口；不做 pointer arithmetic/lifetime proof。
+5. backend/SDK：继续强化 dynamic object helper、diagnostic、installed SDK fixture。
+6. package/diagnostic 文档 smoke 保持绿色，但不压过 core 稳定化。
 ```
 
 明确禁止回退路线：
@@ -720,6 +807,10 @@ VSCode/LSP v0.1 继续补语义体验。
 不新增 core TypeKind::Tuple/Map/Object/Dict。
 不做 object schema inference。
 不做 dynamic field access m.name。
+不改变 v1.2 |> pipe 语义。
+不新增 |=> / |+> / |&> / |!> / |&!>。
+不改变 [{"k" = v}] string-literal key 规则。
+不新增 #expr dynamic key 或 patch merge。
 不把 LSP 分叉成第二套 TypeChecker。
 不让 CLI 默认路径为 IDE index 付性能税。
 不做 HTTP registry / JIT / debugger DAP 作为当前主线。
@@ -756,11 +847,12 @@ README/Tutorial 写用户可见能力，不写未落地路线承诺。
 当前阶段：
   Abel core v1.2 released。
   VSCode/LSP 当前按 v0.1 维护。
+  v1.3 核心增量收敛为 instant lambda / do expression；不改 pipe 和 dynamic container 语义。
 
 本轮文档状态：
-  AGENTS.md 已清理为当前工程手册。
-  删除 v1.1-H / v1.2 规划期流水账和混杂验收清单。
-  保留工程架构、工具链、CLI、语言边界、Backend/SDK、包管理、AnalysisIndex/LSP、诊断、实现原则和近期路线。
+  AGENTS.md 记录 v1.3 最小方向：只加 do expression。
+  明确保留 v1.2 |> location/value-category 语义。
+  明确不改 [[...]] / [{"k" = v}]，仅允许后续实现层 key pre-run/precomputed hash 性能优化。
 
 最新提交：
   不手工固化；使用 `git log --oneline -1` 查看。
