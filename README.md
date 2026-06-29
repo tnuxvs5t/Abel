@@ -22,13 +22,12 @@ The goal is simple:
 
 ## Status
 
-**Current public release: Abel v1.2**
-**Current development tree: v1.3 `do` expression closed**
+**Current version: Abel v1.3**
 
-v1.2 is fully implemented and released.  
+v1.3 is closed in the current tree.
 The internal full test suite passes.
 
-v1.2 introduces Abel's **Dynamic Waterworks** layer:
+v1.3 includes Abel's **Dynamic Waterworks** layer:
 
 ```abel
 any tuple = [[1, "text", true]];
@@ -40,8 +39,8 @@ any next = object["version"] |> _ + 1;
 
 This gives Abel dynamic composition ability without polluting the static core type system.
 
-The current tree closes the v1.3 core increment: `do { ... }` expressions.
-They are immediate local expression blocks, useful when a pipe RHS needs several named steps:
+v1.3 also includes `do { ... }` expressions and C-like compound assignment.
+`do` blocks are immediate local expression blocks, useful when a pipe RHS needs several named steps:
 
 ```abel
 any out = req |> do {
@@ -52,6 +51,14 @@ any out = req |> do {
 ```
 
 `return` inside `do` returns the do expression result, not the outer function.
+
+Compound assignment keeps Abel comfortable for C programmers:
+
+```abel
+score += 3;
+score <?= limit;
+box += item; // can call operator +=(Box& box, Item item)
+```
 
 ---
 
@@ -208,7 +215,7 @@ It is a protocol for AI-assisted local engineering.
 
 ## Dynamic Waterworks
 
-v1.2 introduces Abel's dynamic composition layer.
+v1.3 keeps dynamic composition explicit.
 
 ### Dynamic tuple
 
@@ -254,6 +261,25 @@ any projected = meta |> do {
 
 `do` is an immediate expression block with its own local scope.
 Inside a pipe RHS it can use the current `_` pipe context, so complex water routes can stay explicit without adding new pipe operators.
+
+### Compound assignment
+
+```abel
+count += 1;
+score >?= best;
+```
+
+The supported compound operators are `+= -= *= /= %= %%= **= <?= >?=`.
+They require a mutable lvalue on the left and write the computed value back to that location.
+User overloads are available for these operators:
+
+```abel
+fn void operator +=(Box& box, int delta) {
+    box.value += delta;
+}
+```
+
+Only compound assignment overloads are opened here; Abel still does not overload `=`, `&&`, `||`, `[]`, `[]=`, `|>`, or calls.
 
 ---
 

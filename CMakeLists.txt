@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.30)
 
 project(Abel
     VERSION 0.0.1
-    DESCRIPTION "Abel v0 language core and Qt backend runtime"
+    DESCRIPTION "Abel v1.3 language core and Qt backend runtime"
     LANGUAGES C CXX
 )
 

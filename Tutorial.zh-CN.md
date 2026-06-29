@@ -1,6 +1,6 @@
-# Abel v1.2 / v1.3 中文教程
+# Abel v1.3 中文教程
 
-> 状态：按 Abel v1.2 已发布能力和当前代码树已闭环的 v1.3 `do` expression 写成的教程草稿；后续仍需逐项和实现矩阵比对、修正措辞。
+> 状态：按当前代码树已闭环的 Abel v1.3 能力写成的教程草稿；后续仍需逐项和实现矩阵比对、修正措辞。
 
 Abel 是一门小型 C-like 本地工程语言。它的核心思想是：
 
@@ -982,7 +982,7 @@ fn int main() {
 }
 ```
 
-### 14.3 v1.2 generalized pipe expression
+### 14.3 generalized pipe expression
 
 `_` 可以出现在 pipe RHS 的一般表达式中：
 
@@ -1003,9 +1003,9 @@ fn int main() {
 - 如果同一调用边界会把同一个 hole 绑定到多个 mutable ref / mutable receiver，会被拒绝；
 - prvalue pipe temporary 不能绕过 mutable reference 规则。
 
-### 14.4 v1.3 `do` expression
+### 14.4 `do` expression
 
-v1.3 的核心增量是 `do { ... }` 表达式。它是立即执行的局部表达式块，不生成 `func` value，也不是普通 lambda 的语法糖。
+`do { ... }` 表达式是立即执行的局部表达式块，不生成 `func` value，也不是普通 lambda 的语法糖。
 
 普通表达式位置也可以使用 `do`：
 
@@ -1046,11 +1046,78 @@ fn int main() {
 - 非 void do expression 必须所有路径 return；
 - `break` / `continue` 不能跳出 do expression 边界。
 
-这个功能的目标是让复杂 pipe RHS 可以局部展开，而不是新增 `|=>`、`|&>` 等更多 pipe operator，也不改变 v1.2 pipe 的 location / value-category 语义。
+这个功能的目标是让复杂 pipe RHS 可以局部展开，而不是新增 `|=>`、`|&>` 等更多 pipe operator，也不改变 pipe 的 location / value-category 语义。
 
 ---
 
-## 15. 用户二元 operator overload
+## 15. 自运算符与 operator overload
+
+### 15.1 自运算符
+
+Abel v1.3 支持 C-like compound assignment：
+
+```abel
+fn int main() {
+    int x = 5;
+    x += 3;
+    x -= 2;
+    x *= 4;
+    x /= 3;
+    x %= 5;
+    x = -7;
+    x %%= 5;  // 非负取模写回
+    x = 2;
+    x **= 3;
+    x <?= 6;  // min 写回
+    x >?= 9;  // max 写回
+    return x;
+}
+```
+
+支持列表：
+
+```text
++= -= *= /= %= %%= **= <?= >?=
+```
+
+规则：
+
+- 左侧必须是 mutable lvalue；
+- 左侧 location 只求一次；
+- 内建行为等价于“读 lhs，计算 lhs op rhs，再写回 lhs”；
+- 计算结果必须可赋值回 lhs 类型；
+- `+=` 支持 `str` 拼接；
+- `any` 仍是动态边界，运行期失败是 runtime diagnostic。
+
+### 15.2 compound assignment overload
+
+这些自运算符可以重载。第一参数必须是 mutable reference：
+
+```abel
+struct Box {
+    int value;
+}
+
+fn void operator +=(Box& box, int delta) {
+    box.value += delta;
+}
+
+fn int main() {
+    Box b = Box(10);
+    b += 5;
+    return b.value;
+}
+```
+
+边界：
+
+- compound overload 必须正好两个参数；
+- 第一个参数必须是 mutable reference；
+- 第二个参数当前不允许 reference；
+- operator overload 不能是 `debt`；
+- 不开放 `operator=`、`operator[]`、`operator[]=`、`operator&&`、`operator||`、`operator|>`、`operator()`。
+
+### 15.3 用户二元 operator overload
 
 支持声明 concrete 二元 operator overload：
 
@@ -1386,7 +1453,7 @@ abel test --report-junit report.xml .
 }
 ```
 
-支持 path dependency、本地 registry、`file://` registry mirror。HTTP/network registry 不属于当前 v1.2/v1.3 本地闭环。
+支持 path dependency、本地 registry、`file://` registry mirror。HTTP/network registry 不属于当前 v1.3 本地闭环。
 
 ### 22.3 package 源文件规则
 
@@ -1461,7 +1528,7 @@ backend 可：
 
 ## 24. 当前明确不支持或不要依赖的能力
 
-下面内容不是当前 Abel v1.2/v1.3 surface：
+下面内容不是当前 Abel v1.3 surface：
 
 ```text
 用户 template / interface / require / 泛型函数 / 泛型 struct
@@ -1473,6 +1540,7 @@ dynamic backend_invoke(...)
 operator() 用户重载
 operator[] / operator[]= 用户源码重载
 赋值、&&、||、成员访问、pipe、address-of、dereference 用户重载
+除 compound assignment 外的赋值类 operator overload
 指针算术、void*、reinterpret_cast、manual delete
 borrow checker / 完整 lifetime proof
 完整 C++ overload ranking / ADL / 默认参数进入 func ABI
@@ -1535,7 +1603,8 @@ fn int main() {
 ```text
 普通数据：静态类型、函数、struct、vector。
 异构数据：any + cast + dynamic literal。
-流程组合：pipe + _。
+流程组合：pipe + _ + do expression。
+局部更新：compound assignment。
 重能力：backend block + package artifact。
 验证：test_* + abel test。
 ```

@@ -51,6 +51,33 @@ bool hasPipeHole(const std::vector<std::unique_ptr<ExprNode>>& args)
     return false;
 }
 
+bool isCompoundAssignmentOperator(const QString& op)
+{
+    return op == QStringLiteral("+=")
+        || op == QStringLiteral("-=")
+        || op == QStringLiteral("*=")
+        || op == QStringLiteral("/=")
+        || op == QStringLiteral("%=")
+        || op == QStringLiteral("%%=")
+        || op == QStringLiteral("**=")
+        || op == QStringLiteral("<?=")
+        || op == QStringLiteral(">?=");
+}
+
+QString compoundAssignmentBaseOperator(const QString& op)
+{
+    if (op == QStringLiteral("+=")) return QStringLiteral("+");
+    if (op == QStringLiteral("-=")) return QStringLiteral("-");
+    if (op == QStringLiteral("*=")) return QStringLiteral("*");
+    if (op == QStringLiteral("/=")) return QStringLiteral("/");
+    if (op == QStringLiteral("%=")) return QStringLiteral("%");
+    if (op == QStringLiteral("%%=")) return QStringLiteral("%%");
+    if (op == QStringLiteral("**=")) return QStringLiteral("**");
+    if (op == QStringLiteral("<?=")) return QStringLiteral("<?");
+    if (op == QStringLiteral(">?=")) return QStringLiteral(">?");
+    return {};
+}
+
 int countPipeHolesInBlock(const BlockStmtNode& block);
 int countPipeHolesInStmt(const StmtNode& stmt);
 
@@ -3901,6 +3928,182 @@ std::optional<AbelValue> Interpreter::evalUserBinaryOperator(const QString& op,
     return callFunctionPrepared(*fn, prepared, span).value;
 }
 
+std::optional<AbelValue> Interpreter::evalUserCompoundAssignmentOperator(const QString& op,
+                                                                         AbelLocation& lhsLocation,
+                                                                         const AbelValue& lhs,
+                                                                         const AbelValue& rhs,
+                                                                         const SourceSpan& span)
+{
+    const QString name = QStringLiteral("operator ") + op;
+    const QList<const FunctionDeclNode*> candidates = resolveFunctionCandidates(name);
+    if (candidates.isEmpty())
+        return std::nullopt;
+
+    struct Match {
+        const FunctionDeclNode* fn = nullptr;
+    };
+
+    QList<Match> matches;
+    int bestScore = 1'000'000;
+    std::vector<PreparedCallArg> prepared(2);
+    prepared[0].value = lhs;
+    prepared[0].location = &lhsLocation;
+    prepared[0].isReadOnly = lhsLocation.isReadOnly;
+    prepared[0].span = span;
+    prepared[1].value = rhs;
+    prepared[1].span = span;
+
+    for (const FunctionDeclNode* fn : candidates) {
+        if (!fn || !fn->isOperator || fn->operatorSymbol != op)
+            continue;
+        if (fn->params.size() != 2 || (!fn->params.empty() && fn->params.back()->variadic))
+            continue;
+        const AbelType lhsParam = typeFromAstForDecl(*fn->params[0]->type, *fn);
+        const AbelType rhsParam = typeFromAstForDecl(*fn->params[1]->type, *fn);
+        const auto lhsScore = scorePreparedArgument(lhsParam, prepared[0]);
+        const auto rhsScore = scorePreparedArgument(rhsParam, prepared[1]);
+        if (!lhsScore || !rhsScore)
+            continue;
+        const int score = *lhsScore + *rhsScore;
+        if (score < bestScore) {
+            bestScore = score;
+            matches.clear();
+            matches.push_back(Match{fn});
+        } else if (score == bestScore) {
+            matches.push_back(Match{fn});
+        }
+    }
+
+    if (matches.isEmpty())
+        return std::nullopt;
+    if (matches.size() > 1) {
+        error(QStringLiteral("E0521"),
+              QStringLiteral("operator '%1' is ambiguous for %2 and %3")
+                  .arg(op, lhs.type().displayName(), rhs.type().displayName()),
+              span);
+        return AbelValue::makeUnknown();
+    }
+
+    return callFunctionPrepared(*matches.front().fn, prepared, span).value;
+}
+
+AbelValue Interpreter::evalCompoundAssignmentFallback(const QString& op,
+                                                      const AbelValue& lhs,
+                                                      const AbelValue& rhs,
+                                                      const SourceSpan& span)
+{
+    const QString baseOp = compoundAssignmentBaseOperator(op);
+
+    auto evalBuiltin = [&](const AbelValue& rawLhs, const AbelValue& rawRhs) -> std::optional<AbelValue> {
+        if (baseOp == QStringLiteral("+") && rawLhs.type().kind == TypeKind::Str && rawRhs.type().kind == TypeKind::Str)
+            return AbelValue::makeString(rawLhs.asString() + rawRhs.asString());
+        if (!rawLhs.type().isNumeric() || !rawRhs.type().isNumeric())
+            return std::nullopt;
+
+        const bool useDouble = rawLhs.type().kind == TypeKind::F64 || rawRhs.type().kind == TypeKind::F64;
+        if (useDouble) {
+            const double a = rawLhs.asDouble();
+            const double b = rawRhs.asDouble();
+            if (baseOp == QStringLiteral("+")) return AbelValue::makeDouble(a + b);
+            if (baseOp == QStringLiteral("-")) return AbelValue::makeDouble(a - b);
+            if (baseOp == QStringLiteral("*")) return AbelValue::makeDouble(a * b);
+            if (baseOp == QStringLiteral("/")) return AbelValue::makeDouble(a / b);
+            if (baseOp == QStringLiteral("**")) return AbelValue::makeDouble(std::pow(a, b));
+            if (baseOp == QStringLiteral("<?")) return AbelValue::makeDouble(a < b ? a : b);
+            if (baseOp == QStringLiteral(">?")) return AbelValue::makeDouble(a > b ? a : b);
+            return std::nullopt;
+        }
+
+        const TypeKind resultKind = numericBinaryResultKind(rawLhs.type(), rawRhs.type());
+        const bool useUnsigned = rawLhs.type().isUnsignedInteger() || rawRhs.type().isUnsignedInteger();
+        if (useUnsigned) {
+            const quint64 a = static_cast<quint64>(rawLhs.asInt());
+            const quint64 b = static_cast<quint64>(rawRhs.asInt());
+            if (baseOp == QStringLiteral("+")) return AbelValue::makeInt(static_cast<qint64>(a + b), resultKind);
+            if (baseOp == QStringLiteral("-")) return AbelValue::makeInt(static_cast<qint64>(a - b), resultKind);
+            if (baseOp == QStringLiteral("*")) return AbelValue::makeInt(static_cast<qint64>(a * b), resultKind);
+            if (baseOp == QStringLiteral("/")) {
+                if (b == 0) {
+                    error(QStringLiteral("E0517"), QStringLiteral("division by zero"), span);
+                    return AbelValue::makeUnknown();
+                }
+                return AbelValue::makeInt(static_cast<qint64>(a / b), resultKind);
+            }
+            if (baseOp == QStringLiteral("%") || baseOp == QStringLiteral("%%")) {
+                if (b == 0) {
+                    error(QStringLiteral("E0518"), QStringLiteral("modulo by zero"), span);
+                    return AbelValue::makeUnknown();
+                }
+                return AbelValue::makeInt(static_cast<qint64>(a % b), resultKind);
+            }
+            if (baseOp == QStringLiteral("**")) {
+                quint64 out = 1;
+                for (quint64 i = 0; i < b; ++i)
+                    out *= a;
+                return AbelValue::makeInt(static_cast<qint64>(out), resultKind);
+            }
+            if (baseOp == QStringLiteral("<?")) return AbelValue::makeInt(static_cast<qint64>(a < b ? a : b), resultKind);
+            if (baseOp == QStringLiteral(">?")) return AbelValue::makeInt(static_cast<qint64>(a > b ? a : b), resultKind);
+            return std::nullopt;
+        }
+
+        const qint64 a = rawLhs.asInt();
+        const qint64 b = rawRhs.asInt();
+        if (baseOp == QStringLiteral("+")) return AbelValue::makeInt(a + b, resultKind);
+        if (baseOp == QStringLiteral("-")) return AbelValue::makeInt(a - b, resultKind);
+        if (baseOp == QStringLiteral("*")) return AbelValue::makeInt(a * b, resultKind);
+        if (baseOp == QStringLiteral("/")) {
+            if (b == 0) {
+                error(QStringLiteral("E0517"), QStringLiteral("division by zero"), span);
+                return AbelValue::makeUnknown();
+            }
+            return AbelValue::makeInt(a / b, resultKind);
+        }
+        if (baseOp == QStringLiteral("%") || baseOp == QStringLiteral("%%")) {
+            if (b == 0) {
+                error(QStringLiteral("E0518"), QStringLiteral("modulo by zero"), span);
+                return AbelValue::makeUnknown();
+            }
+            qint64 r = a % b;
+            if (baseOp == QStringLiteral("%%") && r < 0)
+                r += b < 0 ? -b : b;
+            return AbelValue::makeInt(r, resultKind);
+        }
+        if (baseOp == QStringLiteral("**")) {
+            if (b < 0) {
+                error(QStringLiteral("E0519"), QStringLiteral("integer power with negative exponent is not supported"), span);
+                return AbelValue::makeUnknown();
+            }
+            qint64 out = 1;
+            for (qint64 i = 0; i < b; ++i)
+                out *= a;
+            return AbelValue::makeInt(out, resultKind);
+        }
+        if (baseOp == QStringLiteral("<?")) return AbelValue::makeInt(a < b ? a : b, resultKind);
+        if (baseOp == QStringLiteral(">?")) return AbelValue::makeInt(a > b ? a : b, resultKind);
+        return std::nullopt;
+    };
+
+    if (lhs.type().kind == TypeKind::Any || rhs.type().kind == TypeKind::Any) {
+        AbelValue rawLhs = unboxAnyValue(lhs);
+        AbelValue rawRhs = unboxAnyValue(rhs);
+        if (auto builtin = evalBuiltin(rawLhs, rawRhs))
+            return *builtin;
+        if (m_ctx->hasError())
+            return AbelValue::makeUnknown();
+    } else if (auto builtin = evalBuiltin(lhs, rhs)) {
+        return *builtin;
+    }
+
+    if (auto overloaded = evalUserBinaryOperator(baseOp, lhs, rhs, span))
+        return *overloaded;
+
+    error(QStringLiteral("E0521"),
+          QStringLiteral("operator '%1' requires compatible operands").arg(op),
+          span);
+    return AbelValue::makeUnknown();
+}
+
 AbelValue Interpreter::evalCast(const CastExprNode& expr)
 {
     AbelValue source = evalExpr(*expr.expr);
@@ -5279,35 +5482,38 @@ AbelValue Interpreter::evalBuiltinMethod(const FieldAccessExprNode& callee,
 
 AbelValue Interpreter::evalAssignment(const AssignExprNode& expr)
 {
-    auto* name = dynamic_cast<NameExprNode*>(expr.lhs.get());
-    if (name && !(name->name == QStringLiteral("_") && m_hasPipeHoleArg)) {
-        VariableSlot* slot = m_ctx->lookupVariable(name->name);
-        if (!slot) {
-            error(QStringLiteral("E0527"), QStringLiteral("unknown variable '%1'").arg(name->name), expr.span);
-            return AbelValue::makeUnknown();
-        }
-        AbelValue current = slot->location ? slot->location->read() : AbelValue::makeUnknown();
-        const AbelType targetType = slot->location && slot->location->declaredType.kind != TypeKind::Unknown
-            ? slot->location->declaredType
-            : current.type();
-        AbelValue rhs = convertOrError(evalExpr(*expr.rhs), targetType, expr.rhs->span);
-        m_ctx->assignVariable(name->name, rhs, expr.span);
-        return rhs;
-    }
-
     AbelLocation* lhs = evalLocation(*expr.lhs);
     if (!lhs) {
         error(QStringLiteral("E0526"), QStringLiteral("left side of assignment is not an lvalue"), expr.span);
         return AbelValue::makeUnknown();
     }
     const AbelType targetType = lhs->declaredType.kind != TypeKind::Unknown ? lhs->declaredType : lhs->read().type();
-    AbelValue rhs = convertOrError(evalExpr(*expr.rhs), targetType, expr.rhs->span);
     if (lhs->isReadOnly) {
         error(QStringLiteral("E0526"), QStringLiteral("cannot assign to readonly lvalue"), expr.span);
         return AbelValue::makeUnknown();
     }
-    lhs->write(rhs);
-    return rhs;
+    if (expr.op == QStringLiteral("=")) {
+        AbelValue rhs = convertOrError(evalExpr(*expr.rhs), targetType, expr.rhs->span);
+        lhs->write(rhs);
+        return rhs;
+    }
+    if (!isCompoundAssignmentOperator(expr.op)) {
+        error(QStringLiteral("E0526"), QStringLiteral("unknown assignment operator '%1'").arg(expr.op), expr.span);
+        return AbelValue::makeUnknown();
+    }
+
+    const AbelValue current = lhs->read();
+    const AbelValue rhsRaw = evalExpr(*expr.rhs);
+    if (current.type().kind == TypeKind::Unknown || rhsRaw.type().kind == TypeKind::Unknown)
+        return AbelValue::makeUnknown();
+
+    if (auto overloaded = evalUserCompoundAssignmentOperator(expr.op, *lhs, current, rhsRaw, expr.span))
+        return *overloaded;
+
+    AbelValue combined = evalCompoundAssignmentFallback(expr.op, current, rhsRaw, expr.span);
+    AbelValue converted = convertOrError(combined, targetType, expr.span);
+    lhs->write(converted);
+    return converted;
 }
 
 AbelValue Interpreter::defaultConstructValue(const AbelType& type, const SourceSpan& span)

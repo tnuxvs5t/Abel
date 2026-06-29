@@ -62,6 +62,33 @@ bool hasPipeHole(const std::vector<std::unique_ptr<ExprNode>>& args)
     return false;
 }
 
+bool isCompoundAssignmentOperator(const QString& op)
+{
+    return op == QStringLiteral("+=")
+        || op == QStringLiteral("-=")
+        || op == QStringLiteral("*=")
+        || op == QStringLiteral("/=")
+        || op == QStringLiteral("%=")
+        || op == QStringLiteral("%%=")
+        || op == QStringLiteral("**=")
+        || op == QStringLiteral("<?=")
+        || op == QStringLiteral(">?=");
+}
+
+QString compoundAssignmentBaseOperator(const QString& op)
+{
+    if (op == QStringLiteral("+=")) return QStringLiteral("+");
+    if (op == QStringLiteral("-=")) return QStringLiteral("-");
+    if (op == QStringLiteral("*=")) return QStringLiteral("*");
+    if (op == QStringLiteral("/=")) return QStringLiteral("/");
+    if (op == QStringLiteral("%=")) return QStringLiteral("%");
+    if (op == QStringLiteral("%%=")) return QStringLiteral("%%");
+    if (op == QStringLiteral("**=")) return QStringLiteral("**");
+    if (op == QStringLiteral("<?=")) return QStringLiteral("<?");
+    if (op == QStringLiteral(">?=")) return QStringLiteral(">?");
+    return {};
+}
+
 int countPipeHolesInBlock(const BlockStmtNode& block);
 int countPipeHolesInStmt(const StmtNode& stmt);
 
@@ -2039,7 +2066,19 @@ void TypeChecker::checkFunction(const FunctionDeclNode& fn)
                 error(param.span, QStringLiteral("only any... variadic parameters are supported"));
             defineVariable(param.name, makeVectorType(makeType(TypeKind::Any)), false, param.span);
         } else {
-            if (fn.isOperator && paramType.isReference() && !isConstReferenceType(paramType)) {
+            if (fn.isOperator && isCompoundAssignmentOperator(fn.operatorSymbol)) {
+                if (i == 0) {
+                    if (!paramType.isReference() || isConstReferenceType(paramType)) {
+                        error(param.span,
+                              QStringLiteral("operator '%1' first parameter must be a mutable reference")
+                                  .arg(fn.operatorSymbol));
+                    }
+                } else if (paramType.isReference()) {
+                    error(param.span,
+                          QStringLiteral("operator '%1' second parameter cannot be a reference in this slice")
+                              .arg(fn.operatorSymbol));
+                }
+            } else if (fn.isOperator && paramType.isReference() && !isConstReferenceType(paramType)) {
                 error(param.span,
                       QStringLiteral("operator '%1' overload parameters cannot be mutable references in this slice")
                           .arg(fn.operatorSymbol));
@@ -2405,13 +2444,26 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
 
     ExprType lhs = checkExpr(*expr.lhs);
     ExprType rhs = checkExpr(*expr.rhs);
-    const QString& op = expr.op;
     if (isUnknownType(lhs.type) || isUnknownType(rhs.type))
         return unknownExprType();
 
+    return checkBinaryOperands(
+        expr.op,
+        lhs,
+        rhs,
+        expr.span,
+        QStringLiteral("unknown binary operator '%1'").arg(expr.op));
+}
+
+ExprType TypeChecker::checkBinaryOperands(const QString& op,
+                                          const ExprType& lhs,
+                                          const ExprType& rhs,
+                                          const SourceSpan& span,
+                                          const QString& fallbackMessage)
+{
     if (op == QStringLiteral("&&") || op == QStringLiteral("||")) {
         if (lhs.type.kind != TypeKind::Bool || rhs.type.kind != TypeKind::Bool)
-            return errorExpr(expr.span, QStringLiteral("logical operator '%1' requires bool operands").arg(op));
+            return errorExpr(span, QStringLiteral("logical operator '%1' requires bool operands").arg(op));
         return {makeType(TypeKind::Bool), ValueCategory::PRValue, false};
     }
     if (lhs.type.kind == TypeKind::Any || rhs.type.kind == TypeKind::Any) {
@@ -2433,7 +2485,7 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
                 op,
                 lhs,
                 rhs,
-                expr.span,
+                span,
                 QStringLiteral("cannot compare %1 and %2").arg(lhs.type.displayName(), rhs.type.displayName()));
         }
         return {makeType(TypeKind::Bool), ValueCategory::PRValue, false};
@@ -2446,7 +2498,7 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
             op,
             lhs,
             rhs,
-            expr.span,
+            span,
             QStringLiteral("operator '%1' requires numeric operands").arg(op));
 
     if (op == QStringLiteral("<") || op == QStringLiteral("<=") || op == QStringLiteral(">") || op == QStringLiteral(">="))
@@ -2461,8 +2513,8 @@ ExprType TypeChecker::checkBinary(const BinaryExprNode& expr)
         op,
         lhs,
         rhs,
-        expr.span,
-        QStringLiteral("unknown binary operator '%1'").arg(op));
+        span,
+        fallbackMessage);
 }
 
 ExprType TypeChecker::checkUserBinaryOperator(const QString& op,
@@ -3627,6 +3679,50 @@ ExprType TypeChecker::checkAssignment(const AssignExprNode& expr)
         return errorExpr(expr.span, QStringLiteral("left side of assignment must be an lvalue"));
     if (!lhs.isMutable)
         return errorExpr(expr.span, QStringLiteral("cannot assign to const lvalue"));
+    if (expr.op != QStringLiteral("=")) {
+        if (!isCompoundAssignmentOperator(expr.op))
+            return errorExpr(expr.span, QStringLiteral("unknown assignment operator '%1'").arg(expr.op));
+
+        const QString compoundName = QStringLiteral("operator ") + expr.op;
+        const QList<const FunctionDeclNode*> compoundCandidates = resolveFunctionCandidates(compoundName, expr.span, false);
+        bool hasMatchingCompound = false;
+        for (const FunctionDeclNode* fn : compoundCandidates) {
+            if (!fn || !fn->isOperator || fn->operatorSymbol != expr.op || fn->params.size() != 2)
+                continue;
+            const AbelType lhsParam = typeFromAstForDecl(*fn->params[0]->type, *fn);
+            const AbelType rhsParam = typeFromAstForDecl(*fn->params[1]->type, *fn);
+            if (scoreParameterArgument(lhsParam, lhs) && scoreParameterArgument(rhsParam, rhs)) {
+                hasMatchingCompound = true;
+                break;
+            }
+        }
+        if (hasMatchingCompound) {
+            const ExprType overloaded = checkUserBinaryOperator(
+                expr.op,
+                lhs,
+                rhs,
+                expr.span,
+                QStringLiteral("no matching operator '%1' overload for %2 and %3")
+                    .arg(expr.op, lhs.type.displayName(), rhs.type.displayName()));
+            if (!isUnknownType(overloaded.type))
+                return overloaded;
+        }
+
+        const QString baseOp = compoundAssignmentBaseOperator(expr.op);
+        const ExprType combined = checkBinaryOperands(
+            baseOp,
+            lhs,
+            rhs,
+            expr.span,
+            QStringLiteral("operator '%1' requires compatible operands").arg(expr.op));
+        if (isUnknownType(combined.type))
+            return unknownExprType();
+        if (!isAssignable(lhs.type, combined.type))
+            return errorExpr(expr.span,
+                             QStringLiteral("cannot assign result %1 to %2")
+                                 .arg(combined.type.displayName(), lhs.type.displayName()));
+        return {lhs.type, ValueCategory::PRValue, false};
+    }
     if (!isAssignable(lhs.type, rhs.type))
         return errorExpr(expr.span, QStringLiteral("cannot assign %1 to %2").arg(rhs.type.displayName(), lhs.type.displayName()));
     return {lhs.type, ValueCategory::PRValue, false};

@@ -336,6 +336,15 @@ QString Parser::parseOperatorSymbol()
     case TokenKind::LessEqual:
     case TokenKind::Greater:
     case TokenKind::GreaterEqual:
+    case TokenKind::PlusEqual:
+    case TokenKind::MinusEqual:
+    case TokenKind::StarEqual:
+    case TokenKind::SlashEqual:
+    case TokenKind::PercentEqual:
+    case TokenKind::ModModEqual:
+    case TokenKind::PowerEqual:
+    case TokenKind::MinOpEqual:
+    case TokenKind::MaxOpEqual:
         ++m_pos;
         return token.text;
     default:
@@ -766,14 +775,35 @@ std::unique_ptr<ExprNode> Parser::parseExpression() { return parseAssignment(); 
 std::unique_ptr<ExprNode> Parser::parseAssignment()
 {
     auto lhs = parseBinary();
-    if (match(TokenKind::Equal)) {
+    if (isAssignmentOperator(peek().kind)) {
+        const Token op = m_tokens[m_pos++];
         auto node = std::make_unique<AssignExprNode>();
+        node->op = op.text;
         node->lhs = std::move(lhs);
         node->rhs = parseAssignment();
         node->span = mergeSpans(node->lhs->span, node->rhs->span);
         return node;
     }
     return lhs;
+}
+
+bool Parser::isAssignmentOperator(TokenKind kind) const
+{
+    switch (kind) {
+    case TokenKind::Equal:
+    case TokenKind::PlusEqual:
+    case TokenKind::MinusEqual:
+    case TokenKind::StarEqual:
+    case TokenKind::SlashEqual:
+    case TokenKind::PercentEqual:
+    case TokenKind::ModModEqual:
+    case TokenKind::PowerEqual:
+    case TokenKind::MinOpEqual:
+    case TokenKind::MaxOpEqual:
+        return true;
+    default:
+        return false;
+    }
 }
 
 int Parser::precedence(TokenKind kind) const

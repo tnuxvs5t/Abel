@@ -195,6 +195,11 @@ private:
                                      const ExprType& rhs,
                                      const SourceSpan& span,
                                      const QString& fallbackMessage);
+    ExprType checkBinaryOperands(const QString& op,
+                                 const ExprType& lhs,
+                                 const ExprType& rhs,
+                                 const SourceSpan& span,
+                                 const QString& fallbackMessage);
     ExprType checkCast(const CastExprNode& expr);
     ExprType checkPipe(const BinaryExprNode& expr);
     ExprType checkPipeTarget(const QString& name,

@@ -22,13 +22,12 @@ Abel の目標は単純です。
 
 ## Status
 
-**Current public release: Abel v1.2**
-**Current development tree: v1.3 `do` expression closed**
+**Current version: Abel v1.3**
 
-v1.2 は完全に実装され、リリースされています。  
+v1.3 は現在の tree で閉じています。
 内部のフルテストスイートはすべて通過しています。
 
-v1.2 では Abel の **Dynamic Waterworks** layer が導入されました。
+v1.3 には Abel の **Dynamic Waterworks** layer が含まれます。
 
 ```abel
 any tuple = [[1, "text", true]];
@@ -40,8 +39,8 @@ any next = object["version"] |> _ + 1;
 
 これにより、Abel は静的コア型システムを汚染せずに、動的な合成能力を獲得します。
 
-現在の tree では v1.3 core increment である `do { ... }` expression が閉じています。
-これは即時実行される local expression block で、pipe RHS で複数ステップを明示したい場合に使います。
+v1.3 には `do { ... }` expression と C-like compound assignment も含まれます。
+`do` は即時実行される local expression block で、pipe RHS で複数ステップを明示したい場合に使います。
 
 ```abel
 any out = req |> do {
@@ -52,6 +51,14 @@ any out = req |> do {
 ```
 
 `do` 内の `return` は do expression の結果を返し、外側の function からは return しません。
+
+Compound assignment により、C programmer にとって自然に書けます。
+
+```abel
+score += 3;
+score <?= limit;
+box += item; // operator +=(Box& box, Item item) を呼べる
+```
 
 ---
 
@@ -208,7 +215,7 @@ Abel は AI-assisted local engineering のための protocol です。
 
 ## Dynamic Waterworks
 
-v1.2 は Abel の dynamic composition layer を導入します。
+v1.3 では dynamic composition を明示的に保ちます。
 
 ### Dynamic tuple
 
@@ -254,6 +261,25 @@ any projected = meta |> do {
 
 `do` は即時実行される expression block で、独自の local scope を持ちます。
 pipe RHS では現在の `_` pipe context を使えるため、複雑な water route を新しい pipe operator なしで明示できます。
+
+### Compound assignment
+
+```abel
+count += 1;
+score >?= best;
+```
+
+Supported compound operators are `+= -= *= /= %= %%= **= <?= >?=`.
+The left side must be a mutable lvalue, and the computed value is written back to the same location.
+These operators can be overloaded:
+
+```abel
+fn void operator +=(Box& box, int delta) {
+    box.value += delta;
+}
+```
+
+Only compound assignment overloads are opened here; Abel still does not overload `=`, `&&`, `||`, `[]`, `[]=`, `|>`, or calls.
 
 ---
 

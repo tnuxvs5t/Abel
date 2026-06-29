@@ -22,13 +22,12 @@ Abel 的目标很简单：
 
 ## 当前状态
 
-**当前公开发布：Abel v1.2**
-**当前开发树：v1.3 `do` expression 已闭环**
+**当前版本：Abel v1.3**
 
-v1.2 已完整实现并发布。  
+v1.3 已在当前代码树闭环。
 内部全量测试通过。
 
-v1.2 引入了 Abel 的 **Dynamic Waterworks** 层：
+v1.3 包含 Abel 的 **Dynamic Waterworks** 层：
 
 ```abel
 any tuple = [[1, "text", true]];
@@ -40,8 +39,8 @@ any next = object["version"] |> _ + 1;
 
 这使 Abel 获得动态组合能力，同时不污染静态核心类型系统。
 
-当前代码树已经闭环 v1.3 核心增量：`do { ... }` 表达式。
-它是立即执行的局部表达式块，适合在 pipe RHS 中展开多步逻辑：
+v1.3 同时包含 `do { ... }` 表达式和 C-like 自运算符。
+`do` 是立即执行的局部表达式块，适合在 pipe RHS 中展开多步逻辑：
 
 ```abel
 any out = req |> do {
@@ -52,6 +51,14 @@ any out = req |> do {
 ```
 
 `do` 内的 `return` 只返回 do 表达式结果，不返回外层函数。
+
+自运算符让 Abel 在 C 程序员手里更顺手：
+
+```abel
+score += 3;
+score <?= limit;
+box += item; // 可调用 operator +=(Box& box, Item item)
+```
 
 ---
 
@@ -208,7 +215,7 @@ Abel 的核心工作流是：
 
 ## Dynamic Waterworks
 
-v1.2 引入 Abel 的动态组合层。
+v1.3 保持动态组合显式可见。
 
 ### Dynamic tuple
 
@@ -254,6 +261,25 @@ any projected = meta |> do {
 
 `do` 是立即执行的表达式块，有自己的局部作用域。
 当它位于 pipe RHS 时，可以直接使用当前 `_` pipe context，因此复杂水路可以显式展开，而不需要新增 pipe operator。
+
+### 自运算符
+
+```abel
+count += 1;
+score >?= best;
+```
+
+当前支持 `+= -= *= /= %= %%= **= <?= >?=`。
+左侧必须是 mutable lvalue，计算结果会写回同一个 location。
+这些 operator 可以重载：
+
+```abel
+fn void operator +=(Box& box, int delta) {
+    box.value += delta;
+}
+```
+
+这里只开放 compound assignment overload；Abel 仍不开放 `=`、`&&`、`||`、`[]`、`[]=`、`|>` 或 call 重载。
 
 ---
 

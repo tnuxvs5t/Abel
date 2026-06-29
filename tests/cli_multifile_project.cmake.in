@@ -1387,7 +1387,7 @@ execute_process(
     ERROR_VARIABLE waterworks_check_stderr
 )
 if(NOT waterworks_check_result EQUAL 0)
-    message(FATAL_ERROR "abel check rejected v1.2 waterworks project:\n${waterworks_check_stdout}\n${waterworks_check_stderr}")
+    message(FATAL_ERROR "abel check rejected v1.3 waterworks project:\n${waterworks_check_stdout}\n${waterworks_check_stderr}")
 endif()
 
 execute_process(

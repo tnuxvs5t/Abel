@@ -742,6 +742,15 @@ int semanticKindForToken(const Token& token, const QList<IndexedSymbol>& symbols
     case TokenKind::MinOp:
     case TokenKind::MaxOp:
     case TokenKind::PipeForward:
+    case TokenKind::PlusEqual:
+    case TokenKind::MinusEqual:
+    case TokenKind::StarEqual:
+    case TokenKind::SlashEqual:
+    case TokenKind::PercentEqual:
+    case TokenKind::ModModEqual:
+    case TokenKind::PowerEqual:
+    case TokenKind::MinOpEqual:
+    case TokenKind::MaxOpEqual:
     case TokenKind::Ellipsis:
         return 7; // operator
     default:

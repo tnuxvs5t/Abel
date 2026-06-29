@@ -76,6 +76,7 @@ private:
 
     bool looksLikeType() const;
     bool looksLikeQualifiedTypeName() const;
+    bool isAssignmentOperator(TokenKind kind) const;
     int precedence(TokenKind kind) const;
     QString opText(const Token& token) const;
 };

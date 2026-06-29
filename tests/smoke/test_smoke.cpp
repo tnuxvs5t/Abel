@@ -8,7 +8,7 @@ class AbelSmokeTests final : public QObject {
 private slots:
     void versionIsAvailable()
     {
-        QVERIFY(abel::versionString().startsWith(QStringLiteral("Abel v0")));
+        QCOMPARE(abel::versionString(), QStringLiteral("Abel v1.3"));
         QVERIFY(abel::toolchainString().contains(QStringLiteral("Qt")));
     }
 };
@@ -16,4 +16,3 @@ private slots:
 QTEST_MAIN(AbelSmokeTests)
 
 #include "test_smoke.moc"
-

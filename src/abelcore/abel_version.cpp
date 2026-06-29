@@ -6,7 +6,7 @@ namespace abel {
 
 QString versionString()
 {
-    return QStringLiteral("Abel v0.0.1");
+    return QStringLiteral("Abel v1.3");
 }
 
 QString toolchainString()
@@ -15,4 +15,3 @@ QString toolchainString()
 }
 
 } // namespace abel
-

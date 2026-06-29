@@ -190,6 +190,15 @@ private:
                                                     const AbelValue& lhs,
                                                     const AbelValue& rhs,
                                                     const SourceSpan& span);
+    std::optional<AbelValue> evalUserCompoundAssignmentOperator(const QString& op,
+                                                                AbelLocation& lhsLocation,
+                                                                const AbelValue& lhs,
+                                                                const AbelValue& rhs,
+                                                                const SourceSpan& span);
+    AbelValue evalCompoundAssignmentFallback(const QString& op,
+                                             const AbelValue& lhs,
+                                             const AbelValue& rhs,
+                                             const SourceSpan& span);
     AbelValue evalUnary(const UnaryExprNode& expr);
     AbelValue evalCast(const CastExprNode& expr);
     AbelValue evalPipe(const BinaryExprNode& expr);

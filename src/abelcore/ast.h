@@ -53,6 +53,7 @@ struct BinaryExprNode final : ExprNode {
 };
 
 struct AssignExprNode final : ExprNode {
+    QString op = QStringLiteral("=");
     std::unique_ptr<ExprNode> lhs;
     std::unique_ptr<ExprNode> rhs;
 };

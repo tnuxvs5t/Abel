@@ -14,6 +14,15 @@ QString tokenKindName(TokenKind kind)
     case TokenKind::String: return QStringLiteral("string");
     case TokenKind::Char: return QStringLiteral("char");
     case TokenKind::KwDo: return QStringLiteral("do");
+    case TokenKind::PlusEqual: return QStringLiteral("+=");
+    case TokenKind::MinusEqual: return QStringLiteral("-=");
+    case TokenKind::StarEqual: return QStringLiteral("*=");
+    case TokenKind::SlashEqual: return QStringLiteral("/=");
+    case TokenKind::PercentEqual: return QStringLiteral("%=");
+    case TokenKind::ModModEqual: return QStringLiteral("%%=");
+    case TokenKind::PowerEqual: return QStringLiteral("**=");
+    case TokenKind::MinOpEqual: return QStringLiteral("<?=");
+    case TokenKind::MaxOpEqual: return QStringLiteral(">?=");
     default: return QString::number(static_cast<int>(kind));
     }
 }
@@ -187,18 +196,33 @@ void Lexer::lexToken()
         if (match(QChar('.')) && match(QChar('.'))) add(TokenKind::Ellipsis, QStringLiteral("..."), startPos, startLine, startColumn);
         else add(TokenKind::Dot, QStringLiteral("."), startPos, startLine, startColumn);
         return;
-    case '+': add(TokenKind::Plus, QStringLiteral("+"), startPos, startLine, startColumn); return;
+    case '+':
+        if (match(QChar('='))) add(TokenKind::PlusEqual, QStringLiteral("+="), startPos, startLine, startColumn);
+        else add(TokenKind::Plus, QStringLiteral("+"), startPos, startLine, startColumn);
+        return;
     case '-':
-        if (match(QChar('>'))) add(TokenKind::Arrow, QStringLiteral("->"), startPos, startLine, startColumn);
+        if (match(QChar('='))) add(TokenKind::MinusEqual, QStringLiteral("-="), startPos, startLine, startColumn);
+        else if (match(QChar('>'))) add(TokenKind::Arrow, QStringLiteral("->"), startPos, startLine, startColumn);
         else add(TokenKind::Minus, QStringLiteral("-"), startPos, startLine, startColumn);
         return;
     case '*':
-        if (match(QChar('*'))) add(TokenKind::Power, QStringLiteral("**"), startPos, startLine, startColumn);
+        if (match(QChar('*'))) {
+            if (match(QChar('='))) add(TokenKind::PowerEqual, QStringLiteral("**="), startPos, startLine, startColumn);
+            else add(TokenKind::Power, QStringLiteral("**"), startPos, startLine, startColumn);
+        }
+        else if (match(QChar('='))) add(TokenKind::StarEqual, QStringLiteral("*="), startPos, startLine, startColumn);
         else add(TokenKind::Star, QStringLiteral("*"), startPos, startLine, startColumn);
         return;
-    case '/': add(TokenKind::Slash, QStringLiteral("/"), startPos, startLine, startColumn); return;
+    case '/':
+        if (match(QChar('='))) add(TokenKind::SlashEqual, QStringLiteral("/="), startPos, startLine, startColumn);
+        else add(TokenKind::Slash, QStringLiteral("/"), startPos, startLine, startColumn);
+        return;
     case '%':
-        if (match(QChar('%'))) add(TokenKind::ModMod, QStringLiteral("%%"), startPos, startLine, startColumn);
+        if (match(QChar('%'))) {
+            if (match(QChar('='))) add(TokenKind::ModModEqual, QStringLiteral("%%="), startPos, startLine, startColumn);
+            else add(TokenKind::ModMod, QStringLiteral("%%"), startPos, startLine, startColumn);
+        }
+        else if (match(QChar('='))) add(TokenKind::PercentEqual, QStringLiteral("%="), startPos, startLine, startColumn);
         else add(TokenKind::Percent, QStringLiteral("%"), startPos, startLine, startColumn);
         return;
     case '&':
@@ -220,12 +244,18 @@ void Lexer::lexToken()
         return;
     case '<':
         if (match(QChar('='))) add(TokenKind::LessEqual, QStringLiteral("<="), startPos, startLine, startColumn);
-        else if (match(QChar('?'))) add(TokenKind::MinOp, QStringLiteral("<?"), startPos, startLine, startColumn);
+        else if (match(QChar('?'))) {
+            if (match(QChar('='))) add(TokenKind::MinOpEqual, QStringLiteral("<?="), startPos, startLine, startColumn);
+            else add(TokenKind::MinOp, QStringLiteral("<?"), startPos, startLine, startColumn);
+        }
         else add(TokenKind::Less, QStringLiteral("<"), startPos, startLine, startColumn);
         return;
     case '>':
         if (match(QChar('='))) add(TokenKind::GreaterEqual, QStringLiteral(">="), startPos, startLine, startColumn);
-        else if (match(QChar('?'))) add(TokenKind::MaxOp, QStringLiteral(">?"), startPos, startLine, startColumn);
+        else if (match(QChar('?'))) {
+            if (match(QChar('='))) add(TokenKind::MaxOpEqual, QStringLiteral(">?="), startPos, startLine, startColumn);
+            else add(TokenKind::MaxOp, QStringLiteral(">?"), startPos, startLine, startColumn);
+        }
         else add(TokenKind::Greater, QStringLiteral(">"), startPos, startLine, startColumn);
         return;
     case '"': lexString(startPos, startLine, startColumn); return;

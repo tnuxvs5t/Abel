@@ -2764,6 +2764,46 @@ fn int main() {
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsCompoundAssignmentsAndOverloads()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+
+            fn void operator +=(Box& box, int delta) {
+                box.x += delta;
+            }
+
+            fn int main() {
+                int x = 5;
+                x += 3;
+                x -= 2;
+                x *= 4;
+                x /= 3;
+                x %= 5;
+                x %%= 4;
+                x **= 2;
+                x <?= 10;
+                x >?= 3;
+
+                str s = "A";
+                s += "bel";
+
+                any a = 1;
+                a += 2;
+
+                Box b = Box(4);
+                b += 5;
+                return x + s.len() + cast<int>(a) + b.x;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void rejectsBadUserBinaryOperators()
     {
         auto wrongArity = checkSource(QStringLiteral(R"(
@@ -2837,6 +2877,37 @@ fn int main() {
             }
         )"));
         QVERIFY(!ambiguous.diagnostics.isEmpty());
+    }
+
+    void rejectsBadCompoundAssignmentOperators()
+    {
+        auto badFirstParam = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+
+            fn void operator +=(Box box, int delta) {
+                box.x = box.x + delta;
+            }
+
+            fn int main() {
+                return 0;
+            }
+        )"));
+        QVERIFY(!badFirstParam.diagnostics.isEmpty());
+
+        auto badUse = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+
+            fn int main() {
+                Box b = Box(1);
+                b += 2;
+                return b.x;
+            }
+        )"));
+        QVERIFY(!badUse.diagnostics.isEmpty());
     }
 
     void acceptsThisMethodNestedStructAssignmentAndFunctionValues()

@@ -476,8 +476,8 @@ private slots:
             )")
             << 25;
 
-        QTest::newRow("17_v12_hydraulic_dynamic_literals_and_pipe")
-            << QStringLiteral("v1.2 hydraulic dynamic literals + generalized pipe")
+        QTest::newRow("17_v13_hydraulic_dynamic_literals_and_pipe")
+            << QStringLiteral("v1.3 hydraulic dynamic literals + generalized pipe")
             << QStringLiteral(R"(
                 struct Box {
                     int value;
@@ -504,8 +504,8 @@ private slots:
             )")
             << 50;
 
-        QTest::newRow("18_v12_nested_hydraulic_routes")
-            << QStringLiteral("v1.2 nested tuple/strmap routes")
+        QTest::newRow("18_v13_nested_hydraulic_routes")
+            << QStringLiteral("v1.3 nested tuple/strmap routes")
             << QStringLiteral(R"(
                 fn int main() {
                     any flow = [[
@@ -523,8 +523,8 @@ private slots:
             )")
             << 29;
 
-        QTest::newRow("19_v12_struct_payload_in_strmap")
-            << QStringLiteral("v1.2 strmap carries struct payload")
+        QTest::newRow("19_v13_struct_payload_in_strmap")
+            << QStringLiteral("v1.3 strmap carries struct payload")
             << QStringLiteral(R"(
                 struct Gate {
                     int bias;
@@ -542,8 +542,8 @@ private slots:
             )")
             << 48;
 
-        QTest::newRow("20_v12_vector_of_dynamic_rows")
-            << QStringLiteral("v1.2 vector<any> dynamic rows")
+        QTest::newRow("20_v13_vector_of_dynamic_rows")
+            << QStringLiteral("v1.3 vector<any> dynamic rows")
             << QStringLiteral(R"(
                 fn int main() {
                     any a = [{"n" = "a", "s" = 3}];
@@ -560,8 +560,8 @@ private slots:
             )")
             << 16;
 
-        QTest::newRow("21_v12_pipe_projection_record")
-            << QStringLiteral("v1.2 generalized pipe projects record")
+        QTest::newRow("21_v13_pipe_projection_record")
+            << QStringLiteral("v1.3 generalized pipe projects record")
             << QStringLiteral(R"(
                 fn int main() {
                     any row = [{"name" = "kappa", "score" = 37}];
@@ -576,8 +576,8 @@ private slots:
             )")
             << 18;
 
-        QTest::newRow("22_v12_callback_inside_tuple")
-            << QStringLiteral("v1.2 tuple carries callback")
+        QTest::newRow("22_v13_callback_inside_tuple")
+            << QStringLiteral("v1.3 tuple carries callback")
             << QStringLiteral(R"(
                 fn int add2(int x) { return x + 2; }
 
@@ -593,8 +593,8 @@ private slots:
             )")
             << 42;
 
-        QTest::newRow("23_v12_pipe_writeback_from_tuple")
-            << QStringLiteral("v1.2 pipe assignment writes lvalue from dynamic tuple")
+        QTest::newRow("23_v13_pipe_writeback_from_tuple")
+            << QStringLiteral("v1.3 pipe assignment writes lvalue from dynamic tuple")
             << QStringLiteral(R"(
                 fn int main() {
                     int x = 4;
@@ -606,8 +606,8 @@ private slots:
             )")
             << 15;
 
-        QTest::newRow("24_v12_strmap_set_new_key_and_tuple_set")
-            << QStringLiteral("v1.2 strmap set and tuple set")
+        QTest::newRow("24_v13_strmap_set_new_key_and_tuple_set")
+            << QStringLiteral("v1.3 strmap set and tuple set")
             << QStringLiteral(R"(
                 fn int main() {
                     any m = [{"a" = 1}];
@@ -619,8 +619,8 @@ private slots:
             )")
             << 23;
 
-        QTest::newRow("25_v12_dynamic_identity_and_debug")
-            << QStringLiteral("v1.2 dynamic identity equality and debug")
+        QTest::newRow("25_v13_dynamic_identity_and_debug")
+            << QStringLiteral("v1.3 dynamic identity equality and debug")
             << QStringLiteral(R"(
                 fn int main() {
                     any t = [[1]];
@@ -641,8 +641,8 @@ private slots:
             )")
             << 33;
 
-        QTest::newRow("26_v12_dynamic_type_dispatch")
-            << QStringLiteral("v1.2 any_type/any_is on nested water objects")
+        QTest::newRow("26_v13_dynamic_type_dispatch")
+            << QStringLiteral("v1.3 any_type/any_is on nested water objects")
             << QStringLiteral(R"(
                 fn int main() {
                     any m = [{"tuple" = [[2, 3]], "tag" = "x"}];
@@ -655,8 +655,8 @@ private slots:
             )")
             << 23;
 
-        QTest::newRow("27_v12_old_and_new_pipe_mix")
-            << QStringLiteral("v1.2 old callable pipe and generalized pipe coexist")
+        QTest::newRow("27_v13_old_and_new_pipe_mix")
+            << QStringLiteral("v1.3 old callable pipe and generalized pipe coexist")
             << QStringLiteral(R"(
                 fn int inc(int x, int by = 1) { return x + by; }
                 fn int count(any... xs) { return xs.len(); }
@@ -734,6 +734,31 @@ private slots:
                 }
             )")
             << 27;
+
+        QTest::newRow("30_v13_compound_assignment_overload_water")
+            << QStringLiteral("v1.3 compound assignment mixes overload and dynamic water")
+            << QStringLiteral(R"(
+                struct Acc {
+                    int value;
+                }
+
+                fn void operator +=(Acc& acc, any item) {
+                    acc.value += cast<int>(item["score"]);
+                }
+
+                fn int main() {
+                    any items = [[
+                        [{"score" = 5}],
+                        [{"score" = 7}]
+                    ]];
+                    Acc acc = Acc(1);
+                    acc += items[0];
+                    acc += items[1];
+                    items[0]["score"] += 3;
+                    return acc.value + cast<int>(items[0]["score"]);
+                }
+            )")
+            << 21;
     }
 
     void heavyPrograms()
@@ -862,8 +887,8 @@ private slots:
             )")
             << QStringLiteral("not visible");
 
-        QTest::newRow("25_v12_tuple_bad_index_type")
-            << QStringLiteral("v1.2 tuple bad index type")
+        QTest::newRow("25_v13_tuple_bad_index_type")
+            << QStringLiteral("v1.3 tuple bad index type")
             << QStringLiteral(R"(
                 fn int main() {
                     any t = [[1, 2]];
@@ -872,8 +897,8 @@ private slots:
             )")
             << QStringLiteral("tuple index must be integer");
 
-        QTest::newRow("26_v12_tuple_index_out_of_range")
-            << QStringLiteral("v1.2 tuple index out of range")
+        QTest::newRow("26_v13_tuple_index_out_of_range")
+            << QStringLiteral("v1.3 tuple index out of range")
             << QStringLiteral(R"(
                 fn int main() {
                     any t = [[1]];
@@ -882,8 +907,8 @@ private slots:
             )")
             << QStringLiteral("out of range");
 
-        QTest::newRow("27_v12_strmap_bad_key_type")
-            << QStringLiteral("v1.2 strmap bad key type")
+        QTest::newRow("27_v13_strmap_bad_key_type")
+            << QStringLiteral("v1.3 strmap bad key type")
             << QStringLiteral(R"(
                 fn int main() {
                     any m = [{"x" = 1}];
@@ -892,8 +917,8 @@ private slots:
             )")
             << QStringLiteral("strmap key must be str");
 
-        QTest::newRow("28_v12_strmap_missing_key")
-            << QStringLiteral("v1.2 strmap missing key")
+        QTest::newRow("28_v13_strmap_missing_key")
+            << QStringLiteral("v1.3 strmap missing key")
             << QStringLiteral(R"(
                 fn int main() {
                     any m = [{"x" = 1}];
@@ -902,8 +927,8 @@ private slots:
             )")
             << QStringLiteral("missing key");
 
-        QTest::newRow("29_v12_strmap_requires_literal_key")
-            << QStringLiteral("v1.2 strmap literal key must be string literal")
+        QTest::newRow("29_v13_strmap_requires_literal_key")
+            << QStringLiteral("v1.3 strmap literal key must be string literal")
             << QStringLiteral(R"(
                 fn int main() {
                     str k = "x";
@@ -913,8 +938,8 @@ private slots:
             )")
             << QStringLiteral("expected string literal key");
 
-        QTest::newRow("30_v12_strmap_duplicate_key")
-            << QStringLiteral("v1.2 strmap duplicate key")
+        QTest::newRow("30_v13_strmap_duplicate_key")
+            << QStringLiteral("v1.3 strmap duplicate key")
             << QStringLiteral(R"(
                 fn int main() {
                     any m = [{"x" = 1, "x" = 2}];

@@ -26,6 +26,8 @@ enum class TokenKind {
     Less, LessEqual, Greater, GreaterEqual,
     AndAnd, OrOr,
     Power, ModMod, MinOp, MaxOp, PipeForward,
+    PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual,
+    ModModEqual, PowerEqual, MinOpEqual, MaxOpEqual,
     Ellipsis,
 
     KwFn, KwReturn, KwIf, KwElseif, KwElse, KwWhile, KwFor, KwIn, KwRepeat, KwDo,

@@ -1,6 +1,6 @@
 # Abel Agent Manual
 
-状态：Abel core v1.2 已发布；VSCode/LSP 当前按 v0.1 维护。
+状态：Abel core v1.3 已闭环；VSCode/LSP 当前按 v0.1 维护。
 作用：任何 Agent 进入本仓库，先读本文件，再读代码。
 原则：本文件只保留当前有效的工程纪律、架构、验证方式、语言边界和近期风险；历史流水账看 Git log。
 
@@ -63,20 +63,22 @@ git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 pus
 当前公开口径：
 
 ```text
-Abel core v1.2 released
+Abel core v1.3 closed
 ```
 
-v1.2 的主题是 **Dynamic Waterworks**：
+v1.3 当前主题：
 
 ```text
 Static where cheap.
 Dynamic where expressive.
 Pipe as data plumbing.
+Local do blocks where RHS grows.
+Compound assignment where C-like ergonomics matters.
 Backend/runtime where complex.
 Diagnostics everywhere.
 ```
 
-v1.2 已发布能力：
+v1.3 当前能力：
 
 ```text
 any dynamic object literal:
@@ -93,9 +95,20 @@ generalized pipe:
   row |> _["name"]
   row |> [{"name" = _["name"], "score" = _["score"]}]
   obj |> (_["count"] = cast<int>(_["count"]) + 1)
+
+do expression:
+  value |> do {
+      int x = cast<int>(_["x"]);
+      return x + 1;
+  }
+
+compound assignment:
+  x += 1
+  box += item
+  fn void operator +=(Box& box, int delta) { ... }
 ```
 
-v1.2 不改变的核心边界：
+v1.3 不改变的核心边界：
 
 ```text
 不新增 core TypeKind::Tuple/Map/Object/Dict。
@@ -107,17 +120,18 @@ v1.2 不改变的核心边界：
 不引入 borrow checker；只做局部调用边界 alias 风险检查。
 ```
 
-v1.3 核心增量口径：
+v1.3 核心边界口径：
 
 ```text
-v1.3 只引入 instant lambda / do expression。
-不改变 v1.2 pipe 语义。
+v1.3 包含 do expression 和 compound assignment。
+不改变 pipe 语义。
 不新增 pipe operator。
 不改变 [[...]] / [{"k" = v}] 动态容器语法和语义。
 不扩张 dynamic key / patch merge / pipe manifold。
+只开放 compound assignment operator overload；不开放 operator= / && / || / [] / []= / pipe / call。
 ```
 
-v1.3 的目标是让复杂 pipe RHS 可以局部展开，而不是重做水路系统：
+v1.3 的目标是闭环当前水路和 C-like 更新体验：复杂 pipe RHS 用 do 局部展开，自运算符用 compound assignment 表达，而不是重做水路系统：
 
 ```abel
 req |> do {
@@ -305,7 +319,9 @@ C/C++ 值模型
 + backend block / Qt plugin
 + package/module/use/export
 + tree-run interpreter
-+ v1.2 dynamic data plumbing
++ dynamic data plumbing
++ do expression
++ compound assignment
 ```
 
 ### 5.1 类型
@@ -374,6 +390,7 @@ constructor overload
 method overload
 ordinary function overload
 binary operator overload-set
+compound assignment operator overload-set
 ```
 
 不承诺：
@@ -422,7 +439,7 @@ any -> T：通过 cast<T>(x) 或目标类型位置的 runtime dynamic cast。
 诊断必须有 expected/actual、source span 和 Abel/backend stack。
 ```
 
-v1.2 dynamic literal：
+dynamic literal：
 
 ```abel
 any t = [[1, "x", true]];
@@ -442,7 +459,7 @@ missing key / bad index / out-of-range 是 runtime diagnostic。
 
 ### 5.6 pipe
 
-v1.2 pipe 是带 `_` hole 的一般表达式上下文：
+pipe 是带 `_` hole 的一般表达式上下文：
 
 ```abel
 x |> _ + 1
@@ -462,7 +479,7 @@ lhs 只求值一次。
 无 `_` 的 RHS 保持旧 callable insertion 兼容。
 ```
 
-v1.3 不改 pipe：
+pipe 边界：
 
 ```text
 不要把 |> 拆成按值 / 按引用 / sink 多套 operator。
@@ -471,9 +488,9 @@ v1.3 不改 pipe：
 需要局部复杂逻辑时，用 do expression 承接 pipe context。
 ```
 
-### 5.7 instant lambda / do expression
+### 5.7 do expression
 
-v1.3 计划新增 `do { ... }` 表达式，定位是“立即执行的局部表达式块”，不是函数值、不是普通 lambda 的语法糖。
+`do { ... }` 表达式是“立即执行的局部表达式块”，不是函数值、不是普通 lambda 的语法糖。
 
 基本形态：
 
@@ -517,6 +534,50 @@ break/continue 不得跳出 do expression 边界。
 不新增 #expr dynamic key。
 不新增 patch merge。
 不把 dynamic container 重新定义为 pipe manifold。
+```
+
+### 5.8 compound assignment
+
+v1.3 支持 C-like 自运算符：
+
+```abel
+x += y;
+x -= y;
+x *= y;
+x /= y;
+x %= y;
+x %%= y;
+x **= y;
+x <?= y;
+x >?= y;
+```
+
+规则：
+
+```text
+左侧必须是 mutable lvalue。
+左侧 location 只求一次。
+内建行为等价于读取 lhs、计算 lhs op rhs、再写回 lhs。
+结果必须可赋值回 lhs 类型。
+```
+
+compound assignment operator overload：
+
+```abel
+fn void operator +=(Box& box, int delta) {
+    box.value += delta;
+}
+```
+
+边界：
+
+```text
+只开放 += -= *= /= %= %%= **= <?= >?=。
+compound overload 必须正好两个参数。
+第一个参数必须是 mutable reference。
+第二个参数当前不允许 reference。
+operator overload 不能是 debt。
+不开放 operator=、operator[]、operator[]=、operator&&、operator||、operator|>、operator()。
 ```
 
 后续性能优化允许但不得改变语义：
@@ -774,7 +835,7 @@ dynamic object 错误必须带 key/index/operator/runtime type。
 6. backend 不能掩盖语言核心问题；非 dynamic boundary 的 check/run 分裂必须在 core 修。
 7. 不为了安全幻想牺牲 Abel 的 C/C++ 能力面；但明显静态错误必须诊断。
 8. 每次大块推进要有测试覆盖正例、负例、静态层 check/run 一致性和动态边界 runtime diagnostic。
-9. v1.2 之后只做 bugfix、诊断质量、SDK helper、库层包装、LSP v0.1 增强和 v1.3 instant lambda；不要以“补 v1.2/v1.3”为名扩张 core schema。
+9. v1.3 之后只做 bugfix、诊断质量、SDK helper、库层包装、LSP v0.1 增强和边界明确的小语法；不要以“补 v1.3”为名扩张 core schema。
 
 ---
 
@@ -783,17 +844,17 @@ dynamic object 错误必须带 key/index/operator/runtime type。
 当前阶段：
 
 ```text
-Abel core v1.2 released。
+Abel core v1.3 closed。
 VSCode/LSP v0.1 继续补语义体验。
-v1.3 核心增量已收敛为 instant lambda / do expression。
-主线回到 v1/v1.2 released 后的稳定化、矩阵审计、诊断质量、文档一致性和 do expression 最小实现。
+v1.3 核心能力收敛为 Dynamic Waterworks、do expression 和 compound assignment。
+主线回到 v1.3 闭环后的稳定化、矩阵审计、诊断质量和文档一致性。
 ```
 
 优先级从高到低：
 
 ```text
-1. v1/v1.2 总矩阵审计：确认没有 parser-only 幻影和非 dynamic check/run 分裂。
-2. v1.3 instant lambda / do expression：只实现局部表达式块和 do-local return，不改 pipe。
+1. v1.3 总矩阵审计：确认没有 parser-only 幻影和非 dynamic check/run 分裂。
+2. do expression / compound assignment 继续补负例、诊断和 LSP 体验，不改 pipe。
 3. LSP v0.1：补 module/use/type/enum binding、链式/调用 receiver completion、缓存/增量/取消、code action、inlay hints。
 4. const/pointer/reference/value-category 的最小矩阵继续收口；不做 pointer arithmetic/lifetime proof。
 5. backend/SDK：继续强化 dynamic object helper、diagnostic、installed SDK fixture。
@@ -807,7 +868,7 @@ v1.3 核心增量已收敛为 instant lambda / do expression。
 不新增 core TypeKind::Tuple/Map/Object/Dict。
 不做 object schema inference。
 不做 dynamic field access m.name。
-不改变 v1.2 |> pipe 语义。
+不改变 |> pipe 语义。
 不新增 |=> / |+> / |&> / |!> / |&!>。
 不改变 [{"k" = v}] string-literal key 规则。
 不新增 #expr dynamic key 或 patch merge。
@@ -845,21 +906,23 @@ README/Tutorial 写用户可见能力，不写未落地路线承诺。
 
 ```text
 当前阶段：
-  Abel core v1.2 released。
+  Abel core v1.3 closed。
   VSCode/LSP 当前按 v0.1 维护。
-  v1.3 核心增量 do expression 已在当前代码树闭环；不改 pipe 和 dynamic container 语义。
+  v1.3 核心能力 Dynamic Waterworks、do expression、compound assignment 已在当前代码树闭环。
 
 本轮文档状态：
-  AGENTS.md / README / Tutorial 记录 v1.3 最小方向：只加 do expression。
-  明确保留 v1.2 |> location/value-category 语义。
+  AGENTS.md / README / Tutorial / Skill 统一 v1.3 当前口径。
+  明确保留 |> location/value-category 语义。
   明确不改 [[...]] / [{"k" = v}]，仅允许后续实现层 key pre-run/precomputed hash 性能优化。
 
 本轮工程状态：
-  已闭环 v1.3 do expression 最小实现切片：
+  已闭环 v1.3 实现切片：
     Parser 增加 DoExprNode。
     TypeChecker 增加 do-local return 推导、缺失 return 诊断和 do 边界 break/continue 诊断。
     Interpreter 增加 do block 立即执行和 do-local return 捕获。
-    pipe RHS 支持 do expression 使用当前 `_` pipe context，不改变 v1.2 pipe operator 语义。
+    pipe RHS 支持 do expression 使用当前 `_` pipe context，不改变 pipe operator 语义。
+    Lexer/Parser/TypeChecker/Interpreter 支持 += -= *= /= %= %%= **= <?= >?=。
+    compound assignment overload 支持 `operator +=` 等，第一参数为 mutable reference。
     complex tests 覆盖 [[...]] / [{"k" = v}] 嵌套、do 混合嵌套和信息流写回。
     LSP v0.1 最简支持 do：语义分析通过、do block 局部符号可 hover/definition/completion、semantic token 标记 do 关键字。
 

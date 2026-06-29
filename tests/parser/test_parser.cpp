@@ -503,6 +503,44 @@ private slots:
         QCOMPARE(fn->params.size(), static_cast<size_t>(2));
     }
 
+    void parsesCompoundAssignmentAndOperatorDeclaration()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+
+            fn void operator +=(Box& box, int delta) {
+                box.x += delta;
+            }
+
+            fn int main() {
+                int x = 1;
+                x += 2;
+                x **= 3;
+                x <?= 10;
+                x >?= 4;
+                return x;
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(3));
+
+        auto* fn = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[1].get());
+        QVERIFY(fn != nullptr);
+        QVERIFY(fn->isOperator);
+        QCOMPARE(fn->operatorSymbol, QStringLiteral("+="));
+        QCOMPARE(fn->name, QStringLiteral("operator +="));
+    }
+
 };
 
 QTEST_MAIN(AbelParserTests)

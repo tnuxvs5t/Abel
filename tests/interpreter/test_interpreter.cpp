@@ -2641,6 +2641,49 @@ private slots:
         QCOMPARE(result.exitCode, 39);
     }
 
+    void runsCompoundAssignmentsAndOverloads()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+
+            fn void operator +=(Box& box, int delta) {
+                box.x += delta;
+            }
+
+            fn int main() {
+                int x = 5;
+                x += 3;
+                x -= 2;
+                x *= 4;
+                x /= 3;
+                x %= 5;
+                x = -7;
+                x %%= 5;
+                x = 2;
+                x **= 3;
+                x <?= 6;
+                x >?= 9;
+
+                str s = "A";
+                s += "bel";
+
+                any a = 1;
+                a += 2;
+
+                Box b = Box(5);
+                b += 7;
+                return x + s.len() + cast<int>(a) + b.x;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 28);
+    }
+
     void runsThisMethodNestedStructAssignmentAndFunctionValues()
     {
         const QString src = QStringLiteral(R"(
