@@ -63,7 +63,7 @@
       "patterns": [
         {
           "name": "keyword.control.abel",
-          "match": "\\b(if|elseif|else|while|for|repeat|break|continue|return)\\b"
+          "match": "\\b(if|elseif|else|while|for|repeat|do|break|continue|return)\\b"
         },
         {
           "name": "keyword.declaration.abel",

@@ -39,6 +39,19 @@ any next = object["version"] |> _ + 1;
 
 这使 Abel 获得动态组合能力，同时不污染静态核心类型系统。
 
+当前代码树也已经闭环 v1.3 核心增量：`do { ... }` 表达式。
+它是立即执行的局部表达式块，适合在 pipe RHS 中展开多步逻辑：
+
+```abel
+any out = req |> do {
+    any body = _["body"];
+    int timeout = cast<int>(body["timeout"]);
+    return [{"timeout" = timeout, "body" = body}];
+};
+```
+
+`do` 内的 `return` 只返回 do 表达式结果，不返回外层函数。
+
 ---
 
 ## Abel 是什么
@@ -228,6 +241,18 @@ any result =
 `_` 表示在管道中流动的当前值。
 
 这让 Abel 能进行紧凑的数据转换，同时不会把整门语言变成动态脚本泥潭。
+
+### `do` expression
+
+```abel
+any projected = meta |> do {
+    int version = cast<int>(_["version"]);
+    return [{"next" = version + 1, "raw" = _}];
+};
+```
+
+`do` 是立即执行的表达式块，有自己的局部作用域。
+当它位于 pipe RHS 时，可以直接使用当前 `_` pipe context，因此复杂水路可以显式展开，而不需要新增 pipe operator。
 
 ---
 

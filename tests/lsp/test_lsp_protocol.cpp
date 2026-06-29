@@ -118,6 +118,56 @@ private slots:
         QVERIFY(tokenTypes.contains(3)); // variable
     }
 
+    void supportsDoExpressionLocalsAndSemanticTokens()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString filePath = QDir(dir.path()).absoluteFilePath(QStringLiteral("main.abel"));
+
+        abel::lsp::Analyzer analyzer;
+        QHash<QString, QString> openDocs;
+        openDocs.insert(filePath,
+                        QStringLiteral("fn int main() {\n"
+                                       "    int x = 1;\n"
+                                       "    int y = do {\n"
+                                       "        int flow = x + 2;\n"
+                                       "        return flow;\n"
+                                       "    };\n"
+                                       "    return y;\n"
+                                       "}\n"));
+
+        const auto result = analyzer.analyzeFile(filePath, openDocs);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QVERIFY(std::any_of(result.symbols.begin(), result.symbols.end(), [](const abel::lsp::IndexedSymbol& symbol) {
+            return symbol.local && symbol.name == QStringLiteral("flow") && symbol.detail == QStringLiteral("int flow");
+        }));
+
+        const QJsonObject hover = analyzer.hover(filePath, 4, 16, openDocs);
+        QVERIFY(hover.value(QStringLiteral("contents")).toObject().value(QStringLiteral("value")).toString().contains(QStringLiteral("int flow")));
+
+        const QJsonArray definitions = analyzer.definitions(filePath, 4, 16, openDocs);
+        QCOMPARE(definitions.size(), 1);
+        QCOMPARE(definitions.first().toObject().value(QStringLiteral("range")).toObject()
+                     .value(QStringLiteral("start")).toObject().value(QStringLiteral("line")).toInt(),
+                 3);
+
+        const QJsonArray completions = analyzer.completionItems(filePath, openDocs);
+        QVERIFY(std::any_of(completions.begin(), completions.end(), [](const QJsonValue& value) {
+            return value.toObject().value(QStringLiteral("label")).toString() == QStringLiteral("flow");
+        }));
+
+        const QJsonObject tokens = analyzer.semanticTokens(filePath, openDocs);
+        const QJsonArray tokenData = tokens.value(QStringLiteral("data")).toArray();
+        QVERIFY(tokenData.size() >= 5);
+        QSet<int> tokenTypes;
+        for (qsizetype i = 0; i + 3 < tokenData.size(); i += 5)
+            tokenTypes.insert(tokenData.at(i + 3).toInt());
+        QVERIFY(tokenTypes.contains(0)); // keyword, including do
+        QVERIFY(tokenTypes.contains(3)); // variable
+    }
+
     void completesStructMembersAfterDot()
     {
         QTemporaryDir dir;

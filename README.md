@@ -39,6 +39,19 @@ any next = object["version"] |> _ + 1;
 
 This gives Abel dynamic composition ability without polluting the static core type system.
 
+The current tree also closes the v1.3 core increment: `do { ... }` expressions.
+They are immediate local expression blocks, useful when a pipe RHS needs several named steps:
+
+```abel
+any out = req |> do {
+    any body = _["body"];
+    int timeout = cast<int>(body["timeout"]);
+    return [{"timeout" = timeout, "body" = body}];
+};
+```
+
+`return` inside `do` returns the do expression result, not the outer function.
+
 ---
 
 ## What Abel Is
@@ -228,6 +241,18 @@ any result =
 `_` represents the value flowing through the pipe.
 
 This enables compact data transformation without turning the whole language into a dynamic scripting mess.
+
+### `do` expression
+
+```abel
+any projected = meta |> do {
+    int version = cast<int>(_["version"]);
+    return [{"next" = version + 1, "raw" = _}];
+};
+```
+
+`do` is an immediate expression block with its own local scope.
+Inside a pipe RHS it can use the current `_` pipe context, so complex water routes can stay explicit without adding new pipe operators.
 
 ---
 

@@ -39,6 +39,19 @@ any next = object["version"] |> _ + 1;
 
 これにより、Abel は静的コア型システムを汚染せずに、動的な合成能力を獲得します。
 
+現在の tree では v1.3 core increment である `do { ... }` expression も閉じています。
+これは即時実行される local expression block で、pipe RHS で複数ステップを明示したい場合に使います。
+
+```abel
+any out = req |> do {
+    any body = _["body"];
+    int timeout = cast<int>(body["timeout"]);
+    return [{"timeout" = timeout, "body" = body}];
+};
+```
+
+`do` 内の `return` は do expression の結果を返し、外側の function からは return しません。
+
 ---
 
 ## Abel とは
@@ -228,6 +241,18 @@ any result =
 `_` は pipe を流れる現在の値を表します。
 
 これにより、Abel は簡潔な data transformation を可能にしながら、言語全体を dynamic scripting の混乱に変えません。
+
+### `do` expression
+
+```abel
+any projected = meta |> do {
+    int version = cast<int>(_["version"]);
+    return [{"next" = version + 1, "raw" = _}];
+};
+```
+
+`do` は即時実行される expression block で、独自の local scope を持ちます。
+pipe RHS では現在の `_` pipe context を使えるため、複雑な water route を新しい pipe operator なしで明示できます。
 
 ---
 

@@ -670,6 +670,70 @@ private slots:
                 }
             )")
             << 20;
+
+        QTest::newRow("28_v13_do_expression_nested_water_route")
+            << QStringLiteral("v1.3 do expression routes nested tuple/strmap water")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any req = [{
+                        "meta" = [{"name" = "req", "body" = [{"cmd" = "sum", "timeout" = 3}]}],
+                        "items" = [[
+                            [{"score" = 10}],
+                            [{"score" = 20}]
+                        ]]
+                    }];
+
+                    any response = req |> do {
+                        any body = _["meta"]["body"];
+                        any items = _["items"];
+                        int left = cast<int>(items[0]["score"]);
+                        int right = cast<int>(items[1]["score"]);
+                        str cmd = cast<str>(body["cmd"]);
+                        return [{
+                            "cmd" = cmd,
+                            "total" = left + right + cast<int>(body["timeout"]),
+                            "nested" = [[body, items]]
+                        }];
+                    };
+
+                    any nested = response["nested"];
+                    any items2 = nested[1];
+                    items2[0]["score"] = cast<int>(items2[0]["score"]) + 2;
+                    return cast<int>(response["total"])
+                        + cast<int>(req["items"][0]["score"])
+                        + cast<int>(nested[0]["timeout"]);
+                }
+            )")
+            << 48;
+
+        QTest::newRow("29_v13_nested_do_pipe_mixed_flow")
+            << QStringLiteral("v1.3 nested do and pipe mixed dynamic information flow")
+            << QStringLiteral(R"(
+                fn int main() {
+                    any source = [[
+                        [{"v" = 1}],
+                        [{"v" = 2}],
+                        [{"v" = 3}]
+                    ]];
+
+                    any out = source |> do {
+                        any a = _[0];
+                        any b = _[1];
+                        any c = _[2];
+                        a["v"] = cast<int>(a["v"]) + 10;
+                        any inner = b |> do {
+                            int bv = cast<int>(_["v"]);
+                            return [{"bv" = bv, "pair" = [[a, _]]}];
+                        };
+                        int sum = cast<int>(a["v"]) + cast<int>(inner["bv"]) + cast<int>(c["v"]);
+                        return [{"sum" = sum, "inner" = inner}];
+                    };
+
+                    return cast<int>(out["sum"])
+                        + cast<int>(out["inner"]["pair"][0]["v"]);
+                }
+            )")
+            << 27;
     }
 
     void heavyPrograms()
@@ -858,6 +922,20 @@ private slots:
                 }
             )")
             << QStringLiteral("duplicate strmap key");
+
+        QTest::newRow("31_v13_do_missing_return")
+            << QStringLiteral("v1.3 do expression missing return")
+            << QStringLiteral(R"(
+                fn int main() {
+                    int x = do {
+                        if (true) {
+                            return 1;
+                        }
+                    };
+                    return x;
+                }
+            )")
+            << QStringLiteral("do expression may end without returning");
     }
 
     void cornerPrograms()

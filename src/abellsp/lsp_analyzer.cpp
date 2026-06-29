@@ -223,6 +223,11 @@ void collectLocalSymbolsFromStmt(QList<IndexedSymbol>& symbols,
                                  const QString& container,
                                  const SourceSpan& scopeRange);
 
+void collectLocalSymbolsFromExpr(QList<IndexedSymbol>& symbols,
+                                 const ExprNode* expr,
+                                 const QString& container,
+                                 const SourceSpan& scopeRange);
+
 void collectLocalSymbolsFromBlock(QList<IndexedSymbol>& symbols,
                                   const BlockStmtNode* block,
                                   const QString& container,
@@ -249,18 +254,29 @@ void collectLocalSymbolsFromStmt(QList<IndexedSymbol>& symbols,
                                       container,
                                       true,
                                       scopeRange));
+        collectLocalSymbolsFromExpr(symbols, var->init.get(), container, scopeRange);
+    } else if (auto* expr = dynamic_cast<const ExprStmtNode*>(&stmt)) {
+        collectLocalSymbolsFromExpr(symbols, expr->expr.get(), container, scopeRange);
+    } else if (auto* ret = dynamic_cast<const ReturnStmtNode*>(&stmt)) {
+        collectLocalSymbolsFromExpr(symbols, ret->expr.get(), container, scopeRange);
     } else if (auto* block = dynamic_cast<const BlockStmtNode*>(&stmt)) {
         collectLocalSymbolsFromBlock(symbols, block, container, block->span);
     } else if (auto* ifStmt = dynamic_cast<const IfStmtNode*>(&stmt)) {
-        for (const auto& branch : ifStmt->branches)
+        for (const auto& branch : ifStmt->branches) {
+            collectLocalSymbolsFromExpr(symbols, branch.condition.get(), container, scopeRange);
             collectLocalSymbolsFromBlock(symbols, branch.body.get(), container, branch.body ? branch.body->span : scopeRange);
+        }
     } else if (auto* whileStmt = dynamic_cast<const WhileStmtNode*>(&stmt)) {
+        collectLocalSymbolsFromExpr(symbols, whileStmt->condition.get(), container, scopeRange);
         collectLocalSymbolsFromBlock(symbols, whileStmt->body.get(), container, whileStmt->body ? whileStmt->body->span : scopeRange);
     } else if (auto* repeatStmt = dynamic_cast<const RepeatStmtNode*>(&stmt)) {
+        collectLocalSymbolsFromExpr(symbols, repeatStmt->count.get(), container, scopeRange);
         collectLocalSymbolsFromBlock(symbols, repeatStmt->body.get(), container, repeatStmt->body ? repeatStmt->body->span : scopeRange);
     } else if (auto* forStmt = dynamic_cast<const ForStmtNode*>(&stmt)) {
         if (forStmt->init)
             collectLocalSymbolsFromStmt(symbols, *forStmt->init, container, forStmt->span);
+        collectLocalSymbolsFromExpr(symbols, forStmt->condition.get(), container, forStmt->span);
+        collectLocalSymbolsFromExpr(symbols, forStmt->step.get(), container, forStmt->span);
         collectLocalSymbolsFromBlock(symbols, forStmt->body.get(), container, forStmt->body ? forStmt->body->span : forStmt->span);
     } else if (auto* rangeFor = dynamic_cast<const RangeForStmtNode*>(&stmt)) {
         symbols.push_back(makeIndexed(rangeFor->variable,
@@ -270,7 +286,52 @@ void collectLocalSymbolsFromStmt(QList<IndexedSymbol>& symbols,
                                       container,
                                       true,
                                       rangeFor->body ? rangeFor->body->span : rangeFor->span));
+        collectLocalSymbolsFromExpr(symbols, rangeFor->range.get(), container, scopeRange);
         collectLocalSymbolsFromBlock(symbols, rangeFor->body.get(), container, rangeFor->body ? rangeFor->body->span : rangeFor->span);
+    }
+}
+
+void collectLocalSymbolsFromExpr(QList<IndexedSymbol>& symbols,
+                                 const ExprNode* expr,
+                                 const QString& container,
+                                 const SourceSpan& scopeRange)
+{
+    if (!expr)
+        return;
+    if (auto* unary = dynamic_cast<const UnaryExprNode*>(expr)) {
+        collectLocalSymbolsFromExpr(symbols, unary->expr.get(), container, scopeRange);
+    } else if (auto* binary = dynamic_cast<const BinaryExprNode*>(expr)) {
+        collectLocalSymbolsFromExpr(symbols, binary->lhs.get(), container, scopeRange);
+        collectLocalSymbolsFromExpr(symbols, binary->rhs.get(), container, scopeRange);
+    } else if (auto* assign = dynamic_cast<const AssignExprNode*>(expr)) {
+        collectLocalSymbolsFromExpr(symbols, assign->lhs.get(), container, scopeRange);
+        collectLocalSymbolsFromExpr(symbols, assign->rhs.get(), container, scopeRange);
+    } else if (auto* cast = dynamic_cast<const CastExprNode*>(expr)) {
+        collectLocalSymbolsFromExpr(symbols, cast->expr.get(), container, scopeRange);
+    } else if (auto* call = dynamic_cast<const CallExprNode*>(expr)) {
+        collectLocalSymbolsFromExpr(symbols, call->callee.get(), container, scopeRange);
+        for (const auto& arg : call->args)
+            collectLocalSymbolsFromExpr(symbols, arg.get(), container, scopeRange);
+    } else if (auto* index = dynamic_cast<const IndexExprNode*>(expr)) {
+        collectLocalSymbolsFromExpr(symbols, index->base.get(), container, scopeRange);
+        collectLocalSymbolsFromExpr(symbols, index->index.get(), container, scopeRange);
+    } else if (auto* field = dynamic_cast<const FieldAccessExprNode*>(expr)) {
+        collectLocalSymbolsFromExpr(symbols, field->base.get(), container, scopeRange);
+    } else if (auto* access = dynamic_cast<const StaticAccessExprNode*>(expr)) {
+        collectLocalSymbolsFromExpr(symbols, access->base.get(), container, scopeRange);
+    } else if (auto* init = dynamic_cast<const InitListExprNode*>(expr)) {
+        for (const auto& value : init->values)
+            collectLocalSymbolsFromExpr(symbols, value.get(), container, scopeRange);
+    } else if (auto* tuple = dynamic_cast<const AnyTupleLiteralExprNode*>(expr)) {
+        for (const auto& value : tuple->values)
+            collectLocalSymbolsFromExpr(symbols, value.get(), container, scopeRange);
+    } else if (auto* map = dynamic_cast<const StrMapLiteralExprNode*>(expr)) {
+        for (const auto& entry : map->entries)
+            collectLocalSymbolsFromExpr(symbols, entry.value.get(), container, scopeRange);
+    } else if (auto* lambda = dynamic_cast<const LambdaExprNode*>(expr)) {
+        collectLocalSymbolsFromBlock(symbols, lambda->ownedBody.get(), container, lambda->ownedBody ? lambda->ownedBody->span : scopeRange);
+    } else if (auto* doExpr = dynamic_cast<const DoExprNode*>(expr)) {
+        collectLocalSymbolsFromBlock(symbols, doExpr->ownedBody.get(), container, doExpr->ownedBody ? doExpr->ownedBody->span : scopeRange);
     }
 }
 

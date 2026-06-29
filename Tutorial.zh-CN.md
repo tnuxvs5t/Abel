@@ -1003,6 +1003,36 @@ fn int main() {
 - 如果同一调用边界会把同一个 hole 绑定到多个 mutable ref / mutable receiver，会被拒绝；
 - prvalue pipe temporary 不能绕过 mutable reference 规则。
 
+### 14.4 v1.3 `do` expression
+
+v1.3 的核心增量是 `do { ... }` 表达式。它是立即执行的局部表达式块，不生成 `func` value，也不是普通 lambda 的语法糖。
+
+```abel
+fn int main() {
+    any req = [{"body" = [{"cmd" = "sum", "timeout" = 3}]}];
+
+    any out = req |> do {
+        any body = _["body"];
+        str cmd = cast<str>(body["cmd"]);
+        int timeout = cast<int>(body["timeout"]);
+        return [{"cmd" = cmd, "timeout" = timeout + 1}];
+    };
+
+    return cast<int>(out["timeout"]);
+}
+```
+
+规则：
+
+- `do` 是 expression，可以出现在普通表达式位置；
+- `do` 有自己的局部 scope；
+- `do` 内的 `return` 只返回 do 表达式结果，不返回外层函数；
+- `do` 位于 pipe RHS 时，可以使用当前 pipe context 的 `_`；
+- 非 void do expression 必须所有路径 return；
+- `break` / `continue` 不能跳出 do expression 边界。
+
+这个功能的目标是让复杂 pipe RHS 可以局部展开，而不是新增 `|=>`、`|&>` 等更多 pipe operator。
+
 ---
 
 ## 15. 用户二元 operator overload
