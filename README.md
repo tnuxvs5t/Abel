@@ -22,7 +22,8 @@ The goal is simple:
 
 ## Status
 
-**Current version: Abel v1.2**
+**Current public release: Abel v1.2**
+**Current development tree: v1.3 `do` expression closed**
 
 v1.2 is fully implemented and released.  
 The internal full test suite passes.
@@ -39,7 +40,7 @@ any next = object["version"] |> _ + 1;
 
 This gives Abel dynamic composition ability without polluting the static core type system.
 
-The current tree also closes the v1.3 core increment: `do { ... }` expressions.
+The current tree closes the v1.3 core increment: `do { ... }` expressions.
 They are immediate local expression blocks, useful when a pipe RHS needs several named steps:
 
 ```abel
@@ -130,8 +131,8 @@ any tuple = [[1, "hello", true]];
 
 any object = [{"name" = "Nitori", "score" = 42}];
 
-str name = cast(object["name"]);
-int score = cast(object["score"]);
+str name = cast<str>(object["name"]);
+int score = cast<int>(object["score"]);
 ```
 
 The dynamic layer is visible.  
@@ -357,8 +358,8 @@ fn int main() {
     }];
 
     fs::scan(config["input"])
-        |> image::resize_all(_, cast(config["size"]))
-        |> fs::write_all(cast(config["output"]), _);
+        |> image::resize_all(_, cast<int>(config["size"]))
+        |> fs::write_all(cast<str>(config["output"]), _);
 
     return 0;
 }

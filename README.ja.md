@@ -1,6 +1,6 @@
 # Abel
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [简体中文教程](Tutorial.zh-CN.md)
 
 **Abel は、AI 支援型のネイティブエンジニアリング言語です。**
 
@@ -22,7 +22,8 @@ Abel の目標は単純です。
 
 ## Status
 
-**Current version: Abel v1.2**
+**Current public release: Abel v1.2**
+**Current development tree: v1.3 `do` expression closed**
 
 v1.2 は完全に実装され、リリースされています。  
 内部のフルテストスイートはすべて通過しています。
@@ -39,7 +40,7 @@ any next = object["version"] |> _ + 1;
 
 これにより、Abel は静的コア型システムを汚染せずに、動的な合成能力を獲得します。
 
-現在の tree では v1.3 core increment である `do { ... }` expression も閉じています。
+現在の tree では v1.3 core increment である `do { ... }` expression が閉じています。
 これは即時実行される local expression block で、pipe RHS で複数ステップを明示したい場合に使います。
 
 ```abel
@@ -130,8 +131,8 @@ any tuple = [[1, "hello", true]];
 
 any object = [{"name" = "Nitori", "score" = 42}];
 
-str name = cast(object["name"]);
-int score = cast(object["score"]);
+str name = cast<str>(object["name"]);
+int score = cast<int>(object["score"]);
 ```
 
 Dynamic layer は見える場所にあります。  
@@ -357,8 +358,8 @@ fn int main() {
     }];
 
     fs::scan(config["input"])
-        |> image::resize_all(_, cast(config["size"]))
-        |> fs::write_all(cast(config["output"]), _);
+        |> image::resize_all(_, cast<int>(config["size"]))
+        |> fs::write_all(cast<str>(config["output"]), _);
 
     return 0;
 }

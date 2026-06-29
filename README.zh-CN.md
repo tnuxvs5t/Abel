@@ -1,6 +1,6 @@
 # Abel
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [简体中文教程](Tutorial.zh-CN.md)
 
 **Abel 是一门 AI 辅助的本地工程语言。**
 
@@ -22,7 +22,8 @@ Abel 的目标很简单：
 
 ## 当前状态
 
-**当前版本：Abel v1.2**
+**当前公开发布：Abel v1.2**
+**当前开发树：v1.3 `do` expression 已闭环**
 
 v1.2 已完整实现并发布。  
 内部全量测试通过。
@@ -39,7 +40,7 @@ any next = object["version"] |> _ + 1;
 
 这使 Abel 获得动态组合能力，同时不污染静态核心类型系统。
 
-当前代码树也已经闭环 v1.3 核心增量：`do { ... }` 表达式。
+当前代码树已经闭环 v1.3 核心增量：`do { ... }` 表达式。
 它是立即执行的局部表达式块，适合在 pipe RHS 中展开多步逻辑：
 
 ```abel
@@ -130,8 +131,8 @@ any tuple = [[1, "hello", true]];
 
 any object = [{"name" = "Nitori", "score" = 42}];
 
-str name = cast(object["name"]);
-int score = cast(object["score"]);
+str name = cast<str>(object["name"]);
+int score = cast<int>(object["score"]);
 ```
 
 动态层是可见的。  
@@ -357,8 +358,8 @@ fn int main() {
     }];
 
     fs::scan(config["input"])
-        |> image::resize_all(_, cast(config["size"]))
-        |> fs::write_all(cast(config["output"]), _);
+        |> image::resize_all(_, cast<int>(config["size"]))
+        |> fs::write_all(cast<str>(config["output"]), _);
 
     return 0;
 }

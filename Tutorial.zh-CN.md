@@ -1,6 +1,6 @@
-# Abel v1.2 中文教程
+# Abel v1.2 / v1.3 中文教程
 
-> 状态：第一版教程草稿。先按当前仓库源码和测试中已经确认的 Abel v1.2 行为写成完整教程；后续再逐项和实现矩阵比对、修正措辞。
+> 状态：按 Abel v1.2 已发布能力和当前代码树已闭环的 v1.3 `do` expression 写成的教程草稿；后续仍需逐项和实现矩阵比对、修正措辞。
 
 Abel 是一门小型 C-like 本地工程语言。它的核心思想是：
 
@@ -1007,6 +1007,20 @@ fn int main() {
 
 v1.3 的核心增量是 `do { ... }` 表达式。它是立即执行的局部表达式块，不生成 `func` value，也不是普通 lambda 的语法糖。
 
+普通表达式位置也可以使用 `do`：
+
+```abel
+fn int main() {
+    int y = do {
+        int x = 40;
+        return x + 2;
+    };
+    return y;
+}
+```
+
+在 pipe RHS 中，`do` 可以读取当前 `_`，适合把复杂水路展开成局部变量：
+
 ```abel
 fn int main() {
     any req = [{"body" = [{"cmd" = "sum", "timeout" = 3}]}];
@@ -1025,13 +1039,14 @@ fn int main() {
 规则：
 
 - `do` 是 expression，可以出现在普通表达式位置；
+- `do` 会立即执行，不生成函数值；
 - `do` 有自己的局部 scope；
 - `do` 内的 `return` 只返回 do 表达式结果，不返回外层函数；
 - `do` 位于 pipe RHS 时，可以使用当前 pipe context 的 `_`；
 - 非 void do expression 必须所有路径 return；
 - `break` / `continue` 不能跳出 do expression 边界。
 
-这个功能的目标是让复杂 pipe RHS 可以局部展开，而不是新增 `|=>`、`|&>` 等更多 pipe operator。
+这个功能的目标是让复杂 pipe RHS 可以局部展开，而不是新增 `|=>`、`|&>` 等更多 pipe operator，也不改变 v1.2 pipe 的 location / value-category 语义。
 
 ---
 
@@ -1371,7 +1386,7 @@ abel test --report-junit report.xml .
 }
 ```
 
-支持 path dependency、本地 registry、`file://` registry mirror。HTTP/network registry 不属于当前 v1/v1.2 本地闭环。
+支持 path dependency、本地 registry、`file://` registry mirror。HTTP/network registry 不属于当前 v1.2/v1.3 本地闭环。
 
 ### 22.3 package 源文件规则
 
@@ -1446,7 +1461,7 @@ backend 可：
 
 ## 24. 当前明确不支持或不要依赖的能力
 
-下面内容不是当前 Abel v1.2 surface：
+下面内容不是当前 Abel v1.2/v1.3 surface：
 
 ```text
 用户 template / interface / require / 泛型函数 / 泛型 struct
@@ -1500,7 +1515,11 @@ fn int main() {
     s.add(3);
 
     any row = [{"name" = "Nitori", "score" = s.get()}];
-    any projected = row |> [[_["name"], _["score"] + 1]];
+    any projected = row |> do {
+        str name = cast<str>(_["name"]);
+        int next = cast<int>(_["score"]) + 1;
+        return [[name, next]];
+    };
 
     str name = cast<str>(projected[0]);
     int score = cast<int>(projected[1]);
