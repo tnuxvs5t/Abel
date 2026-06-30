@@ -2684,6 +2684,89 @@ private slots:
         QCOMPARE(result.exitCode, 28);
     }
 
+    void runsAllCompoundAssignmentOverloadSymbols()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Acc {
+                int x;
+            }
+
+            fn void operator +=(Acc& a, int v) { a.x += v; }
+            fn void operator -=(Acc& a, int v) { a.x -= v; }
+            fn void operator *=(Acc& a, int v) { a.x *= v; }
+            fn void operator /=(Acc& a, int v) { a.x /= v; }
+            fn void operator %=(Acc& a, int v) { a.x %= v; }
+            fn void operator %%=(Acc& a, int v) { a.x %%= v; }
+            fn void operator **=(Acc& a, int v) { a.x **= v; }
+            fn void operator <?=(Acc& a, int v) { a.x <?= v; }
+            fn void operator >?=(Acc& a, int v) { a.x >?= v; }
+
+            fn int main() {
+                Acc a = Acc(8);
+                a += 4;
+                a -= 2;
+                a *= 3;
+                a /= 5;
+                a %= 5;
+                a %%= 4;
+                a **= 2;
+                a <?= 10;
+                a >?= 6;
+                return a.x;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 6);
+    }
+
+    void runsTupleCastStatements()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+
+            fn int main() {
+                any tup = [[1, 2, 3.5, "skip", 9, Box(7)]];
+                int k = 0;
+                [[any a, i32 b, f64& m, /, k, Box box]] = tup;
+                return cast<int>(a) + b + cast<int>(m) + k + box.x;
+            }
+        )");
+        auto result = runSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+        QCOMPARE(result.exitCode, 22);
+    }
+
+    void tupleCastReportsRuntimeFailures()
+    {
+        auto outOfRange = runSource(QStringLiteral(R"(
+            fn int main() {
+                any tup = [[1]];
+                int x = 0;
+                [[/, x]] = tup;
+                return x;
+            }
+        )"));
+        QVERIFY(!outOfRange.diagnostics.isEmpty());
+        QVERIFY(outOfRange.diagnostics.front().message.contains(QStringLiteral("out of range")));
+
+        auto badCast = runSource(QStringLiteral(R"(
+            fn int main() {
+                any tup = [["bad"]];
+                [[int x]] = tup;
+                return x;
+            }
+        )"));
+        QVERIFY(!badCast.diagnostics.isEmpty());
+        QVERIFY(badCast.diagnostics.front().message.contains(QStringLiteral("cannot cast")));
+    }
+
     void runsThisMethodNestedStructAssignmentAndFunctionValues()
     {
         const QString src = QStringLiteral(R"(

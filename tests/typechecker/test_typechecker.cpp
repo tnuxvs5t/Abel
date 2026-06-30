@@ -2804,6 +2804,43 @@ fn int main() {
         QVERIFY(result.diagnostics.isEmpty());
     }
 
+    void acceptsAllCompoundAssignmentOverloadSymbols()
+    {
+        const QString src = QStringLiteral(R"(
+            struct Acc {
+                int x;
+            }
+
+            fn void operator +=(Acc& a, int v) { a.x += v; }
+            fn void operator -=(Acc& a, int v) { a.x -= v; }
+            fn void operator *=(Acc& a, int v) { a.x *= v; }
+            fn void operator /=(Acc& a, int v) { a.x /= v; }
+            fn void operator %=(Acc& a, int v) { a.x %= v; }
+            fn void operator %%=(Acc& a, int v) { a.x %%= v; }
+            fn void operator **=(Acc& a, int v) { a.x **= v; }
+            fn void operator <?=(Acc& a, int v) { a.x <?= v; }
+            fn void operator >?=(Acc& a, int v) { a.x >?= v; }
+
+            fn int main() {
+                Acc a = Acc(8);
+                a += 4;
+                a -= 2;
+                a *= 3;
+                a /= 5;
+                a %= 5;
+                a %%= 4;
+                a **= 2;
+                a <?= 10;
+                a >?= 6;
+                return a.x;
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
     void rejectsBadUserBinaryOperators()
     {
         auto wrongArity = checkSource(QStringLiteral(R"(
@@ -2908,6 +2945,68 @@ fn int main() {
             }
         )"));
         QVERIFY(!badUse.diagnostics.isEmpty());
+
+        auto badSecondRef = checkSource(QStringLiteral(R"(
+            struct Box {
+                int x;
+            }
+
+            fn void operator +=(Box& box, int& delta) {
+                box.x += delta;
+            }
+
+            fn int main() {
+                return 0;
+            }
+        )"));
+        QVERIFY(!badSecondRef.diagnostics.isEmpty());
+    }
+
+    void acceptsTupleCastStatements()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                any tup = [[1, 2, 3.5, "x", 9]];
+                int k = 0;
+                [[any a, i32 b, f64& m, /, k]] = tup;
+                return b + k + cast<int>(m);
+            }
+        )");
+        auto result = checkSource(src);
+        for (const auto& d : result.diagnostics)
+            qWarning() << d.code << d.message;
+        QVERIFY(result.diagnostics.isEmpty());
+    }
+
+    void rejectsBadTupleCastStatements()
+    {
+        auto nonAny = checkSource(QStringLiteral(R"(
+            fn int main() {
+                int x = 1;
+                [[int a]] = x;
+                return a;
+            }
+        )"));
+        QVERIFY(!nonAny.diagnostics.isEmpty());
+
+        auto missingTarget = checkSource(QStringLiteral(R"(
+            fn int main() {
+                any tup = [[1]];
+                [[k]] = tup;
+                return 0;
+            }
+        )"));
+        QVERIFY(!missingTarget.diagnostics.isEmpty());
+
+        auto constTarget = checkSource(QStringLiteral(R"(
+            fn int main() {
+                any tup = [[1]];
+                const int k = 0;
+                [[k]] = tup;
+                return k;
+            }
+        )"));
+        QVERIFY(!constTarget.diagnostics.isEmpty());
     }
 
     void acceptsThisMethodNestedStructAssignmentAndFunctionValues()

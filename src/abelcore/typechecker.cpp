@@ -149,6 +149,8 @@ int countPipeHolesInStmt(const StmtNode& stmt)
         return ret->expr ? countPipeHoles(*ret->expr) : 0;
     if (auto* var = dynamic_cast<const VarDeclStmtNode*>(&stmt))
         return var->init ? countPipeHoles(*var->init) : 0;
+    if (auto* tuple = dynamic_cast<const TupleCastStmtNode*>(&stmt))
+        return tuple->rhs ? countPipeHoles(*tuple->rhs) : 0;
     if (auto* ifStmt = dynamic_cast<const IfStmtNode*>(&stmt)) {
         int count = 0;
         for (const auto& branch : ifStmt->branches) {
@@ -2138,6 +2140,10 @@ void TypeChecker::checkStmt(const StmtNode& stmt)
         checkVarDecl(*s);
         return;
     }
+    if (auto* s = dynamic_cast<const TupleCastStmtNode*>(&stmt)) {
+        checkTupleCastStmt(*s);
+        return;
+    }
     if (auto* s = dynamic_cast<const ExprStmtNode*>(&stmt)) {
         checkExpr(*s->expr);
         return;
@@ -2244,6 +2250,66 @@ void TypeChecker::checkVarDecl(const VarDeclStmtNode& stmt)
         error(stmt.span, QStringLiteral("default constructor for %1 is private").arg(type.displayName()));
     }
     defineVariable(stmt.name, type, isReadOnlyBinding(type, stmt.isConst || stmt.type->isConst), stmt.span);
+}
+
+void TypeChecker::checkTupleCastStmt(const TupleCastStmtNode& stmt)
+{
+    ExprType rhs = checkExpr(*stmt.rhs);
+    if (isUnknownType(rhs.type))
+        return;
+    if (rhs.type.kind != TypeKind::Any) {
+        error(stmt.rhs->span,
+              QStringLiteral("tuple cast source must be any containing tuple, got %1")
+                  .arg(rhs.type.displayName()));
+        return;
+    }
+
+    QSet<QString> declaredInPattern;
+    for (qsizetype i = 0; i < static_cast<qsizetype>(stmt.elements.size()); ++i) {
+        const auto& element = stmt.elements[static_cast<size_t>(i)];
+        if (element.skip)
+            continue;
+        if (element.name.isEmpty()) {
+            error(element.span, QStringLiteral("tuple cast element needs variable name or '/'"));
+            continue;
+        }
+        if (element.type) {
+            AbelType type = typeFromAstInCurrentPackage(*element.type);
+            AbelType target = type;
+            if (type.isReference() && type.pointee)
+                target = *type.pointee;
+            if (!isSupportedType(type)) {
+                error(element.type->span,
+                      QStringLiteral("unsupported tuple cast target type '%1'")
+                          .arg(element.type->displayName()));
+                continue;
+            }
+            if (target.kind == TypeKind::Void || target.isReference()) {
+                error(element.type->span, QStringLiteral("tuple cast target must be a value or reference element type"));
+                continue;
+            }
+            if (declaredInPattern.contains(element.name)) {
+                error(element.span, QStringLiteral("duplicate tuple cast declaration '%1'").arg(element.name));
+                continue;
+            }
+            declaredInPattern.insert(element.name);
+            defineVariable(element.name, target, false, element.span);
+        } else {
+            const VariableInfo* var = lookupVariable(element.name);
+            if (!var) {
+                error(element.span,
+                      QStringLiteral("tuple cast target variable '%1' is not declared")
+                          .arg(element.name));
+                continue;
+            }
+            if (var->isConst) {
+                error(element.span,
+                      QStringLiteral("tuple cast target variable '%1' is const")
+                          .arg(element.name));
+                continue;
+            }
+        }
+    }
 }
 
 void TypeChecker::checkFor(const ForStmtNode& stmt)

@@ -181,6 +181,7 @@ private:
     ExecResult execBlock(const BlockStmtNode& block);
     ExecResult execStmt(const StmtNode& stmt);
     ExecResult execVarDecl(const VarDeclStmtNode& stmt);
+    ExecResult execTupleCastStmt(const TupleCastStmtNode& stmt);
     ExecResult execFor(const ForStmtNode& stmt);
     ExecResult execRangeFor(const RangeForStmtNode& stmt);
     AbelValue evalExpr(const ExprNode& expr);
@@ -204,6 +205,7 @@ private:
     AbelValue evalPipe(const BinaryExprNode& expr);
     AbelValue evalAnyTupleLiteral(const AnyTupleLiteralExprNode& expr);
     AbelValue evalStrMapLiteral(const StrMapLiteralExprNode& expr);
+    std::optional<AbelValue> evalDynamicIndex(const AbelValue& base, qint64 index, const SourceSpan& span);
     AbelValue evalCall(const CallExprNode& expr);
     AbelValue evalDoExpression(const DoExprNode& expr);
     AbelValue evalStaticCall(const StaticAccessExprNode& callee,

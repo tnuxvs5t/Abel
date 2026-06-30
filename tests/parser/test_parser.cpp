@@ -541,6 +541,42 @@ private slots:
         QCOMPARE(fn->name, QStringLiteral("operator +="));
     }
 
+    void parsesTupleCastStatement()
+    {
+        const QString src = QStringLiteral(R"(
+            fn int main() {
+                any tup = [[1, 2, 3.5, "x", 9]];
+                int k = 0;
+                [[any a, i32 b, f64& m, /, k]] = tup;
+                return b + k;
+            }
+        )");
+        abel::Lexer lexer;
+        auto lexed = lexer.lex(QStringLiteral("<test>"), src);
+        QVERIFY(lexed.diagnostics.isEmpty());
+
+        abel::Parser parser;
+        auto parsed = parser.parse(lexed.tokens);
+        for (const auto& d : parsed.diagnostics)
+            qWarning() << d.message;
+        QVERIFY(parsed.diagnostics.isEmpty());
+        QCOMPARE(parsed.program->declarations.size(), static_cast<size_t>(1));
+
+        auto* fn = dynamic_cast<abel::FunctionDeclNode*>(parsed.program->declarations[0].get());
+        QVERIFY(fn != nullptr);
+        QCOMPARE(fn->body->statements.size(), static_cast<size_t>(4));
+        auto* tupleCast = dynamic_cast<abel::TupleCastStmtNode*>(fn->body->statements[2].get());
+        QVERIFY(tupleCast != nullptr);
+        QCOMPARE(tupleCast->elements.size(), static_cast<size_t>(5));
+        QVERIFY(tupleCast->elements[0].type != nullptr);
+        QCOMPARE(tupleCast->elements[0].name, QStringLiteral("a"));
+        QVERIFY(tupleCast->elements[2].type != nullptr);
+        QVERIFY(tupleCast->elements[2].type->isReference);
+        QVERIFY(tupleCast->elements[3].skip);
+        QVERIFY(tupleCast->elements[4].type == nullptr);
+        QCOMPARE(tupleCast->elements[4].name, QStringLiteral("k"));
+    }
+
 };
 
 QTEST_MAIN(AbelParserTests)

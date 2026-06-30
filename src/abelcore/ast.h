@@ -142,6 +142,17 @@ struct VarDeclStmtNode final : StmtNode {
     std::unique_ptr<ExprNode> init;
 };
 
+struct TupleCastStmtNode final : StmtNode {
+    struct Element {
+        bool skip = false;
+        std::unique_ptr<TypeNode> type; // present means declaration; absent means assign existing variable
+        QString name;
+        SourceSpan span;
+    };
+    std::vector<Element> elements;
+    std::unique_ptr<ExprNode> rhs;
+};
+
 struct IfStmtNode final : StmtNode {
     struct Branch {
         std::unique_ptr<ExprNode> condition; // null for else

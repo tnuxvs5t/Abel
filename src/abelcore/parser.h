@@ -62,6 +62,8 @@ private:
     std::unique_ptr<StmtNode> parseReturn();
     std::unique_ptr<StmtNode> parseForInit();
     std::unique_ptr<StmtNode> parseVarOrExprStatement();
+    std::unique_ptr<StmtNode> parseTupleCastStatement();
+    bool looksLikeTupleCastStatement() const;
 
     std::unique_ptr<ExprNode> parseExpression();
     std::unique_ptr<ExprNode> parseAssignment();

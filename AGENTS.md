@@ -448,6 +448,26 @@ any x = t[0];
 m["version"] = cast<int>(m["version"]) + 1;
 ```
 
+tuple cast statement：
+
+```abel
+any tup = [[1, 2, 3.5, "skip", 9]];
+int k = 0;
+[[any a, i32 b, f64& m, /, k]] = tup;
+```
+
+规则：
+
+```text
+tuple cast 是 statement，不是表达式。
+源表达式必须静态为 any，运行时应为 dynamic tuple-like object。
+元素按位置从 0 开始读取，并走显式 dynamic cast。
+有类型修饰的元素声明新变量；T& 在 tuple cast 中表示按 T 显式 cast 后声明值变量，不绑定 tuple 内部引用。
+无类型修饰的元素必须是已有 mutable 变量，按该变量当前类型 cast 后写回。
+/ 跳过当前位置。
+越界、非 tuple-like dynamic object、cast 失败是 runtime diagnostic。
+```
+
 实现边界：
 
 ```text
@@ -455,6 +475,7 @@ tuple/strmap 是 runtime dynamic object，不进 core TypeKind。
 [] / []= 走 dynamic object/operator 协议。
 strmap 当前 key 是 string literal；duplicate key 应 check-time diagnostic。
 missing key / bad index / out-of-range 是 runtime diagnostic。
+tuple cast 不引入 core Tuple TypeKind，不做 schema inference，不改变 [[...]] 的 any dynamic object 本质。
 ```
 
 ### 5.6 pipe
@@ -922,7 +943,10 @@ README/Tutorial 写用户可见能力，不写未落地路线承诺。
     Interpreter 增加 do block 立即执行和 do-local return 捕获。
     pipe RHS 支持 do expression 使用当前 `_` pipe context，不改变 pipe operator 语义。
     Lexer/Parser/TypeChecker/Interpreter 支持 += -= *= /= %= %%= **= <?= >?=。
-    compound assignment overload 支持 `operator +=` 等，第一参数为 mutable reference。
+    compound assignment overload 支持 `operator +=` 等全部自运算符，第一参数为 mutable reference，并补严格正负例。
+    Parser/TypeChecker/Interpreter 支持 tuple cast statement：
+      [[any a, i32 b, f64& m, /, k]] = tup;
+      作为 dynamic tuple 到局部变量/已有变量的批量显式 cast 糖。
     complex tests 覆盖 [[...]] / [{"k" = v}] 嵌套、do 混合嵌套和信息流写回。
     LSP v0.1 最简支持 do：语义分析通过、do block 局部符号可 hover/definition/completion、semantic token 标记 do 关键字。
 

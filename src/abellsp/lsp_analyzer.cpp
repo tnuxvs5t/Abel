@@ -255,6 +255,20 @@ void collectLocalSymbolsFromStmt(QList<IndexedSymbol>& symbols,
                                       true,
                                       scopeRange));
         collectLocalSymbolsFromExpr(symbols, var->init.get(), container, scopeRange);
+    } else if (auto* tuple = dynamic_cast<const TupleCastStmtNode*>(&stmt)) {
+        for (const auto& element : tuple->elements) {
+            if (element.skip || !element.type)
+                continue;
+            const QString type = element.type->displayName();
+            symbols.push_back(makeIndexed(element.name,
+                                          QStringLiteral("%1 %2").arg(type, element.name),
+                                          13,
+                                          element.span,
+                                          container,
+                                          true,
+                                          scopeRange));
+        }
+        collectLocalSymbolsFromExpr(symbols, tuple->rhs.get(), container, scopeRange);
     } else if (auto* expr = dynamic_cast<const ExprStmtNode*>(&stmt)) {
         collectLocalSymbolsFromExpr(symbols, expr->expr.get(), container, scopeRange);
     } else if (auto* ret = dynamic_cast<const ReturnStmtNode*>(&stmt)) {

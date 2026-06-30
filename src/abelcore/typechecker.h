@@ -182,6 +182,7 @@ private:
     void checkBlock(const BlockStmtNode& block, bool pushScope);
     void checkStmt(const StmtNode& stmt);
     void checkVarDecl(const VarDeclStmtNode& stmt);
+    void checkTupleCastStmt(const TupleCastStmtNode& stmt);
     void checkFor(const ForStmtNode& stmt);
     void checkRangeFor(const RangeForStmtNode& stmt);
 

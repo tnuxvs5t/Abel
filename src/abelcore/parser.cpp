@@ -576,6 +576,7 @@ std::unique_ptr<StmtNode> Parser::parseStatement()
         return s;
     }
     if (check(TokenKind::LBrace)) return parseBlock();
+    if (looksLikeTupleCastStatement()) return parseTupleCastStatement();
     return parseVarOrExprStatement();
 }
 
@@ -748,6 +749,63 @@ bool Parser::looksLikeQualifiedTypeName() const
     if (pos < m_tokens.size() && m_tokens[pos].kind == TokenKind::Amp)
         ++pos;
     return pos < m_tokens.size() && m_tokens[pos].kind == TokenKind::Identifier;
+}
+
+bool Parser::looksLikeTupleCastStatement() const
+{
+    if (!check(TokenKind::LBracket) || peek(1).kind != TokenKind::LBracket)
+        return false;
+
+    int depth = 0;
+    for (qsizetype pos = m_pos; pos < m_tokens.size(); ++pos) {
+        const TokenKind kind = m_tokens[pos].kind;
+        if (kind == TokenKind::LBracket) {
+            ++depth;
+        } else if (kind == TokenKind::RBracket) {
+            --depth;
+            if (depth == 0)
+                return pos + 1 < m_tokens.size() && m_tokens[pos + 1].kind == TokenKind::Equal;
+        } else if (kind == TokenKind::Semicolon || kind == TokenKind::End) {
+            return false;
+        }
+    }
+    return false;
+}
+
+std::unique_ptr<StmtNode> Parser::parseTupleCastStatement()
+{
+    const Token open = consume(TokenKind::LBracket, QStringLiteral("expected '['"));
+    consume(TokenKind::LBracket, QStringLiteral("expected '[' in tuple cast"));
+
+    auto s = std::make_unique<TupleCastStmtNode>();
+    if (!check(TokenKind::RBracket)) {
+        do {
+            TupleCastStmtNode::Element element;
+            const SourceSpan startSpan = peek().span;
+            if (match(TokenKind::Slash)) {
+                element.skip = true;
+                element.span = previous().span;
+            } else if (looksLikeType()) {
+                element.type = parseType();
+                const Token name = consume(TokenKind::Identifier, QStringLiteral("expected variable name in tuple cast"));
+                element.name = name.text;
+                element.span = mergeSpans(startSpan, name.span);
+            } else {
+                const Token name = consume(TokenKind::Identifier, QStringLiteral("expected variable name or '/' in tuple cast"));
+                element.name = name.text;
+                element.span = name.span;
+            }
+            s->elements.push_back(std::move(element));
+        } while (match(TokenKind::Comma));
+    }
+
+    consume(TokenKind::RBracket, QStringLiteral("expected ']' after tuple cast pattern"));
+    consume(TokenKind::RBracket, QStringLiteral("expected ']' after tuple cast pattern"));
+    consume(TokenKind::Equal, QStringLiteral("expected '=' after tuple cast pattern"));
+    s->rhs = parseExpression();
+    const Token semi = consume(TokenKind::Semicolon, QStringLiteral("expected ';' after tuple cast"));
+    s->span = mergeSpans(open.span, semi.span);
+    return s;
 }
 
 std::unique_ptr<StmtNode> Parser::parseVarOrExprStatement()

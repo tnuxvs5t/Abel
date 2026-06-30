@@ -138,6 +138,8 @@ int countPipeHolesInStmt(const StmtNode& stmt)
         return ret->expr ? countPipeHoles(*ret->expr) : 0;
     if (auto* var = dynamic_cast<const VarDeclStmtNode*>(&stmt))
         return var->init ? countPipeHoles(*var->init) : 0;
+    if (auto* tuple = dynamic_cast<const TupleCastStmtNode*>(&stmt))
+        return tuple->rhs ? countPipeHoles(*tuple->rhs) : 0;
     if (auto* ifStmt = dynamic_cast<const IfStmtNode*>(&stmt)) {
         int count = 0;
         for (const auto& branch : ifStmt->branches) {
@@ -3002,6 +3004,8 @@ ExecResult Interpreter::execStmt(const StmtNode& stmt)
     }
     if (auto* s = dynamic_cast<const VarDeclStmtNode*>(&stmt))
         return execVarDecl(*s);
+    if (auto* s = dynamic_cast<const TupleCastStmtNode*>(&stmt))
+        return execTupleCastStmt(*s);
     if (auto* s = dynamic_cast<const ExprStmtNode*>(&stmt)) {
         evalExpr(*s->expr);
         return ExecResult::normal();
@@ -3131,6 +3135,64 @@ ExecResult Interpreter::execVarDecl(const VarDeclStmtNode& stmt)
             return ExecResult::normal();
     }
     m_ctx->defineValueVariable(stmt.name, value, isReadOnlyBinding(type, stmt.isConst || stmt.type->isConst), stmt.span);
+    return ExecResult::normal();
+}
+
+ExecResult Interpreter::execTupleCastStmt(const TupleCastStmtNode& stmt)
+{
+    const AbelValue rhs = evalExpr(*stmt.rhs);
+    if (rhs.type().kind == TypeKind::Unknown)
+        return ExecResult::normal();
+    if (rhs.type().kind != TypeKind::Any) {
+        error(QStringLiteral("E0644"),
+              QStringLiteral("tuple cast source must be any containing tuple, got %1")
+                  .arg(rhs.type().displayName()),
+              stmt.rhs->span);
+        return ExecResult::normal();
+    }
+
+    for (qsizetype i = 0; i < static_cast<qsizetype>(stmt.elements.size()); ++i) {
+        const auto& element = stmt.elements[static_cast<size_t>(i)];
+        if (element.skip)
+            continue;
+        auto item = evalDynamicIndex(rhs, i, element.span);
+        if (!item)
+            return ExecResult::normal();
+
+        if (element.type) {
+            AbelType target = typeFromAstInCurrentPackage(*element.type);
+            if (target.isReference() && target.pointee)
+                target = *target.pointee;
+            AbelValue value = convertOrError(*item, target, element.span);
+            if (m_ctx->hasError())
+                return ExecResult::normal();
+            m_ctx->defineValueVariable(element.name, value, false, element.span);
+            continue;
+        }
+
+        VariableSlot* slot = m_ctx->lookupVariable(element.name);
+        if (!slot || !slot->location) {
+            error(QStringLiteral("E0645"),
+                  QStringLiteral("tuple cast target variable '%1' is not declared")
+                      .arg(element.name),
+                  element.span);
+            return ExecResult::normal();
+        }
+        if (slot->location->isReadOnly) {
+            error(QStringLiteral("E0645"),
+                  QStringLiteral("tuple cast target variable '%1' is const")
+                      .arg(element.name),
+                  element.span);
+            return ExecResult::normal();
+        }
+        const AbelType target = slot->location->declaredType.kind != TypeKind::Unknown
+            ? slot->location->declaredType
+            : slot->location->read().type();
+        AbelValue value = convertOrError(*item, target, element.span);
+        if (m_ctx->hasError())
+            return ExecResult::normal();
+        slot->location->write(value);
+    }
     return ExecResult::normal();
 }
 
@@ -4526,6 +4588,30 @@ AbelValue Interpreter::evalAnyTupleLiteral(const AnyTupleLiteralExprNode& expr)
         return QStringLiteral("<tuple len=%1>").arg(elements->size());
     };
     return AbelValue::makeDynamicObject(object);
+}
+
+std::optional<AbelValue> Interpreter::evalDynamicIndex(const AbelValue& base, qint64 index, const SourceSpan& span)
+{
+    const AbelValue rawBase = unboxAnyValue(base);
+    if (!rawBase.isDynamicObject()) {
+        error(QStringLiteral("E0644"),
+              QStringLiteral("tuple cast source must be dynamic object, got %1")
+                  .arg(rawBase.type().displayName()),
+              span);
+        return std::nullopt;
+    }
+    auto object = rawBase.asDynamicObject();
+    if (!object || !object->get) {
+        error(QStringLiteral("E0644"),
+              QStringLiteral("dynamic object '%1' does not support tuple cast indexing")
+                  .arg(object ? object->kind : QStringLiteral("null")),
+              span);
+        return std::nullopt;
+    }
+    AbelValue value = object->get(AbelValue::makeInt(index, TypeKind::I32), *m_ctx, span);
+    if (value.type().kind == TypeKind::Unknown || m_ctx->hasError())
+        return std::nullopt;
+    return value;
 }
 
 AbelValue Interpreter::evalStrMapLiteral(const StrMapLiteralExprNode& expr)
