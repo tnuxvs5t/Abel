@@ -60,6 +60,14 @@ score <?= limit;
 box += item; // operator +=(Box& box, Item item) を呼べる
 ```
 
+Tuple cast is a small Dynamic Waterworks sugar for unpacking dynamic tuples without writing one cast line per element:
+
+```abel
+any tup = [[1, 2, 3.5, "skip", 9]];
+int k = 0;
+[[any a, i32 b, f64& m, /, k]] = tup;
+```
+
 ---
 
 ## Abel とは
@@ -225,6 +233,16 @@ any row = [[1, "Abel", true]];
 
 `[[...]]` は dynamic tuple-like value を生成します。  
 これは通常の static structure とは意図的に区別されています。
+
+### Tuple cast
+
+```abel
+any row = [[1, "Abel", 12]];
+int version = 0;
+[[int id, str name, version]] = row;
+```
+
+Tuple cast is a statement-level explicit dynamic cast. Typed entries declare new variables; bare names write existing mutable variables using their current type; `/` skips one position. `T&` is accepted as a cast marker but declares a value variable, not a reference into the tuple.
 
 ### Dynamic string map
 

@@ -60,6 +60,14 @@ score <?= limit;
 box += item; // 可调用 operator +=(Box& box, Item item)
 ```
 
+tuple cast 是一个小型 Dynamic Waterworks 语法糖，用来从动态 tuple 批量取值，不必每个元素都写一行 cast：
+
+```abel
+any tup = [[1, 2, 3.5, "skip", 9]];
+int k = 0;
+[[any a, i32 b, f64& m, /, k]] = tup;
+```
+
 ---
 
 ## Abel 是什么
@@ -225,6 +233,16 @@ any row = [[1, "Abel", true]];
 
 `[[...]]` 创建一个动态 tuple-like 值。  
 它被故意设计得不同于普通静态结构。
+
+### Tuple cast
+
+```abel
+any row = [[1, "Abel", 12]];
+int version = 0;
+[[int id, str name, version]] = row;
+```
+
+tuple cast 是 statement 级显式 dynamic cast。有类型的元素声明新变量；裸名字写入已有 mutable 变量，并按该变量当前类型 cast；`/` 跳过一个位置。`T&` 可作为 cast 标记，但会声明值变量，不绑定 tuple 内部引用。
 
 ### Dynamic string map
 

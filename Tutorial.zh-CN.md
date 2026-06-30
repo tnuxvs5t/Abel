@@ -912,7 +912,41 @@ fn int main() {
 - `m["k"]` 返回 `any`；
 - `m["k"] = value` 写回动态对象。
 
-### 13.5 any 动态运算符
+### 13.5 tuple cast：批量显式 dynamic cast
+
+如果 dynamic tuple 中的多个位置都要取出来，逐行写：
+
+```abel
+int id = cast<int>(row[0]);
+str name = cast<str>(row[1]);
+int version = cast<int>(row[2]);
+```
+
+会很啰嗦。tuple cast 提供 statement 级语法糖：
+
+```abel
+fn int main() {
+    any row = [[1, "Abel", 12, "skip", 7]];
+    int tail = 0;
+    [[int id, str name, i32 version, /, tail]] = row;
+    return id + version + tail + name.len();
+}
+```
+
+规则：
+
+- tuple cast 是 statement，不是 expression；
+- RHS 静态类型必须是 `any`；
+- 运行期按位置从 dynamic tuple-like object 读取元素；
+- 有类型的元素声明新变量，并对该位置做显式 dynamic cast；
+- 裸名字必须是已有 mutable 变量，按该变量当前类型 cast 后写回；
+- `/` 跳过一个位置；
+- `T&` 可作为 cast 标记，例如 `f64& x`，但这里会声明值变量，不绑定 tuple 内部引用；
+- 越界、源不是 tuple-like dynamic object、cast 失败都是 runtime diagnostic。
+
+它不引入 core `Tuple` 类型，也不做 schema inference；机关还是 `any + dynamic object + explicit cast`。
+
+### 13.6 any 动态运算符
 
 如果任一操作数是 `any`，下列运算进入动态 operator 通道：
 

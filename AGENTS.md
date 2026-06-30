@@ -932,9 +932,10 @@ README/Tutorial 写用户可见能力，不写未落地路线承诺。
   v1.3 核心能力 Dynamic Waterworks、do expression、compound assignment 已在当前代码树闭环。
 
 本轮文档状态：
-  AGENTS.md / README / Tutorial / Skill 统一 v1.3 当前口径。
+  AGENTS.md / README / Tutorial / Skill 统一 v1.3 当前口径，并同步 tuple cast statement。
   明确保留 |> location/value-category 语义。
   明确不改 [[...]] / [{"k" = v}]，仅允许后续实现层 key pre-run/precomputed hash 性能优化。
+  已重装 Skill 内 bundled Abel SDK 到 assets/abel-sdk。
 
 本轮工程状态：
   已闭环 v1.3 实现切片：
